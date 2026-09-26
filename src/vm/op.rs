@@ -186,6 +186,34 @@ pub enum Op {
         rd: usize,
         imm: usize,
     },
-    //Excite
-    Fexcite {},
+    // Suspend
+    Yield,
+    Wait {
+        imm: u32,
+    },
+    // Task Variable
+    Fvget {
+        rd: usize,
+        imm: usize,
+    },
+    Fvset {
+        imm: usize,
+        ra: usize,
+    },
+    Ivget {
+        rd: usize,
+        imm: usize,
+    },
+    Ivset {
+        imm: usize,
+        ra: usize,
+    },
+    // Muscle Excite
+    Fexcite {
+        imm: usize,
+        ra: usize,
+    },
+    // Others
+    Halt,
+    Nop,
 }

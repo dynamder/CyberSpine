@@ -1,5 +1,5 @@
 pub mod register;
-pub mod vm_op;
+pub mod vm;
 
 pub fn add(left: u64, right: u64) -> u64 {
     left + right
