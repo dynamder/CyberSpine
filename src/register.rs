@@ -1,5 +1,3 @@
-use crate::register;
-
 pub const REGS_SIZE: usize = 64;
 
 pub struct Registers {
@@ -7,9 +5,32 @@ pub struct Registers {
     i: [i32; REGS_SIZE],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegType {
     Float,
     Int,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct RegId(u8);
+
+impl RegId {
+
+    pub const ZERO: RegId = RegId(0);
+    
+    pub fn new(id: u8) -> Option<Self> {
+        if id < 64 { Some(RegId(id)) } else { None }
+    }
+
+    pub const fn from_6bit(id: u8) -> Self {
+        debug_assert!(id < 64);
+        RegId(id)
+    }
+
+    pub const fn get(&self) -> u8 {
+        self.0
+    }
 }
 
 impl Registers {

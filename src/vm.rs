@@ -1,2 +1,2 @@
-pub mod bytecode;
+pub mod jump;
 pub mod op;
