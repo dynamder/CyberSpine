@@ -1,3 +1,4 @@
+pub mod binfmt;
 pub mod register;
 pub mod vm;
 
