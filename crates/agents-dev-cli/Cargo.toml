@@ -1,0 +1,13 @@
+[package]
+name = "agents-dev-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = "4.6.7"
+
+
+[[bin]]
+name = "csp-dev"
+test = false
+path = "src/main.rs"

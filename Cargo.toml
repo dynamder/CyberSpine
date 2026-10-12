@@ -3,7 +3,6 @@ name = "cyber-spine"
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
-blake3 = "1.8.7"
-rkyv = "0.8.18"
-thiserror = "2.0.21"
+[workspace]
+resolver = "3"
+members = ["crates/*"]

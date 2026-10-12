@@ -71,20 +71,20 @@ P3 的推论：**本格式里唯一存在的 padding 是"固定头凑够 8 的�
 |---|---|---|---|---|
 | 0 | 4 | `magic` | `b"CSPX"` | 大端读者会看到 `"XPSC"` ⇒ 免费获得字节序检测 |
 | 4 | 2 | `format_version` | u16 | 高字节 major，低字节 minor。major 必须相等，minor 必须 ≤ 本加载器 |
-| 6 | 2 | `isa_version` | u16 | `isa.md` 的指令编码与语义版本 |
-| 8 | 2 | `cycle_table_version` | u16 | `isa.md` §6.3 的**周期计费表版本**；缺了它 `cycles_per_tick` 没有指称对象 |
+| 6 | 2 | `isa_version` | u16 | `isa.md` 的指令编码与语义版本（当前 **2**：新增 `FLUSH`） |
+| 8 | 2 | `reserved_a` | u16 | 必须为 0（原 `cycle_table_version`，周期计费表已退役） |
 | 10 | 2 | `flags` | u16 | 保留，**必须为 0**（未定义位一律拒绝，不做"忽略未知位"） |
 | 12 | 4 | `file_len` | u32 | 必须精确等于文件实际长度 |
 | 16 | 4 | `code_len` | u32 | 指令**条数**；≥ 1；`code[code_len-1]` 必须是 `HALT` |
-| 20 | 2 | `layer` | u16 | 该动作声明的层号，VM 只搬运（§9.2） |
+| 20 | 2 | `layer` | u16 | 该动作声明的层号，宿主用作命令合并的排序键（§8.4） |
 | 22 | 2 | `reserved0` | u16 | 必须为 0 |
-| 24 | 4 | `muscle_count` | u32 | `isa.md` §8.1 的 `Task.values` / `set_mask` 长度 |
+| 24 | 4 | `muscle_count` | u32 | 每实例 pending/published values / mask 的长度 |
 | 28 | 4 | `sensor_f_count` | u32 | 浮点 sensor 数，**必须 ≥ `muscle_count`**（§6.2 读回不变量） |
 | 32 | 4 | `sensor_i_count` | u32 | 整数 sensor 数 |
-| 36 | 4 | `var_f_count` | u32 | 任务浮点变量数（§2.4） |
-| 40 | 4 | `var_i_count` | u32 | 任务整数变量数 |
+| 36 | 4 | `var_f_count` | u32 | 实例浮点变量数（§2.4） |
+| 40 | 4 | `var_i_count` | u32 | 实例整数变量数 |
 | 44 | 4 | `hz` | u32 | tick 率，**必须 > 0**。`dt = 1/hz`（§6.1） |
-| 48 | 4 | `cycles_per_tick` | u32 | **必须 ≥ 该 `cycle_table_version` 表中最贵指令的周期数**（§10 #10） |
+| 48 | 4 | `reserved_b` | u32 | 必须为 0（原 `cycles_per_tick`，周期预算已退役） |
 | 52 | 4 | `fuel` | u32 | 每次恢复的指令预算（§7）。v1 缺省 **4096**。0 是合法值 |
 | 56 | 4 | `max_wait_bits` | u32 | `f32::from_bits` 得到的单次 `WAIT` 上界，缺省 600.0；必须非负有限 |
 | 60 | 4 | `reserved1` | u32 | 必须为 0 |
@@ -143,7 +143,7 @@ P3 的推论：**本格式里唯一存在的 padding 是"固定头凑够 8 的�
 muscle := 名字
 ```
 
-**下标即 muscle id**，也即 `Task.values` / `set_mask` 的下标。表内顺序是**程序语义的一部分**。
+**下标即 muscle id**，也即每实例 pending/published values / mask 的下标。表内顺序是**程序语义的一部分**。
 
 > **读回不变量（硬性）**：对每个 `m < muscle_count`，`sensors_f[m]` 必须是 `muscles[m]` 的读回通道，
 > 即 `name` **逐字节相同**且 `src == MUSCLE`。
@@ -175,7 +175,7 @@ var_i := 名字  初值(i32)
 
 - 浮点与整数是**两个独立 id 空间**，各自 0 基址（§2.4）。
 - 初值按**位模式**存储，因此可以嵌入任意 f32（含 NaN / ±Inf / 非规格化数），与 `FMOVI` 同理。
-- 变量随任务结束消亡；跨动作存活的状态用永不 `HALT` 的任务表达（§2.4），不要引入全局变量。
+- 变量随实例结束消亡；跨动作存活的状态用永不 `HALT` 的实例表达（§2.4），不要引入全局变量。
 
 ### 6.5 索引语义
 
@@ -233,9 +233,9 @@ content_hash = blake3(file[0 .. file_len - 32])
 | # | 规则 |
 |---|---|
 | C1 | `file_len ≥ 136`；`magic` 匹配；`file_len` 精确等于实际字节数 |
-| C2 | `format_version` major 相等且 minor ≤ 本加载器；`isa_version`、`cycle_table_version` 在支持集内 |
-| C3 | `flags`、`reserved0`、`reserved1`、`reserved2` 全为 0 |
-| C4 | `hz > 0`；`max_wait_bits` 是非负有限 f32；`cycles_per_tick ≥` 计费表最贵指令的周期数 |
+| C2 | `format_version` major 相等且 minor ≤ 本加载器；`isa_version` 在支持集内 |
+| C3 | `flags`、`reserved_a`、`reserved0`、`reserved_b`、`reserved1`、`reserved2` 全为 0 |
+| C4 | `hz > 0`；`max_wait_bits` 是非负有限 f32 |
 | C5 | **计数 sanity**：由各 count 与 `code_len` 导出的**最小总长下界**（每条指令 8 字节，每个表项至少 2 字节）必须 ≤ `file_len`。**必须在分配任何 `Vec` 之前执行** |
 | C6 | `content_hash` 与 `blake3(file[..file_len-32])` 相等 |
 | C7 | 解析后游标**精确**停在 `file_len`（哈希之前不允许尾随字节） |
@@ -284,7 +284,6 @@ content_hash = blake3(file[0 .. file_len - 32])
 | 变更类型 | 处理 |
 |---|---|
 | 新增指令 | `isa_version` +1；旧加载器必须拒绝（不认识的 opcode 会在 I1 挂掉） |
-| 改周期计费表 | **新增** `cycle_table_version`，不得重定义已发布的表（§6.3） |
 | 追加元数据表（旧程序语义不变） | 只加 `format_version` minor。新表只能**追加在最后一张表之后**；旧程序的对应 count 为 0，因此仍可解析 |
 | 改变已有字段含义 / 移动固定头字段 | `format_version` major +1，加载器按 major 分派不同固定头布局 |
 | 扩固定头字段 | 只能用 `reserved` 区；固定头长度**必须保持 8 的倍数** |
@@ -293,7 +292,7 @@ content_hash = blake3(file[0 .. file_len - 32])
 
 ## 11. 本文件对 `isa.md` 的修订建议
 
-写这份格式规范时发现下面几处需要回改 `isa.md`（都属于**文档一致性**，不改变已冻结的语义）：
+以下修订建议已在 isa v2 中落实（周期计费表退役、`ITOF`/`FTOI` 统一、`fuel` 缺省 4096）。历史记录：
 
 1. **`fuel` 缺省值缺失**。§7.1 只说头段声明 `fuel_default`，没给值。v1 暂定 **4096**。
 2. **术语不统一**：G3「单元入口」、§5.3「当前单元」、§13.2「程序镜像」指的是同一个东西。
@@ -329,5 +328,4 @@ content_hash = blake3(file[0 .. file_len - 32])
    否则 C5 形同虚设（`binrw` 会按 `count` 预分配）。
 2. `binrw` 的 `align_before` / `pad_size_to` / `seek_before` **在 v1 里一个都不使用**。
    它们是为将来出现真正的定长/对齐数据结构准备的；现在用上只会制造非规范的第二编码。
-3. `cycle_table_version` 的周期表本身不属于本文件——它属于 `isa.md` §6.2，
-   但**必须带版本**并随加载器一起提供，供 C4 与 §9.3 使用。
+3. 周期计费表已退役，`reserved_a`/`reserved_b` 字段必须为 0（见 §4）。
