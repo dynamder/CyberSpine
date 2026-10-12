@@ -15,12 +15,12 @@
 use std::fs;
 use std::path::PathBuf;
 
-use cyber_spine::binfmt::image::{
-    HASH_LEN, HEADER_LEN, INSN_LEN, Image, MAX_CYCLES_V1, Muscle, Sensor, SensorSource, VarF, VarI,
+use cyberspine_vm::binfmt::image::{
+    HASH_LEN, HEADER_LEN, INSN_LEN, Image, Muscle, Sensor, SensorSource, VarF, VarI,
 };
-use cyber_spine::binfmt::load::{LoadError, MAX_FILE_LEN, Table};
-use cyber_spine::register::RegId;
-use cyber_spine::vm::op::{Insn, OpCode};
+use cyberspine_vm::binfmt::load::{LoadError, MAX_FILE_LEN, Table};
+use cyberspine_vm::register::RegId;
+use cyberspine_vm::vm::op::{Insn, OpCode};
 
 // ---------------------------------------------------------------------------
 // Fixed-header offsets (§4), transcribed independently of the writer
@@ -29,7 +29,7 @@ use cyber_spine::vm::op::{Insn, OpCode};
 const OFF_MAGIC: usize = 0;
 const OFF_FORMAT_VERSION: usize = 4;
 const OFF_ISA_VERSION: usize = 6;
-const OFF_CYCLE_TABLE_VERSION: usize = 8;
+const OFF_RESERVED_A: usize = 8;
 const OFF_FLAGS: usize = 10;
 const OFF_FILE_LEN: usize = 12;
 const OFF_CODE_LEN: usize = 16;
@@ -40,7 +40,7 @@ const OFF_SENSOR_I_COUNT: usize = 32;
 const OFF_VAR_F_COUNT: usize = 36;
 const OFF_VAR_I_COUNT: usize = 40;
 const OFF_HZ: usize = 44;
-const OFF_CYCLES_PER_TICK: usize = 48;
+const OFF_RESERVED_B: usize = 48;
 const OFF_FUEL: usize = 52;
 const OFF_MAX_WAIT: usize = 56;
 const OFF_RESERVED1: usize = 60;
@@ -224,29 +224,38 @@ fn c2_an_unsupported_format_version_is_refused() {
 }
 
 #[test]
-fn c2_unsupported_isa_and_cycle_table_versions_are_refused() {
+fn c2_isa_version_is_accepted_only_in_the_supported_set() {
     let image = Image::halt_only();
 
-    let isa = forge(&image, &[(OFF_ISA_VERSION, &2u16.to_le_bytes())]);
-    assert!(matches!(reject(&isa), LoadError::UnsupportedIsaVersion { found: 2 }));
+    // 1 is the current version — the ISA is not frozen yet, so `FLUSH` and the
+    // retirement of the cycle table did not step it — and a file carrying it
+    // must load.
+    let current = forge(&image, &[(OFF_ISA_VERSION, &1u16.to_le_bytes())]);
+    assert!(
+        Image::from_bytes(&current).is_ok(),
+        "isa_version = 1 is the current version and must be accepted"
+    );
 
-    let cycles = forge(&image, &[(OFF_CYCLE_TABLE_VERSION, &2u16.to_le_bytes())]);
+    let newer = forge(&image, &[(OFF_ISA_VERSION, &2u16.to_le_bytes())]);
     assert!(matches!(
-        reject(&cycles),
-        LoadError::UnsupportedCycleTableVersion { found: 2 }
+        reject(&newer),
+        LoadError::UnsupportedIsaVersion { found: 2 }
     ));
 }
 
 #[test]
 fn c3_every_reserved_field_must_be_zero() {
-    // "Undefined bits are refused, not ignored" — each of the four reserved
+    // "Undefined bits are refused, not ignored" — each of the six reserved
     // regions is checked, because each is a place a future version could put
-    // something this loader would otherwise misread.
+    // something this loader would otherwise misread. `reserved_a` and
+    // `reserved_b` are where the retired cycle table used to live.
     let image = Image::halt_only();
 
     for (offset, field, width) in [
-        (OFF_FLAGS, "flags", 2usize),
+        (OFF_RESERVED_A, "reserved_a", 2usize),
+        (OFF_FLAGS, "flags", 2),
         (OFF_RESERVED0, "reserved0", 2),
+        (OFF_RESERVED_B, "reserved_b", 4),
         (OFF_RESERVED1, "reserved1", 4),
         (OFF_RESERVED2, "reserved2", 32),
     ] {
@@ -280,22 +289,6 @@ fn c4_max_wait_must_be_non_negative_and_finite() {
             "max_wait = {bad} was accepted"
         );
     }
-}
-
-#[test]
-fn c4_the_tick_budget_must_cover_the_most_expensive_instruction() {
-    let image = Image::halt_only();
-
-    let bytes = forge(&image, &[(OFF_CYCLES_PER_TICK, &(MAX_CYCLES_V1 - 1).to_le_bytes())]);
-    assert!(matches!(
-        reject(&bytes),
-        LoadError::CyclesPerTickTooSmall { declared, minimum }
-            if declared == MAX_CYCLES_V1 - 1 && minimum == MAX_CYCLES_V1
-    ));
-
-    // Exactly the maximum is legal: the budget then holds one FSIN, barely.
-    let exactly = forge(&image, &[(OFF_CYCLES_PER_TICK, &MAX_CYCLES_V1.to_le_bytes())]);
-    assert!(Image::from_bytes(&exactly).is_ok());
 }
 
 #[test]

@@ -38,25 +38,16 @@ pub const FORMAT_MAJOR: u8 = 1;
 pub const FORMAT_MINOR: u8 = 0;
 pub const FORMAT_VERSION: u16 = ((FORMAT_MAJOR as u16) << 8) | (FORMAT_MINOR as u16);
 
-/// Instruction encoding and semantics version (`docs/isa.md`), table v1.
-pub const ISA_VERSION: u16 = 1;
-
-/// Cycle accounting table version (`docs/isa.md` §6.2/§6.3), table v1.
-pub const CYCLE_TABLE_VERSION: u16 = 1;
-
-/// The cost of the most expensive instruction in the v1 cycle table
-/// (`docs/isa.md` §6.2): `FSIN` and `FCOS` at 40 cycles.
+/// Instruction encoding and semantics version (`docs/binfmt.md` §4).
 ///
-/// `cycles_per_tick` must be at least this, or a tick containing one of them
-/// could never finish — every such tick would fault on the budget
-/// (`docs/binfmt.md` §9.1 C4, `docs/isa.md` §10 rule 10).
-pub const MAX_CYCLES_V1: u32 = 40;
+/// Currently **1**: the ISA is not frozen yet, so the instruction set is still
+/// revised incrementally (`FLUSH` was added this way) and a single added
+/// instruction does not step the version. `isa_version` starts moving once the
+/// ISA is frozen.
+pub const ISA_VERSION: u16 = 1;
 
 /// `hz` default (`docs/isa.md` §6.1). `dt = 1 / hz`.
 pub const DEFAULT_HZ: u32 = 60;
-
-/// `cycles_per_tick` default (`docs/isa.md` §6.1).
-pub const DEFAULT_CYCLES_PER_TICK: u32 = 1000;
 
 /// `fuel` default (`docs/binfmt.md` §4): the per-resume instruction budget.
 pub const DEFAULT_FUEL: u32 = 4096;
@@ -66,17 +57,19 @@ pub const DEFAULT_MAX_WAIT: f32 = 600.0;
 
 /// The scalar half of the fixed header (§4).
 ///
-/// The other half — `magic`, `flags`, `file_len`, `code_len`, the five counts and
-/// the `reserved*` words — is derived from the image and deliberately has no
-/// representation here (P3: 布局全推导).
+/// The other half — `magic`, `flags`, `file_len`, `code_len`, the five counts,
+/// `reserved_a`, `reserved_b` and `reserved0`/`reserved1`/`reserved2` — is either
+/// derived from the image or required to be zero, so it deliberately has no
+/// representation here (P3: 布局全推导). `reserved_a` (offset 8) and
+/// `reserved_b` (offset 48) used to hold `cycle_table_version` and
+/// `cycles_per_tick`; the cycle-accounting table is retired (`docs/isa.md` §6.5)
+/// and both are now plain zero words.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FixedHeader {
     pub format_version: u16,
     pub isa_version: u16,
-    pub cycle_table_version: u16,
     pub layer: u16,
     pub hz: u32,
-    pub cycles_per_tick: u32,
     pub fuel: u32,
     pub max_wait: f32,
 }
@@ -86,18 +79,16 @@ impl Default for FixedHeader {
         Self {
             format_version: FORMAT_VERSION,
             isa_version: ISA_VERSION,
-            cycle_table_version: CYCLE_TABLE_VERSION,
             layer: 0,
             hz: DEFAULT_HZ,
-            cycles_per_tick: DEFAULT_CYCLES_PER_TICK,
             fuel: DEFAULT_FUEL,
             max_wait: DEFAULT_MAX_WAIT,
         }
     }
 }
 
-/// A muscle is a name and nothing else (§6.2): its index in `Image::muscles` is
-/// its id, and its meaning lives entirely in the backend.
+/// A muscle is a name and nothing else (`docs/binfmt.md` §6.2): its index in
+/// `Image::muscles` is its id, and its meaning lives entirely in the backend.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Muscle {
     pub name: Box<str>,
@@ -138,7 +129,7 @@ impl SensorSource {
     }
 }
 
-/// `sensor := name src(u8)` (§6.3).
+/// `sensor := name src(u8)` (`docs/binfmt.md` §6.3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sensor {
     pub name: Box<str>,
@@ -267,7 +258,7 @@ impl Image {
         out.extend_from_slice(&MAGIC);
         out.extend_from_slice(&self.header.format_version.to_le_bytes());
         out.extend_from_slice(&self.header.isa_version.to_le_bytes());
-        out.extend_from_slice(&self.header.cycle_table_version.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes()); // reserved_a: must be 0 (§9.1 C3)
         out.extend_from_slice(&0u16.to_le_bytes()); // flags: must be 0 (§9.1 C3)
         out.extend_from_slice(&count("file_len", file_len).to_le_bytes());
         out.extend_from_slice(&count("code_len", self.code.len()).to_le_bytes());
@@ -279,7 +270,7 @@ impl Image {
         out.extend_from_slice(&count("var_f_count", self.vars_f.len()).to_le_bytes());
         out.extend_from_slice(&count("var_i_count", self.vars_i.len()).to_le_bytes());
         out.extend_from_slice(&self.header.hz.to_le_bytes());
-        out.extend_from_slice(&self.header.cycles_per_tick.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes()); // reserved_b: must be 0 (§9.1 C3)
         out.extend_from_slice(&self.header.fuel.to_le_bytes());
         out.extend_from_slice(&self.header.max_wait.to_bits().to_le_bytes());
         out.extend_from_slice(&0u32.to_le_bytes()); // reserved1: must be 0

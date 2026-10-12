@@ -5,12 +5,12 @@
 //! re-derives the bit layout: a test that asks the code what it wrote cannot tell
 //! you whether what it wrote is what the spec says.
 
-use cyber_spine::binfmt::image::{
+use cyberspine_vm::binfmt::image::{
     DEFAULT_FUEL, HASH_LEN, HEADER_LEN, INSN_LEN, Image, MIN_FILE_LEN, Muscle, Sensor,
     SensorSource, VarF, VarI,
 };
-use cyber_spine::register::RegId;
-use cyber_spine::vm::op::{Insn, OpCode};
+use cyberspine_vm::register::RegId;
+use cyberspine_vm::vm::op::{Insn, OpCode};
 
 fn u32_at(bytes: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("4 bytes"))
@@ -48,8 +48,8 @@ fn a_halt_only_image_is_the_minimum_136_bytes() {
     let expected_header: [u8; 64] = [
         b'C', b'S', b'P', b'X', //  0  magic
         0x00, 0x01, //  4  format_version = major 1, minor 0
-        0x01, 0x00, //  6  isa_version = 1
-        0x01, 0x00, //  8  cycle_table_version = 1
+        0x01, 0x00, //  6  isa_version = 1 (FLUSH landed without stepping it)
+        0x00, 0x00, //  8  reserved_a = 0
         0x00, 0x00, // 10  flags = 0
         0x88, 0x00, 0x00, 0x00, // 12  file_len = 136
         0x01, 0x00, 0x00, 0x00, // 16  code_len = 1
@@ -61,7 +61,7 @@ fn a_halt_only_image_is_the_minimum_136_bytes() {
         0x00, 0x00, 0x00, 0x00, // 36  var_f_count
         0x00, 0x00, 0x00, 0x00, // 40  var_i_count
         0x3C, 0x00, 0x00, 0x00, // 44  hz = 60
-        0xE8, 0x03, 0x00, 0x00, // 48  cycles_per_tick = 1000
+        0x00, 0x00, 0x00, 0x00, // 48  reserved_b = 0
         0x00, 0x10, 0x00, 0x00, // 52  fuel = 4096
         0x00, 0x00, 0x16, 0x44, // 56  max_wait_bits = 600.0f32
         0x00, 0x00, 0x00, 0x00, // 60  reserved1 = 0

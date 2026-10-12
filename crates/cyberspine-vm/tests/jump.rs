@@ -6,8 +6,8 @@
 //! program lands one instruction off, with nothing to show for it at the source
 //! level.
 
-use cyber_spine::vm::jump::{jump_offset, jump_target};
-use cyber_spine::vm::op::{Insn, OpCode};
+use cyberspine_vm::vm::jump::{jump_offset, jump_target};
+use cyberspine_vm::vm::op::{Insn, OpCode};
 
 /// Program counters worth exercising: the origin, small ones, and the region
 /// around 2³¹ where `i32` offsets run out of room in both directions.

@@ -18,8 +18,8 @@
 //!   * `docs/isa.md` §4    — which operands each opcode uses
 //!   * `docs/binfmt.md` §8 — canonical form, §9.3 I2 — the round-trip equation
 
-use cyber_spine::register::RegId;
-use cyber_spine::vm::op::{ImmType, Insn, OpCode, RegName};
+use cyberspine_vm::register::RegId;
+use cyberspine_vm::vm::op::{ImmType, Insn, OpCode, RegName};
 
 // ---------------------------------------------------------------------------
 // Independent re-derivation of the layout (isa.md §1.1).
@@ -43,7 +43,7 @@ const B_RC: u8 = 8;
 /// consulting the generated table. If the encoder ever wrote a field this table
 /// says is unused, `canonical_word` would build a word it does not reproduce and
 /// the property tests below would fail.
-const FIELDS: [(u8, u8, bool); 48] = [
+const FIELDS: [(u8, u8, bool); 49] = [
     (0x00, B_RD, true),           // FMOVI  rd, imm(f32 bits)
     (0x01, B_RD, true),           // IMOVI  rd, imm(i32)
     (0x02, B_RD | B_RA, false),   // FMOV   rd, ra
@@ -92,6 +92,7 @@ const FIELDS: [(u8, u8, bool); 48] = [
     (0x93, B_RA, true),           // IVSET imm(var id), ra
     (0xA0, 0, false),             // HALT
     (0xA1, 0, false),             // NOP
+    (0xA2, 0, false),             // FLUSH published <- pending
 ];
 
 /// The immediate values the property tests sweep. Chosen to be the ones a width
@@ -174,12 +175,12 @@ fn encode(insn: Insn) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
-// Encoder conformance: the 48-row table against the independent spec
+// Encoder conformance: the 49-row table against the independent spec
 // ---------------------------------------------------------------------------
 
 #[test]
 fn fields_table_covers_every_opcode() {
-    assert_eq!(FIELDS.len(), 48, "isa.md §4.12 enumerates 48 instructions");
+    assert_eq!(FIELDS.len(), 49, "isa.md §4.12 enumerates 49 instructions");
     let mut seen: Vec<u8> = FIELDS.iter().map(|&(byte, _, _)| byte).collect();
     seen.sort_unstable();
     let total = seen.len();

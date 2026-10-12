@@ -26,9 +26,8 @@ use crate::vm::jump::jump_target;
 use crate::vm::op::{DecodeError, Insn, OpCode};
 
 use super::image::{
-    CYCLE_TABLE_VERSION, FORMAT_MAJOR, FORMAT_MINOR, FixedHeader, HASH_LEN, HEADER_LEN, INSN_LEN,
-    ISA_VERSION, Image, MAGIC, MAX_CYCLES_V1, MIN_FILE_LEN, Muscle, Sensor, SensorSource, VarF,
-    VarI,
+    FORMAT_MAJOR, FORMAT_MINOR, FixedHeader, HASH_LEN, HEADER_LEN, INSN_LEN, ISA_VERSION, Image,
+    MAGIC, MIN_FILE_LEN, Muscle, Sensor, SensorSource, VarF, VarI,
 };
 
 /// The largest file accepted from disk, in bytes.
@@ -90,20 +89,12 @@ pub enum LoadError {
     UnsupportedFormatVersion { declared: u16 }, // C2
     #[error("isa_version {found} is not supported (this loader speaks {ISA_VERSION})")]
     UnsupportedIsaVersion { found: u16 }, // C2
-    #[error(
-        "cycle_table_version {found} is not supported (this loader speaks {CYCLE_TABLE_VERSION})"
-    )]
-    UnsupportedCycleTableVersion { found: u16 }, // C2
     #[error("`{field}` must be zero; the format does not ignore unknown bits")]
     ReservedNotZero { field: &'static str }, // C3
     #[error("hz must be greater than zero")]
     ZeroHz, // C4
     #[error("max_wait is not a non-negative finite f32 (bit pattern {bits:#010x})")]
     InvalidMaxWait { bits: u32 }, // C4
-    #[error(
-        "cycles_per_tick {declared} is below the {minimum}-cycle cost of the most expensive instruction"
-    )]
-    CyclesPerTickTooSmall { declared: u32, minimum: u32 }, // C4
     #[error("content_hash mismatch: header says {declared:02x?}, contents hash to {computed:02x?}")]
     ContentHashMismatch {
         declared: [u8; 32],
@@ -304,10 +295,8 @@ impl Image {
             header: FixedHeader {
                 format_version: raw.format_version,
                 isa_version: raw.isa_version,
-                cycle_table_version: raw.cycle_table_version,
                 layer: raw.layer,
                 hz: raw.hz,
-                cycles_per_tick: raw.cycles_per_tick,
                 fuel: raw.fuel,
                 max_wait,
             },
@@ -342,7 +331,7 @@ impl Image {
 struct RawHeader {
     format_version: u16,
     isa_version: u16,
-    cycle_table_version: u16,
+    reserved_a: u16,
     flags: u16,
     file_len: u32,
     code_len: u32,
@@ -354,7 +343,7 @@ struct RawHeader {
     var_f_count: u32,
     var_i_count: u32,
     hz: u32,
-    cycles_per_tick: u32,
+    reserved_b: u32,
     fuel: u32,
     max_wait_bits: u32,
     reserved1: u32,
@@ -379,7 +368,7 @@ impl RawHeader {
 
         let format_version = c.u16_le()?;
         let isa_version = c.u16_le()?;
-        let cycle_table_version = c.u16_le()?;
+        let reserved_a = c.u16_le()?;
         let flags = c.u16_le()?;
         let file_len = c.u32_le()?;
         let code_len = c.u32_le()?;
@@ -391,7 +380,7 @@ impl RawHeader {
         let var_f_count = c.u32_le()?;
         let var_i_count = c.u32_le()?;
         let hz = c.u32_le()?;
-        let cycles_per_tick = c.u32_le()?;
+        let reserved_b = c.u32_le()?;
         let fuel = c.u32_le()?;
         let max_wait_bits = c.u32_le()?;
         let reserved1 = c.u32_le()?;
@@ -406,7 +395,7 @@ impl RawHeader {
         Ok(Self {
             format_version,
             isa_version,
-            cycle_table_version,
+            reserved_a,
             flags,
             file_len,
             code_len,
@@ -418,7 +407,7 @@ impl RawHeader {
             var_f_count,
             var_i_count,
             hz,
-            cycles_per_tick,
+            reserved_b,
             fuel,
             max_wait_bits,
             reserved1,
@@ -455,18 +444,23 @@ fn check_container(raw: &RawHeader, bytes: &[u8]) -> Result<(), LoadError> {
             found: raw.isa_version,
         });
     }
-    if raw.cycle_table_version != CYCLE_TABLE_VERSION {
-        return Err(LoadError::UnsupportedCycleTableVersion {
-            found: raw.cycle_table_version,
-        });
-    }
 
     // C3 — undefined bits are refused, never ignored.
     if raw.flags != 0 {
         return Err(LoadError::ReservedNotZero { field: "flags" });
     }
+    if raw.reserved_a != 0 {
+        return Err(LoadError::ReservedNotZero {
+            field: "reserved_a",
+        });
+    }
     if raw.reserved0 != 0 {
         return Err(LoadError::ReservedNotZero { field: "reserved0" });
+    }
+    if raw.reserved_b != 0 {
+        return Err(LoadError::ReservedNotZero {
+            field: "reserved_b",
+        });
     }
     if raw.reserved1 != 0 {
         return Err(LoadError::ReservedNotZero { field: "reserved1" });
@@ -475,8 +469,9 @@ fn check_container(raw: &RawHeader, bytes: &[u8]) -> Result<(), LoadError> {
         return Err(LoadError::ReservedNotZero { field: "reserved2" });
     }
 
-    // C4 — the clock must be usable and the tick budget must be able to hold the
-    // most expensive instruction, or such a tick could never complete.
+    // C4 — the clock must be usable, and the `WAIT` bound must be a sane f32.
+    // The old tick-budget check is gone with the cycle table: fuel is the only
+    // work bound, and it is charged per resume, not per tick.
     if raw.hz == 0 {
         return Err(LoadError::ZeroHz);
     }
@@ -484,12 +479,6 @@ fn check_container(raw: &RawHeader, bytes: &[u8]) -> Result<(), LoadError> {
     if !max_wait.is_finite() || max_wait < 0.0 {
         return Err(LoadError::InvalidMaxWait {
             bits: raw.max_wait_bits,
-        });
-    }
-    if raw.cycles_per_tick < MAX_CYCLES_V1 {
-        return Err(LoadError::CyclesPerTickTooSmall {
-            declared: raw.cycles_per_tick,
-            minimum: MAX_CYCLES_V1,
         });
     }
 
@@ -556,7 +545,8 @@ fn check_metadata(image: &Image) -> Result<(), LoadError> {
 
     // M4 — for every muscle, sensors_f at the same index reads it back. This is
     // what lets FSENSE and FEXCITE share one integer for a muscle, with no
-    // mapping table at bind time and no indirection at run time (§6.2).
+    // mapping table at bind time and no indirection at run time
+    // (`docs/binfmt.md` §6.2).
     for (index, muscle) in image.muscles.iter().enumerate() {
         let sensor = &image.sensors_f[index];
         if sensor.name != muscle.name {
@@ -595,7 +585,7 @@ fn check_metadata(image: &Image) -> Result<(), LoadError> {
                 }
                 seen_dt = Some(index);
             }
-            // BUILTIN_TICK is legal only in sensors_i (§6.3).
+            // BUILTIN_TICK is legal only in sensors_i (`docs/binfmt.md` §6.3).
             SensorSource::BuiltinTick => {
                 return Err(LoadError::SensorSourceNotAllowedHere {
                     table: Table::SensorsF,

@@ -153,7 +153,7 @@ macro_rules! operand {
 macro_rules! isa_table {
     (
         $(
-            $opcode:literal => $variant:ident, $mnemonic:literal, $cycles:literal
+            $opcode:literal => $variant:ident, $mnemonic:literal
             $(, ( $reg:ident $reg_type: ident) )*;
         )*
     ) => {
@@ -181,12 +181,6 @@ macro_rules! isa_table {
             pub fn mnemonic(self) -> &'static str {
                 match self {
                     $( OpCode::$variant => $mnemonic, )*
-                }
-            }
-
-            pub fn cycles(self) -> u32 {
-                match self {
-                    $( OpCode::$variant => $cycles, )*
                 }
             }
 
@@ -222,74 +216,87 @@ macro_rules! isa_table {
 
 }
 
+// ---------------------------------------------------------------------------
+// The ISA table (`docs/isa.md` §4, 49 instructions)
+// ---------------------------------------------------------------------------
+//
+// One row per opcode: `opcode => variant, "MNEMONIC" [, (operand ...)]`.
+//
+// There is deliberately **no cost column**. The cycle-accounting table is
+// retired (`docs/isa.md` §6.5): fuel charges every executed instruction exactly
+// 1, so a per-opcode weight is a number with no consumer.
+
 isa_table! {
     // 传送与常量 0x00
-    0x00 => Fmovi, "FMOVI", 1, (rd F), (imm F32);
-    0x01 => Imovi, "IMOVI", 1, (rd I), (imm I32);
-    0x02 => Fmov,  "FMOV",  1, (rd F), (ra F);
-    0x03 => Imov,  "IMOV",  1, (rd I), (ra I);
+    0x00 => Fmovi, "FMOVI", (rd F), (imm F32);
+    0x01 => Imovi, "IMOVI", (rd I), (imm I32);
+    0x02 => Fmov,  "FMOV",  (rd F), (ra F);
+    0x03 => Imov,  "IMOV",  (rd I), (ra I);
 
     // 浮点二元 0x10
-    0x10 => Fadd, "FADD", 3, (rd F), (ra F), (rb F);
-    0x11 => Fsub, "FSUB", 3, (rd F), (ra F), (rb F);
-    0x12 => Fmul, "FMUL", 4, (rd F), (ra F), (rb F);
-    0x13 => Fdiv, "FDIV", 14, (rd F), (ra F), (rb F);
-    0x14 => Fmin, "FMIN", 2, (rd F), (ra F), (rb F);
-    0x15 => Fmax, "FMAX", 2, (rd F), (ra F), (rb F);
+    0x10 => Fadd, "FADD", (rd F), (ra F), (rb F);
+    0x11 => Fsub, "FSUB", (rd F), (ra F), (rb F);
+    0x12 => Fmul, "FMUL", (rd F), (ra F), (rb F);
+    0x13 => Fdiv, "FDIV", (rd F), (ra F), (rb F);
+    0x14 => Fmin, "FMIN", (rd F), (ra F), (rb F);
+    0x15 => Fmax, "FMAX", (rd F), (ra F), (rb F);
 
     // 浮点一元 0x20
-    0x20 => Fneg,  "FNEG",  1, (rd F), (ra F);
-    0x21 => Fabs,  "FABS",  1, (rd F), (ra F);
-    0x22 => Fsqrt, "FSQRT", 12, (rd F), (ra F);
-    0x23 => Fsin,  "FSIN",  40, (rd F), (ra F);
-    0x24 => Fcos,  "FCOS",  40, (rd F), (ra F);
-    0x25 => Ffrac, "FFRAC", 6, (rd F), (ra F);
+    0x20 => Fneg,  "FNEG",  (rd F), (ra F);
+    0x21 => Fabs,  "FABS",  (rd F), (ra F);
+    0x22 => Fsqrt, "FSQRT", (rd F), (ra F);
+    0x23 => Fsin,  "FSIN",  (rd F), (ra F);
+    0x24 => Fcos,  "FCOS",  (rd F), (ra F);
+    0x25 => Ffrac, "FFRAC", (rd F), (ra F);
 
     // 浮点三元 0x30
-    0x30 => Fmadd,  "FMADD",  5, (rd F), (ra F), (rb F), (rc F);
-    0x31 => Flerp,  "FLERP",  8, (rd F), (ra F), (rb F), (rc F);
-    0x32 => Fclamp, "FCLAMP", 3, (rd F), (ra F), (rb F), (rc F);
+    0x30 => Fmadd,  "FMADD",  (rd F), (ra F), (rb F), (rc F);
+    0x31 => Flerp,  "FLERP",  (rd F), (ra F), (rb F), (rc F);
+    0x32 => Fclamp, "FCLAMP", (rd F), (ra F), (rb F), (rc F);
 
     // 整数与转换 0x40
-    0x40 => Iadd, "IADD", 1, (rd I), (ra I), (rb I);
-    0x41 => Isub, "ISUB", 1, (rd I), (ra I), (rb I);
-    0x42 => Imul, "IMUL", 3, (rd I), (ra I), (rb I);
-    0x43 => Itof, "ITOF", 2, (rd F), (ra I);
-    0x44 => Ftoi, "FTOI", 2, (rd I), (ra F);
+    0x40 => Iadd, "IADD", (rd I), (ra I), (rb I);
+    0x41 => Isub, "ISUB", (rd I), (ra I), (rb I);
+    0x42 => Imul, "IMUL", (rd I), (ra I), (rb I);
+    0x43 => Itof, "ITOF", (rd F), (ra I);
+    0x44 => Ftoi, "FTOI", (rd I), (ra F);
 
     // 控制流 0x50
-    0x50 => Jmp,  "JMP",  1, (imm JumpOffset);
-    0x51 => Ijz,  "IJZ",  1, (ra I), (imm JumpOffset);
-    0x52 => Ijnz, "IJNZ", 1, (ra I), (imm JumpOffset);
-    0x53 => Flt,  "FLT",  1, (ra F), (rb F), (imm JumpOffset);
-    0x54 => Fle,  "FLE",  1, (ra F), (rb F), (imm JumpOffset);
-    0x55 => Fgt,  "FGT",  1, (ra F), (rb F), (imm JumpOffset);
-    0x56 => Fge,  "FGE",  1, (ra F), (rb F), (imm JumpOffset);
-    0x57 => Ilt,  "ILT",  1, (ra I), (rb I), (imm JumpOffset);
-    0x58 => Ile,  "ILE",  1, (ra I), (rb I), (imm JumpOffset);
-    0x59 => Igt,  "IGT",  1, (ra I), (rb I), (imm JumpOffset);
-    0x5A => Ige,  "IGE",  1, (ra I), (rb I), (imm JumpOffset);
-    0x5B => Ieq,  "IEQ",  1, (ra I), (rb I), (imm JumpOffset);
-    0x5C => Ine,  "INE",  1, (ra I), (rb I), (imm JumpOffset);
+    0x50 => Jmp,  "JMP",  (imm JumpOffset);
+    0x51 => Ijz,  "IJZ",  (ra I), (imm JumpOffset);
+    0x52 => Ijnz, "IJNZ", (ra I), (imm JumpOffset);
+    0x53 => Flt,  "FLT",  (ra F), (rb F), (imm JumpOffset);
+    0x54 => Fle,  "FLE",  (ra F), (rb F), (imm JumpOffset);
+    0x55 => Fgt,  "FGT",  (ra F), (rb F), (imm JumpOffset);
+    0x56 => Fge,  "FGE",  (ra F), (rb F), (imm JumpOffset);
+    0x57 => Ilt,  "ILT",  (ra I), (rb I), (imm JumpOffset);
+    0x58 => Ile,  "ILE",  (ra I), (rb I), (imm JumpOffset);
+    0x59 => Igt,  "IGT",  (ra I), (rb I), (imm JumpOffset);
+    0x5A => Ige,  "IGE",  (ra I), (rb I), (imm JumpOffset);
+    0x5B => Ieq,  "IEQ",  (ra I), (rb I), (imm JumpOffset);
+    0x5C => Ine,  "INE",  (ra I), (rb I), (imm JumpOffset);
 
     // 输入 0x60
-    0x60 => Fsense, "FSENSE", 1, (rd F), (imm Index);
-    0x61 => Isense, "ISENSE", 1, (rd I), (imm Index);
+    0x60 => Fsense, "FSENSE", (rd F), (imm Index);
+    0x61 => Isense, "ISENSE", (rd I), (imm Index);
 
     // 挂起 0x70
-    0x70 => Yield, "YIELD", 2;
-    0x71 => Wait,  "WAIT",  2, (imm F32);
+    0x70 => Yield, "YIELD";
+    0x71 => Wait,  "WAIT", (imm F32);
 
     // 激发 0x80
-    0x80 => Fexcite, "FEXCITE", 1, (imm Index), (ra F);
+    0x80 => Fexcite, "FEXCITE", (imm Index), (ra F);
 
     // 任务变量 0x90
-    0x90 => Fvget, "FVGET", 1, (rd F), (imm Index);
-    0x91 => Fvset, "FVSET", 1, (imm Index), (ra F);
-    0x92 => Ivget, "IVGET", 1, (rd I), (imm Index);
-    0x93 => Ivset, "IVSET", 1, (imm Index), (ra I);
+    0x90 => Fvget, "FVGET", (rd F), (imm Index);
+    0x91 => Fvset, "FVSET", (imm Index), (ra F);
+    0x92 => Ivget, "IVGET", (rd I), (imm Index);
+    0x93 => Ivset, "IVSET", (imm Index), (ra I);
 
     // 杂项 0xA0
-    0xA0 => Halt, "HALT", 1;
-    0xA1 => Nop,  "NOP",  1;
+    0xA0 => Halt, "HALT";
+    0xA1 => Nop,  "NOP";
+    // `published ← pending`, then clear pending. Not a suspend: it does not
+    // advance time and does not touch the backend (`docs/isa.md` §4.11, §8.2).
+    0xA2 => Flush, "FLUSH";
 }

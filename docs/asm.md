@@ -1,6 +1,6 @@
 # cyber-spine 汇编源格式（`.csa`）
 
-状态：v1（随 isa v2 一起冻结）
+状态：v1（随 isa 冻结）
 依赖：[`isa.md`](isa.md)（指令编码与语义）、[`binfmt.md`](binfmt.md)（可执行镜像 `.csp`）
 范围：汇编源码的词法、语法、伪指令、标签解析、汇编期校验与调试信息
 
@@ -116,7 +116,7 @@ FEXCITE corners,     f1          # group：1 源项 → N 指令，各拿同一�
 FLUSH                            # 无操作数；published ← pending，清 pending
 ```
 
-- 见 `isa.md` §3.2 / §4.11。
+- 见 `isa.md` §8.2 / §4.11。
 - 汇编期约束（§6）：从最后一次 `FLUSH` 起，若有 `FEXCITE` 未 `FLUSH` 就遇到挂起点（`YIELD`/`WAIT`）或 `HALT`，是**硬错误**。
 
 ## 5. 标签与两遍

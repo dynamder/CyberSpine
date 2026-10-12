@@ -7,30 +7,30 @@
 //! so a shared bug in the writer and loader cannot survive, because one side of
 //! the comparison is a file that was written by hand.
 //!
-//! The valid golden is **full-coverage**: it contains every one of the 48 opcodes
+//! The valid golden is **full-coverage**: it contains every one of the 49 opcodes
 //! exactly once, both read-back and backend/builtin sensors, all four immediate
 //! interpretations, a backward jump, a non-zero `WAIT`, two muscles, and a
-//! non-default clock and layer. It is 628 bytes:
+//! non-default clock and layer. It is 636 bytes:
 //!
 //! ```text
 //! [0   .. 96)    fixed header
-//! [96  .. 480)   48 instructions, one per opcode
-//! [480 .. 596)   metadata: muscles, sensors_f, sensors_i, vars_f, vars_i
-//! [596 .. 628)   content_hash = blake3(bytes[..596])
+//! [96  .. 488)   49 instructions, one per opcode
+//! [488 .. 604)   metadata: muscles, sensors_f, sensors_i, vars_f, vars_i
+//! [604 .. 636)   content_hash = blake3(bytes[..604])
 //! ```
 //!
 //! Regenerate the goldens deliberately with:
 //!
 //! ```text
-//! cargo test --test handmade -- --ignored
+//! cargo test -p cyberspine-vm --test handmade -- --ignored
 //! ```
 
 use std::fs;
 use std::path::PathBuf;
 
-use cyber_spine::binfmt::image::{HASH_LEN, HEADER_LEN, Image, SensorSource};
-use cyber_spine::binfmt::load::{LoadError, Table};
-use cyber_spine::vm::op::OpCode;
+use cyberspine_vm::binfmt::image::{HASH_LEN, HEADER_LEN, Image, SensorSource};
+use cyberspine_vm::binfmt::load::{LoadError, Table};
+use cyberspine_vm::vm::op::OpCode;
 
 // ---------------------------------------------------------------------------
 // The golden files
@@ -54,7 +54,7 @@ fn fixture_bytes(name: &str) -> Vec<u8> {
 // ---------------------------------------------------------------------------
 
 /// The number of instructions in the valid golden: one per opcode.
-const CODE_LEN: usize = 48;
+const CODE_LEN: usize = 49;
 
 /// Assemble one instruction word at the exact bit layout of `isa.md` §1.1:
 /// `[63..56] op  [55..50] rd  [49..44] ra  [43..38] rb  [37..32] rc  [31..0] imm`.
@@ -67,7 +67,7 @@ const fn w(op: u64, rd: u64, ra: u64, rb: u64, rc: u64, imm: u32) -> u64 {
 ///
 /// * `FSENSE imm=3` / `ISENSE imm=1` / `FEXCITE imm=1` / var `imm` values are all
 ///   in range for the tables below.
-/// * `JMP -24` at pc 24 targets pc 1 — a backward jump inside the unit.
+/// * `JMP -25` at pc 24 targets pc 1 — a backward jump inside the unit.
 /// * conditional jumps use `off = 0`, which falls through to the next
 ///   instruction and is the one offset that cannot overshoot.
 /// * `WAIT 0.5` is under the header's `max_wait = 12.5`.
@@ -102,7 +102,7 @@ const CODE: [u64; CODE_LEN] = [
     w(0x43, 18, 1, 0, 0, 0),          // 22  ITOF   f18, i1   (rd f, ra i)
     w(0x44, 6, 1, 0, 0, 0),           // 23  FTOI   i6, f1    (rd i, ra f)
     // 0x50 control flow
-    w(0x50, 0, 0, 0, 0, (-24i32) as u32), // 24  JMP    back to pc 1
+    w(0x50, 0, 0, 0, 0, (-25i32) as u32), // 24  JMP    back to pc 1
     w(0x51, 0, 1, 0, 0, 0),           // 25  IJZ    i1, +0
     w(0x52, 0, 1, 0, 0, 0),           // 26  IJNZ   i1, +0
     w(0x53, 0, 1, 2, 0, 0),           // 27  FLT    f1, f2, +0
@@ -130,7 +130,8 @@ const CODE: [u64; CODE_LEN] = [
     w(0x93, 0, 1, 0, 0, 2),           // 45  IVSET  var_i[2] = limit, i1
     // 0xA0 misc
     w(0xA1, 0, 0, 0, 0, 0),           // 46  NOP
-    w(0xA0, 0, 0, 0, 0, 0),           // 47  HALT
+    w(0xA2, 0, 0, 0, 0, 0),           // 47  FLUSH
+    w(0xA0, 0, 0, 0, 0, 0),           // 48  HALT
 ];
 
 /// Build the 96-byte fixed header at the exact offsets of `binfmt.md` §4.
@@ -144,7 +145,7 @@ fn hand_header(file_len: usize, code_len: usize) -> [u8; HEADER_LEN] {
     h[0..4].copy_from_slice(b"CSPX"); //  0  magic
     h[4..6].copy_from_slice(&0x0100u16.to_le_bytes()); //  4  format 1.0
     h[6..8].copy_from_slice(&1u16.to_le_bytes()); //  6  isa_version = 1
-    h[8..10].copy_from_slice(&1u16.to_le_bytes()); //  8  cycle_table_version = 1
+    h[8..10].copy_from_slice(&0u16.to_le_bytes()); //  8  reserved_a = 0
     h[10..12].copy_from_slice(&0u16.to_le_bytes()); // 10  flags = 0
     h[12..16].copy_from_slice(&(file_len as u32).to_le_bytes()); // 12  file_len
     h[16..20].copy_from_slice(&(code_len as u32).to_le_bytes()); // 16  code_len
@@ -156,7 +157,7 @@ fn hand_header(file_len: usize, code_len: usize) -> [u8; HEADER_LEN] {
     h[36..40].copy_from_slice(&3u32.to_le_bytes()); // 36  var_f_count = 3
     h[40..44].copy_from_slice(&3u32.to_le_bytes()); // 40  var_i_count = 3
     h[44..48].copy_from_slice(&120u32.to_le_bytes()); // 44  hz = 120
-    h[48..52].copy_from_slice(&4096u32.to_le_bytes()); // 48  cycles_per_tick = 4096
+    h[48..52].copy_from_slice(&0u32.to_le_bytes()); // 48  reserved_b = 0
     h[52..56].copy_from_slice(&8192u32.to_le_bytes()); // 52  fuel = 8192
     h[56..60].copy_from_slice(&12.5f32.to_bits().to_le_bytes()); // 56  max_wait = 12.5
     h[60..64].copy_from_slice(&0u32.to_le_bytes()); // 60  reserved1 = 0
@@ -168,7 +169,7 @@ fn hand_header(file_len: usize, code_len: usize) -> [u8; HEADER_LEN] {
 /// The valid file the golden set is built around, assembled byte for byte.
 ///
 /// The program uses every opcode once, then falls through a backward `JMP` and a
-/// run of conditional branches to the trailing `HALT` at pc 47.
+/// run of conditional branches to the trailing `HALT` at pc 48.
 fn handmade_valid() -> Vec<u8> {
     // --- metadata tables, in the §3 order, gap free ---
     let mut tables: Vec<u8> = Vec::new();
@@ -298,23 +299,31 @@ fn regenerate_fixtures() {
 #[test]
 fn the_hand_assembled_bytes_match_the_offset_table() {
     let bytes = handmade_valid();
-    assert_eq!(bytes.len(), 628, "96 header + 384 code + 116 tables + 32 hash");
+    assert_eq!(bytes.len(), 636, "96 header + 392 code + 116 tables + 32 hash");
 
     // §4, field by field, read straight out of the byte string.
     assert_eq!(&bytes[0..4], b"CSPX");
     assert_eq!(u16::from_le_bytes(bytes[4..6].try_into().unwrap()), 0x0100);
     assert_eq!(u16::from_le_bytes(bytes[6..8].try_into().unwrap()), 1);
-    assert_eq!(u16::from_le_bytes(bytes[8..10].try_into().unwrap()), 1);
+    assert_eq!(
+        u16::from_le_bytes(bytes[8..10].try_into().unwrap()),
+        0,
+        "reserved_a must be zero"
+    );
     assert_eq!(u16::from_le_bytes(bytes[20..22].try_into().unwrap()), 3);
-    assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 628);
-    assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 48);
+    assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 636);
+    assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 49);
     assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 2);
     assert_eq!(u32::from_le_bytes(bytes[28..32].try_into().unwrap()), 4);
     assert_eq!(u32::from_le_bytes(bytes[32..36].try_into().unwrap()), 3);
     assert_eq!(u32::from_le_bytes(bytes[36..40].try_into().unwrap()), 3);
     assert_eq!(u32::from_le_bytes(bytes[40..44].try_into().unwrap()), 3);
     assert_eq!(u32::from_le_bytes(bytes[44..48].try_into().unwrap()), 120);
-    assert_eq!(u32::from_le_bytes(bytes[48..52].try_into().unwrap()), 4096);
+    assert_eq!(
+        u32::from_le_bytes(bytes[48..52].try_into().unwrap()),
+        0,
+        "reserved_b must be zero"
+    );
     assert_eq!(u32::from_le_bytes(bytes[52..56].try_into().unwrap()), 8192);
     assert_eq!(u32::from_le_bytes(bytes[56..60].try_into().unwrap()), 0x4148_0000); // 12.5f32
     assert_eq!(&bytes[64..96], &[0u8; 32], "reserved2 must be zero");
@@ -359,8 +368,8 @@ fn golden_valid_all_loads_and_decodes() {
 
     // Header: every scalar non-default.
     assert_eq!(image.header.layer, 3);
+    assert_eq!(image.header.isa_version, 1);
     assert_eq!(image.header.hz, 120);
-    assert_eq!(image.header.cycles_per_tick, 4096);
     assert_eq!(image.header.fuel, 8192);
     assert_eq!(image.header.max_wait, 12.5);
 
@@ -372,7 +381,7 @@ fn golden_valid_all_loads_and_decodes() {
     assert_eq!(image.code[22].op, OpCode::Itof); // mixed register files
     assert_eq!(image.code[23].op, OpCode::Ftoi);
     assert_eq!(image.code[24].op, OpCode::Jmp);
-    assert_eq!(image.code[24].imm_i32(), -24, "a backward jump");
+    assert_eq!(image.code[24].imm_i32(), -25, "a backward jump");
     assert_eq!(image.code[37].op, OpCode::Fsense);
     assert_eq!(image.code[37].rd.get(), 19);
     assert_eq!(image.code[37].imm_index(), 3);
@@ -381,6 +390,14 @@ fn golden_valid_all_loads_and_decodes() {
     assert_eq!(image.code[41].op, OpCode::Fexcite);
     assert_eq!(image.code[41].ra.get(), 20);
     assert_eq!(image.code[41].imm_index(), 1);
+    // `FLUSH` sits between `NOP` and the trailing `HALT`, and its canonical form
+    // is the bare opcode: every other field zero (§9.3 I2).
+    assert_eq!(image.code[47].op, OpCode::Flush);
+    assert_eq!(
+        image.code[47].encode(),
+        0xA2u64 << 56,
+        "FLUSH must be a zero-operand word"
+    );
     assert_eq!(image.code[LAST].op, OpCode::Halt);
 
     // Metadata: every table populated, read-back invariant (M4) intact.
@@ -494,11 +511,11 @@ fn a_file_not_ending_in_halt_is_refused() {
 
 #[test]
 fn a_jump_past_the_end_is_refused() {
-    // JMP +100 from pc 0 targets instruction 101 of a 48-instruction program.
+    // JMP +100 from pc 0 targets instruction 101 of a 49-instruction program.
     let jmp = (0x50u64 << 56) | 100;
     let bytes = rehash(&handmade_valid(), &[(code_word(0), &jmp.to_le_bytes())]);
     match reject(&bytes) {
-        LoadError::JumpTargetOutOfRange { index: 0, offset: 100, code_len: 48 } => {}
+        LoadError::JumpTargetOutOfRange { index: 0, offset: 100, code_len: 49 } => {}
         other => panic!("a jump past the end was not refused by I6: {other}"),
     }
 }

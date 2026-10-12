@@ -9,12 +9,12 @@
 //! sit above this one.
 //!
 //! Normative references:
-//!   * `docs/isa.md` §1.1 — 8/6/6/6/6/32 layout, 48 opcodes
+//!   * `docs/isa.md` §1.1 — 8/6/6/6/6/32 layout, 49 opcodes
 //!   * `docs/isa.md` §1.2 — per-opcode `imm` interpretation
 //!   * `docs/isa.md` §4    — opcode table
 
-use cyber_spine::register::RegId;
-use cyber_spine::vm::op::{DecodeError, Insn, OpCode};
+use cyberspine_vm::register::RegId;
+use cyberspine_vm::vm::op::{DecodeError, Insn, OpCode};
 
 // ---------------------------------------------------------------------------
 // Independent re-derivation of the encoding (isa.md §1.1).
@@ -47,7 +47,7 @@ const B_RC: u8 = 8;
 /// `(opcode, register slots, uses imm)` — re-derived from `isa.md` §4, without
 /// consulting the generated `isa_table!`. This is the independent spec that
 /// makes the assertions below non-circular.
-const FIELDS: [(u8, u8, bool); 48] = [
+const FIELDS: [(u8, u8, bool); 49] = [
     (0x00, B_RD, true),           // FMOVI  rd, imm(f32 bits)
     (0x01, B_RD, true),           // IMOVI  rd, imm(i32)
     (0x02, B_RD | B_RA, false),   // FMOV   rd, ra
@@ -96,6 +96,7 @@ const FIELDS: [(u8, u8, bool); 48] = [
     (0x93, B_RA, true),           // IVSET imm(var id), ra
     (0xA0, 0, false),             // HALT
     (0xA1, 0, false),             // NOP
+    (0xA2, 0, false),             // FLUSH published <- pending
 ];
 
 const JUMP_OPCODES: [u8; 13] = [
@@ -175,8 +176,8 @@ fn every_register_index_from_0_to_63_round_trips() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn isa_v1_defines_exactly_48_distinct_opcodes() {
-    assert_eq!(FIELDS.len(), 48, "isa.md §4.12 enumerates 48 instructions");
+fn isa_defines_exactly_49_distinct_opcodes() {
+    assert_eq!(FIELDS.len(), 49, "isa.md §4.12 enumerates 49 instructions");
     let mut seen: Vec<u8> = FIELDS.iter().map(|&(byte, _, _)| byte).collect();
     seen.sort_unstable();
     let total = seen.len();
@@ -222,7 +223,7 @@ fn opcode_space_is_exactly_defined_plus_reserved() {
     expected.sort_unstable();
     assert_eq!(
         decoded, expected,
-        "the decoder must accept exactly the 48 defined opcodes and reject the other 208"
+        "the decoder must accept exactly the 49 defined opcodes and reject the other 207"
     );
 }
 
@@ -246,10 +247,11 @@ fn reserved_high_opcode_is_rejected() {
 #[test]
 fn reserved_opcode_with_populated_fields_is_rejected() {
     // The opcode byte alone decides: a reserved opcode is refused even when every
-    // other field looks like a plausible operand.
+    // other field looks like a plausible operand. 0xA3 is the first hole after
+    // HALT / NOP / FLUSH.
     assert!(matches!(
-        Insn::decode(word(0xA2, S_RD, S_RA, S_RB, S_RC, u32::MAX)),
-        Err(DecodeError::InvalidOpCode(0xA2))
+        Insn::decode(word(0xA3, S_RD, S_RA, S_RB, S_RC, u32::MAX)),
+        Err(DecodeError::InvalidOpCode(0xA3))
     ));
 }
 
