@@ -72,6 +72,7 @@ instr  ::= mnemonic operand ("," operand)*
 - `.muscle X` **自动**生成一条同名读回 sensor（`binfmt.md` §6.2 的读回不变量靠构造成立）；显式 `.sensor_f` 与肌肉同名 = 错误。
 - `dt` / `tick` **自动声明**、始终存在，不需要写。
 - `.group` v1 **不嵌套**；组名不得与肌肉名重名（会撞上读回 sensor 的唯一性）。
+- `muscle`, `sensor` 在汇编时需要从后端获取信息，以确定立即数index，然后进行绑定
 
 ### 3.3 表序
 
