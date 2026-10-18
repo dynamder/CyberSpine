@@ -20,8 +20,8 @@ use winnow::ModalResult;
 // ---------------------------------------------------------------------------
 
 fn parse(src: &str) -> ModalResult<AsmHeader> {
-    let mut owned = String::from(src);
-    header(&mut owned)
+    let mut cursor = src;
+    header(&mut cursor)
 }
 
 #[track_caller]
@@ -268,7 +268,13 @@ fn control_comment_only_lines_are_allowed() {
 /// §1：「助记符/伪指令**大小写不敏感**」。
 #[test]
 fn control_directive_names_are_case_insensitive() {
-    let src = text(&[".LAYER 1", ".CLOCK hz = 1", ".FUEL 1", ".MAX_WAIT 1.0", ".TEXT"]);
+    let src = text(&[
+        ".LAYER 1",
+        ".CLOCK hz = 1",
+        ".FUEL 1",
+        ".MAX_WAIT 1.0",
+        ".TEXT",
+    ]);
     let got = parse_ok(&src);
     assert_eq!(got.fixed.layer, 1);
 }
@@ -288,6 +294,7 @@ fn missing_required_scalars_are_rejected() {
         let src = base_missing(index);
         // 期望的错误是 FixedHeaderError::Missing(field)；当前实现会在
         // build().unwrap() 处 panic，看不到 field，所以这里只断言"被拒绝"。
+        // TODO: this test will pass as long as we don't unwrap on the FixedHeaderError.
         parse_rejected(&src);
     }
 }
@@ -306,6 +313,7 @@ fn duplicate_required_scalars_are_rejected() {
     ] {
         let src = base_with(line);
         // 期望 FixedHeaderError::Duplicate(field)；当前是 panic。
+        // TODO: this test will pass as long as the fixed header error is not unwraped.
         parse_rejected(&src);
     }
 }

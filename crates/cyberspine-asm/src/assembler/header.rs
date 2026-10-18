@@ -2,13 +2,15 @@ use smol_str::SmolStr;
 use thiserror::Error;
 use winnow::{
     ModalResult, Parser,
-    ascii::{dec_int, dec_uint, float, line_ending, space0, space1},
-    combinator::{eof, iterator, opt, preceded, repeat, terminated, trace},
+    ascii::{dec_int, dec_uint, float, space0, space1},
+    combinator::{eof, opt, preceded, repeat, terminated, trace},
     error::ContextError,
-    token::take_while,
 };
 
-type Line<'i> = &'i str;
+use crate::assembler::comments;
+
+use super::Line;
+use super::ident;
 
 //TODO: make the error aggregatable to collect all errors in the asm_file
 #[derive(Debug, Error)]
@@ -142,18 +144,6 @@ pub enum HeaderStmt {
     Text,
 }
 
-fn ident<'i>(input: &mut Line<'i>) -> ModalResult<&'i str> {
-    trace(
-        "ident",
-        (
-            take_while(1.., |c: char| c.is_ascii_alphabetic() || c == '_'),
-            take_while(0.., |c: char| c.is_ascii_alphanumeric() || c == '_'),
-        ),
-    )
-    .take()
-    .parse_next(input)
-}
-
 fn name_arg<'i>(input: &mut Line<'i>) -> ModalResult<SmolStr> {
     trace("name_arg", ident.map(SmolStr::new)).parse_next(input)
 }
@@ -212,15 +202,7 @@ fn group<'i>(input: &mut Line<'i>) -> ModalResult<GroupDef> {
     })
 }
 
-fn comments<'i>(input: &mut Line<'i>) -> ModalResult<()> {
-    trace(
-        "comments",
-        ('#', take_while(0.., |c: char| c != '\n')).void(),
-    )
-    .parse_next(input)
-}
-
-pub fn header(input: &mut str) -> ModalResult<AsmHeader> {
+pub fn header(input: &mut &str) -> ModalResult<AsmHeader> {
     let mut parsing_fixed_header = ParsingFixedHeader::default();
     let mut muscles: Vec<SmolStr> = Vec::new();
     let mut muscle_groups: Vec<GroupDef> = Vec::new();
@@ -229,13 +211,13 @@ pub fn header(input: &mut str) -> ModalResult<AsmHeader> {
     let mut vars_f: Vec<(SmolStr, f32)> = Vec::new();
     let mut vars_i: Vec<(SmolStr, i32)> = Vec::new();
 
-    for mut line in input.split_inclusive('\n') {
+    for mut line in input.lines() {
         let header_stmt = terminated(
             terminated(
                 opt(trace("header_stmt", header_stmt)),
                 (space0, opt(comments)),
             ),
-            (line_ending, eof),
+            eof,
         )
         .parse_next(&mut line)?;
 

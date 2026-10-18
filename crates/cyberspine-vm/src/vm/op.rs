@@ -1,3 +1,5 @@
+use core::str::FromStr;
+
 use thiserror::Error;
 
 use crate::register::{RegId, RegType};
@@ -20,7 +22,7 @@ pub enum ImmType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Operand {
+pub enum OperandParam {
     Reg(RegName, RegType),
     Imm(ImmType),
 }
@@ -30,6 +32,18 @@ pub enum DecodeError {
     #[error("Invalid Operation Code {0}")]
     InvalidOpCode(u8),
 }
+
+/// A mnemonic that names no instruction in the ISA table.
+///
+/// Deliberately **not** a [`DecodeError`] variant: that type is about wire bytes
+/// (`word >> 56`), this one is about source spelling. Merging them would produce
+/// a variant whose name and payload disagree with how it is used.
+///
+/// Owns the rejected text instead of borrowing it, so `Err` stays `'static` and
+/// the assembler can aggregate errors across lines (`docs/asm.md` §6).
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("unknown instruction mnemonic {0:?}")]
+pub struct MnemonicError(pub String);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Insn {
@@ -89,12 +103,12 @@ impl Insn {
         let mut w = (self.op.byte() as u64) << 56;
         for operand in self.op.signature() {
             match *operand {
-                Operand::Reg(RegName::Rd, _) => w |= (self.rd.get() as u64) << 50,
-                Operand::Reg(RegName::Ra, _) => w |= (self.ra.get() as u64) << 44,
-                Operand::Reg(RegName::Rb, _) => w |= (self.rb.get() as u64) << 38,
-                Operand::Reg(RegName::Rc, _) => w |= (self.rc.get() as u64) << 32,
-                Operand::Imm(ImmType::None) => {}
-                Operand::Imm(_) => w |= self.imm as u64,
+                OperandParam::Reg(RegName::Rd, _) => w |= (self.rd.get() as u64) << 50,
+                OperandParam::Reg(RegName::Ra, _) => w |= (self.ra.get() as u64) << 44,
+                OperandParam::Reg(RegName::Rb, _) => w |= (self.rb.get() as u64) << 38,
+                OperandParam::Reg(RegName::Rc, _) => w |= (self.rc.get() as u64) << 32,
+                OperandParam::Imm(ImmType::None) => {}
+                OperandParam::Imm(_) => w |= self.imm as u64,
             }
         }
         w
@@ -113,40 +127,40 @@ impl Insn {
 
 macro_rules! operand {
     (rd F) => {
-        Operand::Reg(RegName::Rd, RegType::Float)
+        OperandParam::Reg(RegName::Rd, RegType::Float)
     };
     (rd I) => {
-        Operand::Reg(RegName::Rd, RegType::Int)
+        OperandParam::Reg(RegName::Rd, RegType::Int)
     };
     (ra F) => {
-        Operand::Reg(RegName::Ra, RegType::Float)
+        OperandParam::Reg(RegName::Ra, RegType::Float)
     };
     (ra I) => {
-        Operand::Reg(RegName::Ra, RegType::Int)
+        OperandParam::Reg(RegName::Ra, RegType::Int)
     };
     (rb F) => {
-        Operand::Reg(RegName::Rb, RegType::Float)
+        OperandParam::Reg(RegName::Rb, RegType::Float)
     };
     (rb I) => {
-        Operand::Reg(RegName::Rb, RegType::Int)
+        OperandParam::Reg(RegName::Rb, RegType::Int)
     };
     (rc F) => {
-        Operand::Reg(RegName::Rc, RegType::Float)
+        OperandParam::Reg(RegName::Rc, RegType::Float)
     };
     (rc I) => {
-        Operand::Reg(RegName::Rc, RegType::Int)
+        OperandParam::Reg(RegName::Rc, RegType::Int)
     };
     (imm F32) => {
-        Operand::Imm(ImmType::F32)
+        OperandParam::Imm(ImmType::F32)
     };
     (imm I32) => {
-        Operand::Imm(ImmType::I32)
+        OperandParam::Imm(ImmType::I32)
     };
     (imm Index) => {
-        Operand::Imm(ImmType::Index)
+        OperandParam::Imm(ImmType::Index)
     };
     (imm JumpOffset) => {
-        Operand::Imm(ImmType::JumpOffset)
+        OperandParam::Imm(ImmType::JumpOffset)
     };
 }
 
@@ -184,7 +198,7 @@ macro_rules! isa_table {
                 }
             }
 
-            pub fn signature(self) -> &'static [Operand] {
+            pub fn signature(self) -> &'static [OperandParam] {
                 match self {
                     $( OpCode::$variant => &[ $( operand!($reg $reg_type) ),* ], )*
                 }
@@ -194,21 +208,47 @@ macro_rules! isa_table {
                 self.signature()
                     .iter()
                     .find_map(|o| match o {
-                        Operand::Imm(t) => Some(*t),
+                        OperandParam::Imm(t) => Some(*t),
                         _ => None,
                     })
                     .unwrap_or(ImmType::None)
             }
 
             pub fn uses(self, reg_name: RegName) -> bool {
-                self.signature().iter().any(|o| matches!(o, Operand::Reg(n, _) if *n == reg_name))
+                self.signature().iter().any(|o| matches!(o, OperandParam::Reg(n, _) if *n == reg_name))
             }
 
             pub fn reg_type(self, reg_name: RegName) -> Option<RegType> {
                 self.signature().iter().find_map(|o| match o {
-                    Operand::Reg(n, c) if *n == reg_name => Some(*c),
+                    OperandParam::Reg(n, c) if *n == reg_name => Some(*c),
                     _ => None,
                 })
+            }
+        }
+
+        /// `docs/asm.md` §1 spells the rule out: mnemonics are
+        /// **case-insensitive**. Case carries no information for a mnemonic, so
+        /// the lookup folds the input rather than making every caller do it.
+        ///
+        /// Expanding to a `match` instead of scanning `ALL` with `mnemonic()`
+        /// buys two things: a duplicated mnemonic in the table trips
+        /// `unreachable_patterns` **at compile time** (a scan would only make
+        /// the first match silently win), and the lookup no longer depends on
+        /// `mnemonic()` staying correct.
+        ///
+        /// It does depend on the table's canonical spellings being uppercase,
+        /// since the folded input is compared against them verbatim: a lowercase
+        /// row would silently never match. `tests/opcode.rs` pins that invariant
+        /// in `canonical_mnemonics_are_non_empty_uppercase_identifiers`.
+        impl FromStr for OpCode {
+            type Err = MnemonicError;
+
+            fn from_str(name: &str) -> Result<Self, Self::Err> {
+                let folded = name.to_ascii_uppercase();
+                match folded.as_str() {
+                    $( $mnemonic => Ok(OpCode::$variant), )*
+                    _ => Err(MnemonicError(name.to_owned())),
+                }
             }
         }
     };
