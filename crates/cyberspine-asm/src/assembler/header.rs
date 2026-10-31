@@ -4,7 +4,7 @@ use winnow::{
     ModalResult, Parser,
     ascii::{dec_int, dec_uint, float, space0, space1},
     combinator::{eof, opt, preceded, repeat, terminated, trace},
-    error::ContextError,
+    error::{ContextError, ErrMode},
 };
 
 use crate::assembler::comments;
@@ -202,7 +202,16 @@ fn group<'i>(input: &mut Line<'i>) -> ModalResult<GroupDef> {
     })
 }
 
+/// Parses the declaration section and advances `*input` past it.
+///
+/// The cursor stops after the optional `.text` marker, or before the first line
+/// that cannot be a declaration (an instruction or a label), so
+/// [`crate::assembler::text::text`] can continue on the same cursor
+/// (`docs/asm.md` §2 / §7).
 pub fn header(input: &mut &str) -> ModalResult<AsmHeader> {
+    let src: &str = *input;
+    let mut pos = 0usize;
+
     let mut parsing_fixed_header = ParsingFixedHeader::default();
     let mut muscles: Vec<SmolStr> = Vec::new();
     let mut muscle_groups: Vec<GroupDef> = Vec::new();
@@ -211,7 +220,30 @@ pub fn header(input: &mut &str) -> ModalResult<AsmHeader> {
     let mut vars_f: Vec<(SmolStr, f32)> = Vec::new();
     let mut vars_i: Vec<(SmolStr, i32)> = Vec::new();
 
-    for mut line in input.lines() {
+    while pos < src.len() {
+        let line_end = src[pos..]
+            .find('\n')
+            .map(|offset| pos + offset + 1)
+            .unwrap_or(src.len());
+        let line = src[pos..line_end]
+            .strip_suffix('\n')
+            .unwrap_or(&src[pos..line_end]);
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        let line = line.trim_start_matches([' ', '\t']);
+
+        // Blank and comment-only lines are not statements; skip them.
+        if line.is_empty() || line.starts_with('#') {
+            pos = line_end;
+            continue;
+        }
+
+        // The declaration section ends at the first instruction or label. That
+        // line stays in the cursor for the text parser.
+        if !line.starts_with('.') {
+            break;
+        }
+
+        let mut cursor = line;
         let header_stmt = terminated(
             terminated(
                 opt(trace("header_stmt", header_stmt)),
@@ -219,13 +251,15 @@ pub fn header(input: &mut &str) -> ModalResult<AsmHeader> {
             ),
             eof,
         )
-        .parse_next(&mut line)?;
+        .parse_next(&mut cursor)
+        // A line that starts with `.` but is not a known directive is a typo,
+        // not something to skip (`docs/asm.md` §6).
+        .map_err(|_| ErrMode::Cut(ContextError::new()))?
+        .ok_or_else(|| ErrMode::Cut(ContextError::new()))?;
 
-        if header_stmt.is_none() {
-            continue;
-        }
+        pos = line_end;
 
-        match header_stmt.unwrap() {
+        match header_stmt {
             HeaderStmt::Layer(layer) => parsing_fixed_header.layer(layer).unwrap(),
             HeaderStmt::Clock { hz } => parsing_fixed_header.clock_hz(hz).unwrap(),
             HeaderStmt::Fuel(fuel) => parsing_fixed_header.fuel(fuel).unwrap(),
@@ -239,6 +273,8 @@ pub fn header(input: &mut &str) -> ModalResult<AsmHeader> {
             HeaderStmt::Text => break,
         }
     }
+
+    *input = &src[pos..];
 
     Ok(AsmHeader {
         fixed: parsing_fixed_header.build().unwrap(),

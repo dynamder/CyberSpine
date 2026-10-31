@@ -35,20 +35,15 @@ pub fn operand(input: &mut Line<'_>, sig: OperandParam) -> ModalResult<AsmOperan
                 })
                 .parse_next(input)?;
 
-            operand_delimiter.parse_next(input)?;
             parsed_reg
         }
-        OperandParam::Imm(imm_type) => {
-            let imm = match imm_type {
-                ImmType::F32 => imm_float.map(AsmOperand::new_imm_f32).parse_next(input)?,
-                ImmType::I32 => imm_int.map(AsmOperand::new_imm_i32).parse_next(input)?,
-                ImmType::Index => imm_ident.map(AsmOperand::new_index).parse_next(input)?,
-                ImmType::JumpOffset => imm_ident.map(AsmOperand::new_target).parse_next(input)?,
-                ImmType::None => AsmOperand::ImmNone,
-            };
-            operand_delimiter.parse_next(input)?;
-            imm
-        }
+        OperandParam::Imm(imm_type) => match imm_type {
+            ImmType::F32 => imm_float.map(AsmOperand::new_imm_f32).parse_next(input)?,
+            ImmType::I32 => imm_int.map(AsmOperand::new_imm_i32).parse_next(input)?,
+            ImmType::Index => imm_ident.map(AsmOperand::new_index).parse_next(input)?,
+            ImmType::JumpOffset => imm_ident.map(AsmOperand::new_target).parse_next(input)?,
+            ImmType::None => AsmOperand::ImmNone,
+        },
     };
     Ok(operand)
 }
@@ -59,11 +54,14 @@ pub fn insn(input: &mut Line<'_>) -> ModalResult<AsmInsn> {
 
     space0.parse_next(input)?;
 
-    let operands = signature
-        .iter()
-        .map(|sig| operand(input, *sig))
-        //TODO: enhance the error handling
-        .collect::<ModalResult<Vec<_>>>()?;
+    let mut operands = Vec::with_capacity(signature.len());
+    for (index, sig) in signature.iter().enumerate() {
+        // Commas separate operands; there is no comma *after* the last one.
+        if index != 0 {
+            operand_delimiter.parse_next(input)?;
+        }
+        operands.push(operand(input, *sig)?);
+    }
 
     Ok(AsmInsn {
         op: opcode,
