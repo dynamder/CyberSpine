@@ -8,9 +8,9 @@
 
 ## 0. 定位
 
-- 输入：UTF-8 文本 `.csa`；输出：`Image`（`src/binfmt/image.rs`）→ `.csp` 字节，外加 `DebugInfo { labels, line_map }`。
+- 输入：UTF-8 文本 `.csa`；输出：`Image`（`crates/cyberspine-core/src/binfmt/image.rs`）→ `.csp` 字节，外加 `DebugInfo { labels, line_map }`。
 - 汇编器**不接触 rig**。名字只解析成**头段表下标**（逻辑下标）；逻辑下标 → rig 物理下标是加载期 bind 的事（缺失绑 VOID，`isa.md` §13.3）。
-- 指令语法由 `OpCode::signature()` 派生；助记符表由 `OpCode::ALL` + `mnemonic()` 反查生成。**加一条指令只改 `src/vm/op.rs`，不手抄任何清单。**
+- 指令语法由 `OpCode::signature()` 派生；助记符表由 `OpCode::ALL` + `mnemonic()` 反查生成。**加一条指令只改 `crates/cyberspine-core/src/vm/op.rs`，不手抄任何清单。**
 - 汇编期完成：标签→偏移、名字→表下标、`group` 展开、隐式 `HALT` 补齐、所有静态可判定的校验。
 
 ## 1. 词法
@@ -143,7 +143,7 @@ FLUSH                            # 无操作数；published ← pending，清 pe
       pc += emit_count(item)
 ```
 
-- 偏移由 `src/vm/jump.rs::jump_offset` 唯一计算，汇编器不得重推 `pc + 1 + off`。
+- 偏移由 `crates/cyberspine-core/src/vm/jump.rs::jump_offset` 唯一计算，汇编器不得重推 `pc + 1 + off`。
 - 末尾非 `HALT` 时补一条隐式 `HALT`；末标签指向它（§5.3「跳到末尾」）。
 - 校验：未定义标签、重复标签、`off` 装不进 i32；末标签在手写末尾 `HALT` 之后 = 越界错误。
 
@@ -279,4 +279,4 @@ L_done:
 
 ## 9. 与 opcode 表的绑定
 
-助记符、操作数、arity、立即数类型全部由 `src/vm/op.rs` 的 `isa_table!` 派生。本文件描述的是**词法**（怎么写寄存器/数字/名字/标签）；指令语义见 `isa.md` §4。
+助记符、操作数、arity、立即数类型全部由 `crates/cyberspine-core/src/vm/op.rs` 的 `isa_table!` 派生。本文件描述的是**词法**（怎么写寄存器/数字/名字/标签）；指令语义见 `isa.md` §4。

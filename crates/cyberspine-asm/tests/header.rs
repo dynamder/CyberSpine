@@ -4,7 +4,7 @@
 //! "**这条规则**拒绝了它"。所以每个非法输入都构造成「合法基线 + 一处扰动」，
 //! 扰动之外的每一行都保持合法；`control_*` 用例则证明基线本身能通过。
 //! 否则一个"拒绝一切"的解析器会让整份逆向测试全绿 ——
-//! `crates/cyberspine-vm/tests/load.rs` 开头警告的正是这个失败模式。
+//! `crates/cyberspine-core/tests/load.rs` 开头警告的正是这个失败模式。
 //!
 //! **错误契约。** `header()` 现在返回 `Result<AsmHeader, AsmParseErrors>`；
 //! 每个错误带 1-based 行列和稳定的 `ParseErrorKind`，并且按行聚合。

@@ -195,7 +195,7 @@ version = "0.1.0"
 dependencies = [
  "annotate-snippets",
  "clap",
- "cyberspine-vm",
+ "cyberspine-core",
  "smol_str",
  "thiserror",
  "winnow",
@@ -206,12 +206,12 @@ name = "cyberspine-asm-fuzz"
 version = "0.0.0"
 dependencies = [
  "cyberspine-asm",
- "cyberspine-vm",
+ "cyberspine-core",
  "libfuzzer-sys",
 ]
 
 [[package]]
-name = "cyberspine-vm"
+name = "cyberspine-core"
 version = "0.1.0"
 dependencies = [
  "blake3",

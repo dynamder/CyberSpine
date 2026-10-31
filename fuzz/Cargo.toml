@@ -10,7 +10,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 cyberspine-asm = { path = "../crates/cyberspine-asm" }
-cyberspine-vm = { path = "../crates/cyberspine-vm" }
+cyberspine-core = { path = "../crates/cyberspine-core" }
 
 [[bin]]
 name = "assemble"

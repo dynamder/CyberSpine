@@ -15,7 +15,7 @@
 //! corpus instead.
 
 use cyberspine_asm::assembler::{generate_image, parse};
-use cyberspine_vm::binfmt::image::Image;
+use cyberspine_core::binfmt::image::Image;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

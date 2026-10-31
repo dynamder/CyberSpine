@@ -3,7 +3,7 @@
 //! **契约。** 本文件按约定好的接口编写，实现尚未存在：
 //!
 //! ```ignore
-//! // crates/cyberspine-vm/src/vm/op.rs，在 isa_table! 内部生成
+//! // crates/cyberspine-core/src/vm/op.rs，在 isa_table! 内部生成
 //! impl FromStr for OpCode { type Err = /* 待定 */; ... }   // 大小写不敏感
 //! ```
 //!
