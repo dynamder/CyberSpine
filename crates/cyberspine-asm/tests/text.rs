@@ -14,10 +14,11 @@
 //! }
 //! pub struct AsmInsn { pub op: OpCode, pub operands: Vec<AsmOperand> }
 //! pub enum TextItem { Label(SmolStr), Insn(AsmInsn) }
-//! pub fn text(input: &mut &str) -> ModalResult<Vec<TextItem>>;
+//! pub fn text(input: &mut &str) -> Result<Vec<TextItem>, AsmParseErrors>;
 //! ```
 //!
 //! 三个类型需要 `Debug + PartialEq`（本文件用 `assert_eq!` 比对），不需要 `Clone`。
+//! 错误带 1-based 行列与 `ParseErrorKind`；`text()` 按行恢复，一次可报告多条。
 //!
 //! **本文件不测什么。** `Index` 名字是否真的存在、标签是否解析得出来、`group`
 //! 的 1→N 展开、隐式 `HALT` 补齐——全属于第二遍（`docs/asm.md` §5）。
@@ -35,16 +36,16 @@
 
 use cyberspine_asm::assembler::header::header;
 use cyberspine_asm::assembler::text::{AsmInsn, AsmOperand, TextItem, text};
+use cyberspine_asm::assembler::{AsmParseErrors, Location, ParseError, ParseErrorKind};
 use cyberspine_vm::register::{RegId, RegType};
 use cyberspine_vm::vm::op::{OpCode, RegName};
 use smol_str::SmolStr;
-use winnow::ModalResult;
 
 // ---------------------------------------------------------------------------
 // 脚手架
 // ---------------------------------------------------------------------------
 
-fn text_of(source: &str) -> ModalResult<Vec<TextItem>> {
+fn text_of(source: &str) -> Result<Vec<TextItem>, AsmParseErrors> {
     let mut cursor = source;
     text(&mut cursor)
 }
@@ -56,10 +57,16 @@ fn items(source: &str) -> Vec<TextItem> {
 }
 
 #[track_caller]
-fn rejected(source: &str) {
-    if let Ok(parsed) = text_of(source) {
-        panic!("期望解析被拒绝，却解析成功：{parsed:?}\n--- 输入 ---\n{source}");
+fn errors(source: &str) -> Vec<ParseError> {
+    match text_of(source) {
+        Ok(parsed) => panic!("期望解析被拒绝，却解析成功：{parsed:?}\n--- 输入 ---\n{source}"),
+        Err(err) => err.errors,
     }
+}
+
+#[track_caller]
+fn rejected(source: &str) {
+    let _ = errors(source);
 }
 
 #[track_caller]
@@ -273,6 +280,37 @@ fn register_indices_are_bounded_by_the_file_size() {
     rejected("FADD f1, f2, f"); // 没有数字
     rejected("FADD f1, f2, f1x"); // 尾巴不是数字
     rejected("FADD f1, f2, 1"); // 缺文件字母
+}
+
+#[test]
+fn register_errors_keep_their_own_kind_and_column() {
+    let errs = errors("FADD f1, f2, f64");
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(
+        matches!(
+            &errs[0].kind,
+            ParseErrorKind::RegisterOutOfRange {
+                prefix: 'f',
+                index: 64
+            }
+        ),
+        "{errs:?}"
+    );
+    assert_eq!(errs[0].location, Location::new(1, 14));
+
+    let errs = errors("FADD f1, i2, f3");
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(
+        matches!(
+            &errs[0].kind,
+            ParseErrorKind::RegisterFileMismatch {
+                expected: "float",
+                found: "integer"
+            }
+        ),
+        "{errs:?}"
+    );
+    assert_eq!(errs[0].location, Location::new(1, 10));
 }
 
 /// `isa.md` §2.2：`f0`/`i0` 硬连零，但**仍然可写**，不是非法操作数。
@@ -502,6 +540,133 @@ fn reserved_shapes_cannot_be_labels() {
 fn header_directives_are_not_instructions() {
     rejected(".layer 10");
     rejected(".muscle brow_l");
+}
+
+// ---------------------------------------------------------------------------
+// 5'. 诊断：类别与位置
+// ---------------------------------------------------------------------------
+
+#[test]
+fn unknown_mnemonic_reports_its_name_and_position() {
+    let errs = errors("FADDD f1, f2, f3");
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(
+        matches!(&errs[0].kind, ParseErrorKind::UnknownMnemonic(name) if name == "FADDD"),
+        "{errs:?}"
+    );
+    assert_eq!(errs[0].location, Location::new(1, 1));
+}
+
+#[test]
+fn operand_errors_name_the_instruction_and_position() {
+    let errs = errors("FADD f1, f2");
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(
+        matches!(
+            &errs[0].kind,
+            ParseErrorKind::MissingOperand {
+                mnemonic: "FADD",
+                index: 3,
+                arity: 3
+            }
+        ),
+        "{errs:?}"
+    );
+    // "FADD f1, f2" 有 11 个字符，缺失的操作数指向行尾之后（第 12 列）。
+    assert_eq!(errs[0].location, Location::new(1, 12));
+
+    let errs = errors("FADD f1 f2 f3");
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(
+        matches!(
+            &errs[0].kind,
+            ParseErrorKind::MissingComma {
+                mnemonic: "FADD",
+                index: 2
+            }
+        ),
+        "{errs:?}"
+    );
+
+    let errs = errors("FMOVI f1, abc");
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(
+        matches!(
+            &errs[0].kind,
+            ParseErrorKind::InvalidOperand {
+                mnemonic: "FMOVI",
+                index: 2,
+                ..
+            }
+        ),
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn trailing_input_late_directives_and_reserved_labels_are_distinguished() {
+    let errs = errors("HALT extra");
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(
+        matches!(&errs[0].kind, ParseErrorKind::TrailingTokens(_)),
+        "{errs:?}"
+    );
+    assert_eq!(errs[0].location, Location::new(1, 6));
+
+    let errs = errors(".layer 10");
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(
+        matches!(&errs[0].kind, ParseErrorKind::LateDirective(name) if name == "layer"),
+        "{errs:?}"
+    );
+
+    let errs = errors("f0:");
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(
+        matches!(&errs[0].kind, ParseErrorKind::ReservedName(name) if name == "f0"),
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn a_comment_after_a_comma_is_a_missing_operand_not_a_missing_comma() {
+    let errs = errors("FADD f1, f2 # comment");
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(
+        matches!(
+            &errs[0].kind,
+            ParseErrorKind::MissingOperand {
+                mnemonic: "FADD",
+                index: 3,
+                ..
+            }
+        ),
+        "{errs:?}"
+    );
+
+    let errs = errors("FMOVI f1, # comment");
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(
+        matches!(
+            &errs[0].kind,
+            ParseErrorKind::MissingOperand {
+                mnemonic: "FMOVI",
+                index: 2,
+                ..
+            }
+        ),
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn independent_instruction_errors_are_all_reported() {
+    let errs = errors("FADDD f1, f2, f3\nHALT extra\n");
+    assert_eq!(errs.len(), 2, "{errs:?}");
+    assert!(matches!(&errs[0].kind, ParseErrorKind::UnknownMnemonic(_)));
+    assert!(matches!(&errs[1].kind, ParseErrorKind::TrailingTokens(_)));
+    assert_eq!(errs[0].location.line, 1);
+    assert_eq!(errs[1].location.line, 2);
 }
 
 // ---------------------------------------------------------------------------

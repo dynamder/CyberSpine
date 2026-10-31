@@ -4,8 +4,9 @@
 //!
 //! `assemble` is the strict target: a panic there is a crash and that is where
 //! the panic inventory comes from. This target deliberately does the opposite —
-//! it records each panic site once (so the run can continue past the three
-//! retained `unwrap`s) and then exercises the part that matters here:
+//! it records each panic site once and keeps fuzzing. There are currently no
+//! known panic sites in the parse stage, so the recording hook is kept as a
+//! regression guard while the accept path is exercised:
 //!
 //! > if the assembler returns `Ok(Image)`, that image must pass the loader and
 //! > be byte-identical when written again.

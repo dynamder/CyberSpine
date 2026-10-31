@@ -8,13 +8,19 @@ use cyberspine_vm::{
 };
 use smol_str::SmolStr;
 use winnow::{
-    ModalResult, Parser,
+    Parser,
     ascii::space0,
-    combinator::{eof, opt, preceded, repeat, terminated},
-    error::{ContextError, ErrMode},
+    combinator::{opt, preceded, repeat, terminated},
 };
 
-use crate::assembler::{Line, comments, ident, is_reserved_name, text::insn::insn};
+use crate::assembler::{
+    Line, comments,
+    diagnostic::{
+        AsmParseErrors, PResult, ParseErrorKind, cut_at, into_syntax, snippet, token_snippet,
+    },
+    ident, is_reserved_name,
+    text::insn::insn,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AsmOperand {
@@ -64,40 +70,95 @@ pub enum TextItem {
     Insn(AsmInsn),
 }
 
-fn label(input: &mut Line<'_>) -> ModalResult<TextItem> {
+fn label(input: &mut Line<'_>) -> PResult<TextItem> {
+    let start = *input;
     let name = terminated(ident, ':').parse_next(input)?;
     if is_reserved_name(name) {
         // Hard error on purpose: if this backtracked, `text_stmt` would retry the
-        // same text as a mnemonic and the mnemonic lookup would panic.
-        return Err(ErrMode::Cut(ContextError::new()));
+        // same text as a mnemonic and report "unknown mnemonic" instead.
+        return cut_at(start, ParseErrorKind::ReservedName(SmolStr::new(name)));
     }
     Ok(TextItem::Label(SmolStr::new(name)))
 }
 
-fn text_stmt(input: &mut Line<'_>) -> ModalResult<Vec<TextItem>> {
+fn text_stmt(input: &mut Line<'_>) -> PResult<Vec<TextItem>> {
     // A failed `label` backtracks, so `L_ok: FMOVI …` leaves the instruction for
     // the `insn` branch below instead of treating the mnemonic as a label.
     let labels: Vec<TextItem> = repeat(0.., preceded(space0, label)).parse_next(input)?;
 
-    space0.void().parse_next(input)?;
+    space0.parse_next(input)?;
 
-    let insn = opt(insn.map(TextItem::Insn)).parse_next(input)?;
-
-    Ok(labels.into_iter().chain(insn).collect())
+    let parsed_insn = opt(insn).parse_next(input)?;
+    match parsed_insn {
+        Some(insn) => {
+            finish_text_line(input, true)?;
+            let mut items = labels;
+            items.push(TextItem::Insn(insn));
+            Ok(items)
+        }
+        None => {
+            finish_text_line(input, false)?;
+            Ok(labels)
+        }
+    }
 }
 
-pub fn text(input: &mut &str) -> ModalResult<Vec<TextItem>> {
-    let src: &str = *input;
-    let mut text_items = Vec::new();
-    for line in src.lines() {
-        let mut line = line;
-        let line_items = text_stmt.parse_next(&mut line)?;
-        (space0, opt(comments), eof).void().parse_next(&mut line)?;
-        text_items.extend(line_items);
+/// After the labels and the optional instruction, only whitespace and a
+/// trailing comment may remain. Everything else gets a rule-specific error:
+/// a declaration in the instruction section, trailing garbage after a real
+/// instruction, or a line that is neither a label nor an instruction.
+fn finish_text_line(input: &mut Line<'_>, had_insn: bool) -> PResult<()> {
+    space0.parse_next(input)?;
+
+    if input.is_empty() {
+        return Ok(());
     }
+    if input.starts_with('#') {
+        return comments.parse_next(input);
+    }
+
+    let start = *input;
+    if let Some(rest) = start.strip_prefix('.') {
+        return cut_at(start, ParseErrorKind::LateDirective(directive_name(rest)));
+    }
+
+    let kind = if had_insn {
+        ParseErrorKind::TrailingTokens(snippet(start))
+    } else {
+        ParseErrorKind::ExpectedInstruction(token_snippet(start))
+    };
+    cut_at(start, kind)
+}
+
+fn directive_name(rest: &str) -> SmolStr {
+    let mut cursor = rest;
+    match ident(&mut cursor) {
+        Ok(name) => SmolStr::new(name),
+        Err(_) => SmolStr::new(""),
+    }
+}
+
+pub fn text(input: &mut &str) -> Result<Vec<TextItem>, AsmParseErrors> {
+    let src = *input;
+    let mut text_items = Vec::new();
+    let mut errors = Vec::new();
+
+    for (index, line) in src.lines().enumerate() {
+        let mut cursor = line;
+        match text_stmt(&mut cursor) {
+            Ok(line_items) => text_items.extend(line_items),
+            Err(err) => errors.push(into_syntax(err).located(line, index + 1)),
+        }
+    }
+
     // The instruction section is consumed in full; leaving the cursor on the last
     // line would let a caller parse it twice.
     *input = &src[src.len()..];
 
-    Ok(text_items)
+    if errors.is_empty() {
+        Ok(text_items)
+    } else {
+        errors.sort_by_key(|error| (error.location.line, error.location.column));
+        Err(AsmParseErrors::new(errors))
+    }
 }

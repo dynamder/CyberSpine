@@ -1,3 +1,4 @@
+pub mod diagnostic;
 pub mod header;
 pub mod text;
 
@@ -11,13 +12,10 @@ use cyberspine_vm::vm::jump::{jump_offset, jump_target};
 use cyberspine_vm::vm::op::{ImmType, Insn, OpCode, RegName};
 use smol_str::SmolStr;
 use thiserror::Error;
-use winnow::{
-    ModalResult, Parser,
-    combinator::trace,
-    error::{ContextError, ErrMode},
-    token::take_while,
-};
+use winnow::{Parser, combinator::trace, token::take_while};
 
+use diagnostic::PResult;
+pub use diagnostic::{AsmParseErrors, Location, ParseError, ParseErrorKind};
 use header::{AsmHeader, header as header_section};
 use text::{AsmInsn, AsmOperand, TextItem, text as text_section};
 
@@ -37,7 +35,7 @@ pub(crate) fn is_reserved_name(name: &str) -> bool {
     !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
 }
 
-fn ident<'i>(input: &mut Line<'i>) -> ModalResult<&'i str> {
+pub(crate) fn ident<'i>(input: &mut Line<'i>) -> PResult<&'i str> {
     trace(
         "ident",
         (
@@ -49,7 +47,7 @@ fn ident<'i>(input: &mut Line<'i>) -> ModalResult<&'i str> {
     .parse_next(input)
 }
 
-fn comments<'i>(input: &mut Line<'i>) -> ModalResult<()> {
+pub(crate) fn comments<'i>(input: &mut Line<'i>) -> PResult<()> {
     trace(
         "comments",
         ('#', take_while(0.., |c: char| c != '\n')).void(),
@@ -64,21 +62,38 @@ pub struct Asm {
     pub text: Vec<TextItem>,
 }
 
-#[derive(Debug, Error)]
-pub enum AsmParseError {
-    #[error("the declaration section could not be parsed: {0:?}")]
-    Header(ErrMode<ContextError>),
-    #[error("the instruction section could not be parsed: {0:?}")]
-    Text(ErrMode<ContextError>),
-}
-
 /// Parse a whole `.csa` source. `header` owns the cursor up to `.text` (or the
 /// first instruction); `text` continues from exactly there (`docs/asm.md` §2).
-pub fn parse(asm_str: &str) -> Result<Asm, AsmParseError> {
+///
+/// Both sections are attempted even when the first one fails: each one recovers
+/// at line boundaries, so one source can report every independent mistake.
+pub fn parse(asm_str: &str) -> Result<Asm, AsmParseErrors> {
     let mut cursor = asm_str;
-    let header = header_section(&mut cursor).map_err(AsmParseError::Header)?;
-    let text = text_section(&mut cursor).map_err(AsmParseError::Text)?;
-    Ok(Asm { header, text })
+    let header = header_section(&mut cursor);
+
+    // `text()` numbers lines from its own input, which starts *after* the
+    // declaration section. Shift its errors back into file coordinates.
+    let header_len = asm_str.len() - cursor.len();
+    let text_line_offset = asm_str[..header_len].matches('\n').count();
+    let text = text_section(&mut cursor);
+
+    match (header, text) {
+        (Ok(header), Ok(text)) => Ok(Asm { header, text }),
+        (header, text) => {
+            let mut errors = Vec::new();
+            if let Err(mut section_errors) = header {
+                errors.append(&mut section_errors.errors);
+            }
+            if let Err(mut section_errors) = text {
+                for error in &mut section_errors.errors {
+                    error.location.line += text_line_offset;
+                }
+                errors.append(&mut section_errors.errors);
+            }
+            errors.sort_by_key(|error| (error.location.line, error.location.column));
+            Err(AsmParseErrors::new(errors))
+        }
+    }
 }
 
 /// Everything the assembler can reject without a backend (`docs/asm.md` §6).
@@ -88,7 +103,9 @@ pub enum ImageGenError {
     DuplicateLabel(SmolStr),
     #[error("undefined label `{0}`")]
     UndefinedLabel(SmolStr),
-    #[error("label `{label}` points to {index}, past the end of the code ({code_len} instructions)")]
+    #[error(
+        "label `{label}` points to {index}, past the end of the code ({code_len} instructions)"
+    )]
     LabelOutOfRange {
         label: SmolStr,
         index: usize,
@@ -498,7 +515,9 @@ fn resolve_index(op: OpCode, name: &SmolStr, symbols: &Symbols) -> Result<u32, I
         OpCode::Ivget | OpCode::Ivset => {
             (&symbols.vars_i, ImageGenError::UnknownVarI(name.clone()))
         }
-        _ => unreachable!("opcode with an Index operand: {op:?}"),
+        // No other opcode declares an `Index` operand. Treat the impossible
+        // combination as a malformed instruction rather than a panic.
+        _ => return Err(ImageGenError::MissingIndexOperand(op)),
     };
 
     if let Some(&index) = table.get(name) {
@@ -516,10 +535,7 @@ fn append_trailing_halt(code: &mut Vec<Insn>) {
     }
 }
 
-fn check_labels(
-    labels: &BTreeMap<SmolStr, usize>,
-    code_len: usize,
-) -> Result<(), ImageGenError> {
+fn check_labels(labels: &BTreeMap<SmolStr, usize>, code_len: usize) -> Result<(), ImageGenError> {
     for (label, &index) in labels {
         if index >= code_len {
             return Err(ImageGenError::LabelOutOfRange {
@@ -595,13 +611,13 @@ fn check_pending(code: &[Insn]) -> Result<(), ImageGenError> {
         let state = states[pc];
         let insn = code[pc];
 
-        if matches!(insn.op, OpCode::Yield | OpCode::Wait | OpCode::Halt) {
-            if let PendingState::Set(excite_pc) = state {
-                return Err(ImageGenError::PendingNotFlushed {
-                    excite_pc,
-                    suspend_pc: pc,
-                });
-            }
+        if matches!(insn.op, OpCode::Yield | OpCode::Wait | OpCode::Halt)
+            && let PendingState::Set(excite_pc) = state
+        {
+            return Err(ImageGenError::PendingNotFlushed {
+                excite_pc,
+                suspend_pc: pc,
+            });
         }
 
         let after = match insn.op {

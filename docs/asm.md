@@ -26,7 +26,7 @@
 | 标签 | `ident` 后跟 `:` |
 | 伪指令 | `.` 开头 |
 
-- 数字允许 `_` 分隔（`1_000_000`）。
+- 整数允许 `_` 分隔（`1_000_000`、`0xFF_FF`）；浮点是否允许 `_` **未定义**（`tests/text.rs` 中对应用例保持 `#[ignore]`）。
 - 助记符/伪指令**大小写不敏感**（`fadd` == `FADD`）；标签/名字**大小写敏感**。
 - `fN`/`iN` 是保留形状：不能做标签或名字。
 - `dt`、`tick` 是内置 sensor 名，保留，不得作为肌肉/sensor/变量名。
@@ -55,7 +55,8 @@ instr  ::= mnemonic operand ("," operand)*
 ```
 
 - `.clock` 只有 `hz` 一个字段（周期计费表已退役，见 `isa.md` §6）。
-- 全部可省，取缺省值。
+- **当前实现（v1）要求四个标量全部显式给出**；缺失字段在声明段结束处报
+  `MissingField`（四个缺失会一次报全）。未来若改为可省，必须在这里定义各自缺省值。
 
 ### 3.2 名字表
 
@@ -160,6 +161,33 @@ FLUSH                            # 无操作数；published ← pending，清 pe
 8. 名字、标签合法；`fN`/`iN`/`dt`/`tick` 保留名不得用作标签/名字。
 
 pending 检查是一个布尔数据流：`FEXCITE` 置真，`FLUSH` 清假，在挂起点/HALT 处若为真报错；分支处取并集。
+
+### 6.1 诊断
+
+- 解析阶段**不 panic**：任何非法输入都以 `AsmParseErrors` 返回。
+- 每个错误带 1-based `Location { line, column }` 与稳定的 `ParseErrorKind`，
+  便于工具按类别处理，而不是解析错误字符串。
+- `header()` / `text()` 在行边界恢复：一行出错后继续检查后续行，因此一次汇编可以
+  报告多条独立错误；`parse()` 还会把头段与指令段的错误合并后按行列排序。
+- 固定头段：重复字段在**重复行**报告；缺失字段在**声明段结束处**（`.text` 行、
+  第一条指令行或 EOF）报告，且四个缺失字段全部报告。
+- `text()` 的行号从它自己的输入算起；`parse()` 会把指令段错误平移回文件坐标。
+- 渲染使用 [`annotate-snippets`](https://crates.io/crates/annotate-snippets)：
+  ```
+  error: unknown mnemonic `FADDD`
+    ╭▸ bad.csa:7:5
+    │
+  7 │     FADDD f1, f2, f3
+    ╰╴    ━
+  ```
+- CLI 可执行文件统一命名为 `cyine` + 工具字母：汇编器是 **`cyinea`**；VM 侧按同一
+  规则使用 `cyinev`。asm 与 vm 是独立进程，不合并成单个二进制。
+- CLI 输出 `path:line:col: error: …` + 源行 + 标记，并以非零退出码结束。
+
+```bash
+cyinea -a greet.csa              # 输出 greet.csp
+cyinea -a greet.csa -o out.csp   # 指定输出路径
+```
 
 ## 7. 完整例子
 

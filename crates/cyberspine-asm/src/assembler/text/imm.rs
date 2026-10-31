@@ -1,17 +1,17 @@
 use smol_str::SmolStr;
-use winnow::{
-    ModalResult, Parser,
-    error::{ContextError, ErrMode},
-    token::take_while,
-};
+use winnow::{Parser, error::ErrMode, token::take_while};
 
-use crate::assembler::{Line, ident};
+use crate::assembler::{
+    Line,
+    diagnostic::{PResult, ParseErrorKind, SyntaxError},
+    ident,
+};
 
 /// One operand-sized lexeme: everything up to whitespace, a comma, a comment or
 /// the end of the line. Parsing the token whole (instead of letting each numeric
 /// parser decide where it stops) is what keeps `1abc`, `0x` and `1.0.0` from
 /// being accepted as prefixes.
-fn numeric_token<'i>(input: &mut Line<'i>) -> ModalResult<&'i str> {
+fn numeric_token<'i>(input: &mut Line<'i>) -> PResult<&'i str> {
     take_while(1.., |c: char| {
         !matches!(c, ' ' | '\t' | '\r' | '\n' | ',' | '#')
     })
@@ -27,16 +27,16 @@ fn split_sign(token: &str) -> (bool, &str) {
     }
 }
 
-pub fn imm_int(input: &mut Line<'_>) -> ModalResult<i32> {
+pub(crate) fn imm_int(input: &mut Line<'_>) -> PResult<i32> {
     let token = numeric_token.parse_next(input)?;
-    parse_int(token).ok_or_else(|| ErrMode::Backtrack(ContextError::new()))
+    parse_int(token)
+        .ok_or_else(|| ErrMode::Backtrack(SyntaxError::at(input, ParseErrorKind::Unexpected)))
 }
 
 /// `docs/asm.md` §1 / §4.1:
 /// - decimal is signed and must fit `i32` (`i32::MIN` included);
-/// - `0x`/`0o`/`0b` are **u32 bit patterns** reinterpreted as `i32`.
-///
-/// Numeric `_` separators are deliberately not supported yet.
+/// - `0x`/`0o`/`0b` are **u32 bit patterns** reinterpreted as `i32`;
+/// - `_` may separate digits (`1_000_000`, `0xFF_FF`).
 fn parse_int(token: &str) -> Option<i32> {
     let (negative, body) = split_sign(token);
     if body.is_empty() {
@@ -52,20 +52,54 @@ fn parse_int(token: &str) -> Option<i32> {
         ("0B", 2),
     ] {
         if let Some(digits) = body.strip_prefix(prefix) {
-            let bits = u32::from_str_radix(digits, radix).ok()?;
+            let digits = strip_separators(digits)?;
+            let bits = u32::from_str_radix(&digits, radix).ok()?;
             let value = bits as i32;
-            return Some(if negative { value.wrapping_neg() } else { value });
+            return Some(if negative {
+                value.wrapping_neg()
+            } else {
+                value
+            });
         }
     }
 
+    let body = strip_separators(body)?;
     let magnitude: i64 = body.parse().ok()?;
     let signed = if negative { -magnitude } else { magnitude };
     i32::try_from(signed).ok()
 }
 
-pub fn imm_float(input: &mut Line<'_>) -> ModalResult<f32> {
+/// Removes `_` separators, rejecting a leading, trailing or doubled one.
+fn strip_separators(body: &str) -> Option<String> {
+    if body.is_empty() {
+        return Some(String::new());
+    }
+
+    let mut out = String::with_capacity(body.len());
+    let mut previous_underscore = true;
+
+    for c in body.chars() {
+        if c == '_' {
+            if previous_underscore {
+                return None;
+            }
+            previous_underscore = true;
+        } else {
+            out.push(c);
+            previous_underscore = false;
+        }
+    }
+
+    if previous_underscore {
+        return None;
+    }
+    Some(out)
+}
+
+pub(crate) fn imm_float(input: &mut Line<'_>) -> PResult<f32> {
     let token = numeric_token.parse_next(input)?;
-    parse_float(token).ok_or_else(|| ErrMode::Backtrack(ContextError::new()))
+    parse_float(token)
+        .ok_or_else(|| ErrMode::Backtrack(SyntaxError::at(input, ParseErrorKind::Unexpected)))
 }
 
 /// `docs/asm.md` §4.1: decimal literals go through `f32::from_str` exactly once
@@ -84,6 +118,6 @@ fn parse_float(token: &str) -> Option<f32> {
     token.parse::<f32>().ok()
 }
 
-pub fn imm_ident(input: &mut Line<'_>) -> ModalResult<SmolStr> {
+pub(crate) fn imm_ident(input: &mut Line<'_>) -> PResult<SmolStr> {
     ident.map(SmolStr::new).parse_next(input)
 }

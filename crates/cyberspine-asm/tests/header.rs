@@ -6,20 +6,21 @@
 //! 否则一个"拒绝一切"的解析器会让整份逆向测试全绿 ——
 //! `crates/cyberspine-vm/tests/load.rs` 开头警告的正是这个失败模式。
 //!
-//! **当前缺口。** `header()` 返回 `ModalResult`，也就是 `ErrMode<ContextError>`，
-//! 它不携带"是哪个字段出错"的信息；`FixedHeaderError` 在调用处的 `.unwrap()`
-//! 被丢弃（错误路径直接 panic，而不是返回 `Err`）。因此本文件目前只能断言
-//! "被拒绝"，还无法断言"被哪条规则拒绝"。
+//! **错误契约。** `header()` 现在返回 `Result<AsmHeader, AsmParseErrors>`；
+//! 每个错误带 1-based 行列和稳定的 `ParseErrorKind`，并且按行聚合。
+//! 所以逆向用例不仅能断言"被拒绝"，还能断言"被哪条规则、哪一行拒绝"。
 
-use cyberspine_asm::assembler::header::{AsmHeader, FixedHeader, GroupDef, header};
+use cyberspine_asm::assembler::{
+    AsmParseErrors, ParseError, ParseErrorKind,
+    header::{AsmHeader, FixedHeader, GroupDef, header},
+};
 use smol_str::SmolStr;
-use winnow::ModalResult;
 
 // ---------------------------------------------------------------------------
 // 脚手架
 // ---------------------------------------------------------------------------
 
-fn parse(src: &str) -> ModalResult<AsmHeader> {
+fn parse(src: &str) -> Result<AsmHeader, AsmParseErrors> {
     let mut cursor = src;
     header(&mut cursor)
 }
@@ -33,10 +34,16 @@ fn parse_ok(src: &str) -> AsmHeader {
 }
 
 #[track_caller]
-fn parse_rejected(src: &str) {
-    if let Ok(parsed) = parse(src) {
-        panic!("期望解析被拒绝，却解析成功：{parsed:?}\n--- 输入 ---\n{src}");
+fn parse_errors(src: &str) -> Vec<ParseError> {
+    match parse(src) {
+        Ok(parsed) => panic!("期望解析被拒绝，却解析成功：{parsed:?}\n--- 输入 ---\n{src}"),
+        Err(errors) => errors.errors,
     }
+}
+
+#[track_caller]
+fn parse_rejected(src: &str) {
+    let _ = parse_errors(src);
 }
 
 /// 把若干行拼成一份以 `\n` 结尾的源码 —— 这是磁盘上真实文件的形状。
@@ -46,11 +53,8 @@ fn text(lines: &[&str]) -> String {
     joined
 }
 
-/// 四个必填标量 + `.text`。
-///
-/// 注意 `docs/asm.md` §3.1 说标量"全部可省，取缺省值"，而当前实现把缺失当错误
-/// （`FixedHeaderError::Missing`）。为了让基线在两种读法下都合法，这里四个全部给出；
-/// 这个规范冲突单独由 `missing_required_scalars_are_rejected` 标记。
+/// 四个必填标量 + `.text`（`docs/asm.md` §3.1：当前实现要求显式给出）。
+/// 缺失字段的行为单独由 `missing_required_scalars_are_rejected` 钉住。
 const BASE: &[&str] = &[
     ".layer 10",
     ".clock hz = 60",
@@ -292,10 +296,16 @@ fn missing_required_scalars_are_rejected() {
         (3, "max_wait"),
     ] {
         let src = base_missing(index);
-        // 期望的错误是 FixedHeaderError::Missing(field)；当前实现会在
-        // build().unwrap() 处 panic，看不到 field，所以这里只断言"被拒绝"。
-        // TODO: this test will pass as long as we don't unwrap on the FixedHeaderError.
-        parse_rejected(&src);
+        let errors = parse_errors(&src);
+        assert_eq!(errors.len(), 1, "for missing {field}: {errors:?}");
+        assert!(
+            matches!(&errors[0].kind, ParseErrorKind::MissingField(name) if *name == field),
+            "for missing {field}: {errors:?}"
+        );
+        // The declaration section ends at the `.text` marker; that is where a
+        // missing required field is reported.
+        assert_eq!(errors[0].location.line, 4, "missing {field}");
+        assert_eq!(errors[0].location.column, 1, "missing {field}");
     }
 }
 
@@ -312,10 +322,88 @@ fn duplicate_required_scalars_are_rejected() {
         (".max_wait 1.0", "max_wait"),
     ] {
         let src = base_with(line);
-        // 期望 FixedHeaderError::Duplicate(field)；当前是 panic。
-        // TODO: this test will pass as long as the fixed header error is not unwraped.
-        parse_rejected(&src);
+        let errors = parse_errors(&src);
+        assert_eq!(errors.len(), 1, "for duplicate {field}: {errors:?}");
+        assert!(
+            matches!(&errors[0].kind, ParseErrorKind::DuplicateField(name) if *name == field),
+            "for duplicate {field}: {errors:?}"
+        );
+        // `base_with` inserts the duplicate just before `.text`, i.e. on line 5.
+        assert_eq!(errors[0].location.line, 5, "duplicate {field}");
     }
+}
+
+#[test]
+fn unknown_directive_reports_its_name_and_line() {
+    let errors = parse_errors(&base_with(".wobble 1"));
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        matches!(&errors[0].kind, ParseErrorKind::UnknownDirective(name) if name == "wobble"),
+        "{errors:?}"
+    );
+    assert_eq!(errors[0].location.line, 5);
+    assert_eq!(errors[0].location.column, 1);
+}
+
+#[test]
+fn a_bad_field_value_names_the_directive() {
+    let errors = parse_errors(&base_with(".layer abc"));
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        matches!(
+            &errors[0].kind,
+            ParseErrorKind::InvalidFieldValue {
+                directive: "layer",
+                ..
+            }
+        ),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn a_missing_directive_name_is_reported() {
+    let errors = parse_errors(&base_with("."));
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        matches!(&errors[0].kind, ParseErrorKind::MissingDirectiveName { .. }),
+        "{errors:?}"
+    );
+    assert_eq!(errors[0].location.line, 5);
+}
+
+#[test]
+fn a_dangling_group_comma_is_rejected() {
+    let errors = parse_errors(&base_with(".group g = a,"));
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        matches!(
+            &errors[0].kind,
+            ParseErrorKind::MissingFieldValue {
+                directive: "group",
+                ..
+            }
+        ),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn independent_header_errors_are_all_reported() {
+    let src = text(&[
+        ".layer 10",
+        ".clock hz = 60",
+        ".fuel 4096",
+        ".max_wait 600.0",
+        ".wobble 1",
+        ".muscle brow_l",
+        ".hey 2",
+        ".text",
+    ]);
+    let errors = parse_errors(&src);
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert_eq!(errors[0].location.line, 5);
+    assert_eq!(errors[1].location.line, 7);
 }
 
 // ---------------------------------------------------------------------------
