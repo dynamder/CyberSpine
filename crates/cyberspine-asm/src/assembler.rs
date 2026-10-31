@@ -1,11 +1,41 @@
 pub mod header;
 pub mod text;
 
-use cyberspine_vm::binfmt::image::Image;
+use std::collections::{BTreeMap, HashMap, VecDeque};
+
+use cyberspine_vm::binfmt::image::{
+    FORMAT_VERSION, FixedHeader as ImageFixedHeader, ISA_VERSION, Image, Muscle, Sensor,
+    SensorSource, VarF, VarI,
+};
+use cyberspine_vm::vm::jump::{jump_offset, jump_target};
+use cyberspine_vm::vm::op::{ImmType, Insn, OpCode, RegName};
+use smol_str::SmolStr;
 use thiserror::Error;
-use winnow::{ModalResult, Parser, combinator::trace, token::take_while};
+use winnow::{
+    ModalResult, Parser,
+    combinator::trace,
+    error::{ContextError, ErrMode},
+    token::take_while,
+};
+
+use header::{AsmHeader, header as header_section};
+use text::{AsmInsn, AsmOperand, TextItem, text as text_section};
 
 pub type Line<'i> = &'i str;
+
+/// `docs/asm.md` §1 / §6.8: `fN`/`iN` is the register shape and `dt`/`tick` are
+/// built-in sensor names, so none of them can be a label or a declared name.
+pub(crate) fn is_reserved_name(name: &str) -> bool {
+    if matches!(name, "dt" | "tick") {
+        return true;
+    }
+    let mut chars = name.chars();
+    if !matches!(chars.next(), Some('f' | 'i')) {
+        return false;
+    }
+    let rest = chars.as_str();
+    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+}
 
 fn ident<'i>(input: &mut Line<'i>) -> ModalResult<&'i str> {
     trace(
@@ -19,35 +49,579 @@ fn ident<'i>(input: &mut Line<'i>) -> ModalResult<&'i str> {
     .parse_next(input)
 }
 
-#[derive(Debug, Clone)]
-pub struct AsmHeader;
+fn comments<'i>(input: &mut Line<'i>) -> ModalResult<()> {
+    trace(
+        "comments",
+        ('#', take_while(0.., |c: char| c != '\n')).void(),
+    )
+    .parse_next(input)
+}
 
-#[derive(Debug, Clone)]
-pub struct AsmInsn;
-
+/// The parsed source: the declaration section plus the flat instruction stream.
 #[derive(Debug, Clone)]
 pub struct Asm {
     pub header: AsmHeader,
-    pub insn: AsmInsn,
+    pub text: Vec<TextItem>,
 }
 
 #[derive(Debug, Error)]
-pub enum AsmParseError {}
-
-pub fn parse(asm_str: &mut str) -> Result<Asm, AsmParseError> {
-    unimplemented!()
+pub enum AsmParseError {
+    #[error("the declaration section could not be parsed: {0:?}")]
+    Header(ErrMode<ContextError>),
+    #[error("the instruction section could not be parsed: {0:?}")]
+    Text(ErrMode<ContextError>),
 }
 
-fn comments<'i>(input: &mut Line<'i>) -> ModalResult<()> {
-    trace("comments", ('#', take_while(0.., |_| true)).void()).parse_next(input)
+/// Parse a whole `.csa` source. `header` owns the cursor up to `.text` (or the
+/// first instruction); `text` continues from exactly there (`docs/asm.md` §2).
+pub fn parse(asm_str: &str) -> Result<Asm, AsmParseError> {
+    let mut cursor = asm_str;
+    let header = header_section(&mut cursor).map_err(AsmParseError::Header)?;
+    let text = text_section(&mut cursor).map_err(AsmParseError::Text)?;
+    Ok(Asm { header, text })
 }
-#[derive(Debug, Error)]
-pub enum ImageGenError {}
 
-pub fn generate_image(asm: Asm) -> Result<Image, ImageGenError> {
-    unimplemented!()
+/// Everything the assembler can reject without a backend (`docs/asm.md` §6).
+#[derive(Debug, Error, PartialEq)]
+pub enum ImageGenError {
+    #[error("duplicate label `{0}`")]
+    DuplicateLabel(SmolStr),
+    #[error("undefined label `{0}`")]
+    UndefinedLabel(SmolStr),
+    #[error("label `{label}` points to {index}, past the end of the code ({code_len} instructions)")]
+    LabelOutOfRange {
+        label: SmolStr,
+        index: usize,
+        code_len: usize,
+    },
+    #[error("instruction {pc}: offset {offset} leaves the code (code_len {code_len})")]
+    JumpTargetOutOfRange {
+        pc: usize,
+        offset: i32,
+        code_len: usize,
+    },
+    #[error("instruction {pc}: jump distance does not fit an i32 offset")]
+    JumpOffsetOverflow { pc: usize },
+    #[error("malformed {0:?}: expected an index operand")]
+    MissingIndexOperand(OpCode),
+    #[error("`{0}` is declared more than once")]
+    DuplicateName(SmolStr),
+    #[error("`{0}` is a reserved name")]
+    ReservedName(SmolStr),
+    #[error("FEXCITE target `{0}` is neither a muscle nor a group")]
+    UnknownExciteTarget(SmolStr),
+    #[error("unknown float sensor `{0}`")]
+    UnknownSensorF(SmolStr),
+    #[error("unknown integer sensor `{0}`")]
+    UnknownSensorI(SmolStr),
+    #[error("unknown float variable `{0}`")]
+    UnknownVarF(SmolStr),
+    #[error("unknown integer variable `{0}`")]
+    UnknownVarI(SmolStr),
+    #[error("group `{0}` is only legal as a FEXCITE target")]
+    GroupOutsideExcite(SmolStr),
+    #[error("group `{group}` contains unknown muscle `{member}`")]
+    UnknownGroupMember { group: SmolStr, member: SmolStr },
+    #[error("group `{0}` collides with a muscle name")]
+    GroupNameCollision(SmolStr),
+    #[error("sensor `{0}` collides with the read-back sensor of the same muscle")]
+    MuscleReadbackCollision(SmolStr),
+    #[error("FEXCITE at {excite_pc} is still pending at {suspend_pc}; FLUSH is missing")]
+    PendingNotFlushed { excite_pc: usize, suspend_pc: usize },
+    #[error("WAIT at {pc} is not a non-negative finite duration up to max_wait")]
+    InvalidWait { pc: usize, seconds: f32 },
+    #[error("`hz` must be greater than zero")]
+    ZeroHz,
+    #[error("`max_wait` must be a non-negative finite f32")]
+    InvalidMaxWait,
+    #[error("the program is too large for the format's 32-bit instruction count")]
+    TooManyInstructions,
 }
 
-fn parse_header(asm_str: &mut str) -> Result<AsmHeader, AsmParseError> {
-    unimplemented!()
+/// Resolve names, labels and groups, then produce the canonical `Image`.
+pub fn generate_image(asm: &Asm) -> Result<Image, ImageGenError> {
+    check_header(&asm.header)?;
+
+    let symbols = Symbols::build(&asm.header)?;
+    let labels = collect_labels(&asm.text, &symbols)?;
+    let mut code = emit(&asm.text, &labels, &symbols)?;
+    append_trailing_halt(&mut code);
+
+    if code.len() > u32::MAX as usize {
+        return Err(ImageGenError::TooManyInstructions);
+    }
+
+    check_labels(&labels, code.len())?;
+    check_jumps(&code)?;
+    check_waits(&code, asm.header.fixed.max_wait)?;
+    check_pending(&code)?;
+
+    Ok(Image {
+        header: ImageFixedHeader {
+            format_version: FORMAT_VERSION,
+            isa_version: ISA_VERSION,
+            layer: asm.header.fixed.layer,
+            hz: asm.header.fixed.clock_hz,
+            fuel: asm.header.fixed.fuel,
+            max_wait: asm.header.fixed.max_wait,
+        },
+        code,
+        muscles: symbols.image_muscles,
+        sensors_f: symbols.image_sensors_f,
+        sensors_i: symbols.image_sensors_i,
+        vars_f: symbols.image_vars_f,
+        vars_i: symbols.image_vars_i,
+    })
+}
+
+fn check_header(header: &AsmHeader) -> Result<(), ImageGenError> {
+    if header.fixed.clock_hz == 0 {
+        return Err(ImageGenError::ZeroHz);
+    }
+    let max_wait = header.fixed.max_wait;
+    if !max_wait.is_finite() || max_wait < 0.0 {
+        return Err(ImageGenError::InvalidMaxWait);
+    }
+    Ok(())
+}
+
+/// The five name tables as name -> logical index, mirroring the on-disk order
+/// (`docs/binfmt.md` §3 / §6, `docs/asm.md` §3.3):
+/// `muscles`, `sensors_f` = read-backs ++ explicit ++ `dt`,
+/// `sensors_i` = explicit ++ `tick`, then the two var tables.
+struct Symbols {
+    muscles: HashMap<SmolStr, u32>,
+    sensors_f: HashMap<SmolStr, u32>,
+    sensors_i: HashMap<SmolStr, u32>,
+    vars_f: HashMap<SmolStr, u32>,
+    vars_i: HashMap<SmolStr, u32>,
+    groups: HashMap<SmolStr, Vec<u32>>,
+    image_muscles: Vec<Muscle>,
+    image_sensors_f: Vec<Sensor>,
+    image_sensors_i: Vec<Sensor>,
+    image_vars_f: Vec<VarF>,
+    image_vars_i: Vec<VarI>,
+}
+
+impl Symbols {
+    fn build(header: &AsmHeader) -> Result<Self, ImageGenError> {
+        let mut muscles = HashMap::new();
+        let mut sensors_f = HashMap::new();
+        let mut sensors_i = HashMap::new();
+        let mut vars_f = HashMap::new();
+        let mut vars_i = HashMap::new();
+        let mut groups = HashMap::new();
+
+        let mut image_muscles = Vec::new();
+        let mut image_sensors_f = Vec::new();
+        let mut image_sensors_i = Vec::new();
+        let mut image_vars_f = Vec::new();
+        let mut image_vars_i = Vec::new();
+
+        for (index, name) in header.muscles.iter().enumerate() {
+            check_declarable(name)?;
+            if muscles.contains_key(name) {
+                return Err(ImageGenError::DuplicateName(name.clone()));
+            }
+            let index = index as u32;
+            muscles.insert(name.clone(), index);
+            // §6.2: every muscle is its own read-back float sensor, at the same index.
+            sensors_f.insert(name.clone(), index);
+            image_muscles.push(Muscle {
+                name: name.as_str().into(),
+            });
+            image_sensors_f.push(Sensor {
+                name: name.as_str().into(),
+                source: SensorSource::Muscle,
+            });
+        }
+
+        for group in &header.muscle_groups {
+            check_declarable(&group.name)?;
+            if muscles.contains_key(&group.name) {
+                return Err(ImageGenError::GroupNameCollision(group.name.clone()));
+            }
+            if groups.contains_key(&group.name) {
+                return Err(ImageGenError::DuplicateName(group.name.clone()));
+            }
+            let mut members = Vec::with_capacity(group.members.len());
+            for member in &group.members {
+                let index =
+                    *muscles
+                        .get(member)
+                        .ok_or_else(|| ImageGenError::UnknownGroupMember {
+                            group: group.name.clone(),
+                            member: member.clone(),
+                        })?;
+                members.push(index);
+            }
+            groups.insert(group.name.clone(), members);
+        }
+
+        let sensor_f_base = image_sensors_f.len() as u32;
+        for (offset, name) in header.sensors_f.iter().enumerate() {
+            check_declarable(name)?;
+            if muscles.contains_key(name) {
+                return Err(ImageGenError::MuscleReadbackCollision(name.clone()));
+            }
+            if sensors_f.contains_key(name) {
+                return Err(ImageGenError::DuplicateName(name.clone()));
+            }
+            sensors_f.insert(name.clone(), sensor_f_base + offset as u32);
+            image_sensors_f.push(Sensor {
+                name: name.as_str().into(),
+                source: SensorSource::Backend,
+            });
+        }
+        sensors_f.insert(SmolStr::new("dt"), image_sensors_f.len() as u32);
+        image_sensors_f.push(Sensor {
+            name: "dt".into(),
+            source: SensorSource::BuiltinDt,
+        });
+
+        for (index, name) in header.sensors_i.iter().enumerate() {
+            check_declarable(name)?;
+            if sensors_i.contains_key(name) {
+                return Err(ImageGenError::DuplicateName(name.clone()));
+            }
+            sensors_i.insert(name.clone(), index as u32);
+            image_sensors_i.push(Sensor {
+                name: name.as_str().into(),
+                source: SensorSource::Backend,
+            });
+        }
+        sensors_i.insert(SmolStr::new("tick"), image_sensors_i.len() as u32);
+        image_sensors_i.push(Sensor {
+            name: "tick".into(),
+            source: SensorSource::BuiltinTick,
+        });
+
+        for (index, (name, init)) in header.vars_f.iter().enumerate() {
+            check_declarable(name)?;
+            if vars_f.contains_key(name) {
+                return Err(ImageGenError::DuplicateName(name.clone()));
+            }
+            vars_f.insert(name.clone(), index as u32);
+            image_vars_f.push(VarF {
+                name: name.as_str().into(),
+                init: *init,
+            });
+        }
+
+        for (index, (name, init)) in header.vars_i.iter().enumerate() {
+            check_declarable(name)?;
+            if vars_i.contains_key(name) {
+                return Err(ImageGenError::DuplicateName(name.clone()));
+            }
+            vars_i.insert(name.clone(), index as u32);
+            image_vars_i.push(VarI {
+                name: name.as_str().into(),
+                init: *init,
+            });
+        }
+
+        Ok(Self {
+            muscles,
+            sensors_f,
+            sensors_i,
+            vars_f,
+            vars_i,
+            groups,
+            image_muscles,
+            image_sensors_f,
+            image_sensors_i,
+            image_vars_f,
+            image_vars_i,
+        })
+    }
+}
+
+fn check_declarable(name: &SmolStr) -> Result<(), ImageGenError> {
+    if is_reserved_name(name) {
+        Err(ImageGenError::ReservedName(name.clone()))
+    } else {
+        Ok(())
+    }
+}
+
+/// First pass (`docs/asm.md` §5): labels point at the instruction that follows
+/// them, and a `group` FEXCITE contributes one instruction per member.
+fn collect_labels(
+    items: &[TextItem],
+    symbols: &Symbols,
+) -> Result<BTreeMap<SmolStr, usize>, ImageGenError> {
+    let mut labels = BTreeMap::new();
+    let mut pc = 0usize;
+
+    for item in items {
+        match item {
+            TextItem::Label(name) => {
+                if labels.insert(name.clone(), pc).is_some() {
+                    return Err(ImageGenError::DuplicateLabel(name.clone()));
+                }
+            }
+            TextItem::Insn(insn) => pc += emit_count(insn, symbols)?,
+        }
+    }
+
+    Ok(labels)
+}
+
+fn emit_count(insn: &AsmInsn, symbols: &Symbols) -> Result<usize, ImageGenError> {
+    if insn.op == OpCode::Fexcite {
+        let name = excite_name(insn)?;
+        return Ok(excite_targets(name, symbols)?.len());
+    }
+    Ok(1)
+}
+
+/// Second pass: emit one `Insn` per item, expanding `FEXCITE group` to N
+/// instructions that share the same source register (`docs/asm.md` §4.2).
+fn emit(
+    items: &[TextItem],
+    labels: &BTreeMap<SmolStr, usize>,
+    symbols: &Symbols,
+) -> Result<Vec<Insn>, ImageGenError> {
+    let mut code = Vec::new();
+
+    for item in items {
+        let TextItem::Insn(asm) = item else {
+            continue;
+        };
+
+        if asm.op == OpCode::Fexcite {
+            let name = excite_name(asm)?;
+            for target in excite_targets(name, symbols)? {
+                let pc = code.len();
+                code.push(emit_insn(asm, pc, labels, symbols, Some(target))?);
+            }
+        } else {
+            let pc = code.len();
+            code.push(emit_insn(asm, pc, labels, symbols, None)?);
+        }
+    }
+
+    Ok(code)
+}
+
+fn excite_name(insn: &AsmInsn) -> Result<&SmolStr, ImageGenError> {
+    match insn.operands.first() {
+        Some(AsmOperand::Index(name)) => Ok(name),
+        _ => Err(ImageGenError::MissingIndexOperand(insn.op)),
+    }
+}
+
+fn excite_targets(name: &SmolStr, symbols: &Symbols) -> Result<Vec<u32>, ImageGenError> {
+    if let Some(members) = symbols.groups.get(name) {
+        return Ok(members.clone());
+    }
+    if let Some(&muscle) = symbols.muscles.get(name) {
+        return Ok(vec![muscle]);
+    }
+    Err(ImageGenError::UnknownExciteTarget(name.clone()))
+}
+
+fn emit_insn(
+    asm: &AsmInsn,
+    pc: usize,
+    labels: &BTreeMap<SmolStr, usize>,
+    symbols: &Symbols,
+    excite_index: Option<u32>,
+) -> Result<Insn, ImageGenError> {
+    let mut insn = Insn::new(asm.op);
+
+    for operand in &asm.operands {
+        match operand {
+            AsmOperand::Reg { id, name, .. } => match *name {
+                RegName::Rd => insn.rd = *id,
+                RegName::Ra => insn.ra = *id,
+                RegName::Rb => insn.rb = *id,
+                RegName::Rc => insn.rc = *id,
+            },
+            AsmOperand::ImmF32(value) => insn.imm = (*value).to_bits(),
+            AsmOperand::ImmI32(value) => insn.imm = *value as u32,
+            AsmOperand::ImmNone => {}
+            AsmOperand::Index(name) => {
+                insn.imm = match excite_index {
+                    Some(index) => index,
+                    None => resolve_index(asm.op, name, symbols)?,
+                };
+            }
+            AsmOperand::Target(name) => {
+                let target = *labels
+                    .get(name)
+                    .ok_or_else(|| ImageGenError::UndefinedLabel(name.clone()))?;
+                let offset =
+                    jump_offset(pc, target).ok_or(ImageGenError::JumpOffsetOverflow { pc })?;
+                insn.imm = offset as u32;
+            }
+        }
+    }
+
+    Ok(insn)
+}
+
+fn resolve_index(op: OpCode, name: &SmolStr, symbols: &Symbols) -> Result<u32, ImageGenError> {
+    let (table, unknown) = match op {
+        OpCode::Fsense => (
+            &symbols.sensors_f,
+            ImageGenError::UnknownSensorF(name.clone()),
+        ),
+        OpCode::Isense => (
+            &symbols.sensors_i,
+            ImageGenError::UnknownSensorI(name.clone()),
+        ),
+        OpCode::Fvget | OpCode::Fvset => {
+            (&symbols.vars_f, ImageGenError::UnknownVarF(name.clone()))
+        }
+        OpCode::Ivget | OpCode::Ivset => {
+            (&symbols.vars_i, ImageGenError::UnknownVarI(name.clone()))
+        }
+        _ => unreachable!("opcode with an Index operand: {op:?}"),
+    };
+
+    if let Some(&index) = table.get(name) {
+        return Ok(index);
+    }
+    if symbols.groups.contains_key(name) {
+        return Err(ImageGenError::GroupOutsideExcite(name.clone()));
+    }
+    Err(unknown)
+}
+
+fn append_trailing_halt(code: &mut Vec<Insn>) {
+    if code.last().map(|insn| insn.op) != Some(OpCode::Halt) {
+        code.push(Insn::new(OpCode::Halt));
+    }
+}
+
+fn check_labels(
+    labels: &BTreeMap<SmolStr, usize>,
+    code_len: usize,
+) -> Result<(), ImageGenError> {
+    for (label, &index) in labels {
+        if index >= code_len {
+            return Err(ImageGenError::LabelOutOfRange {
+                label: label.clone(),
+                index,
+                code_len,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// `docs/binfmt.md` §9.3 I6: `target = pc + 1 + off` must stay in `[0, code_len)`.
+/// The arithmetic comes from `jump_target`, the single shared function.
+fn check_jumps(code: &[Insn]) -> Result<(), ImageGenError> {
+    for (pc, insn) in code.iter().enumerate() {
+        if insn.op.imm_type() != ImmType::JumpOffset {
+            continue;
+        }
+        let offset = insn.imm as i32;
+        match jump_target(pc, offset) {
+            Some(target) if target < code.len() => {}
+            _ => {
+                return Err(ImageGenError::JumpTargetOutOfRange {
+                    pc,
+                    offset,
+                    code_len: code.len(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `docs/isa.md` §4.8 / §10.7: `WAIT` is a non-negative finite duration no
+/// greater than the header's `max_wait`.
+fn check_waits(code: &[Insn], max_wait: f32) -> Result<(), ImageGenError> {
+    for (pc, insn) in code.iter().enumerate() {
+        if insn.op != OpCode::Wait {
+            continue;
+        }
+        let seconds = f32::from_bits(insn.imm);
+        if !seconds.is_finite() || seconds < 0.0 || seconds > max_wait {
+            return Err(ImageGenError::InvalidWait { pc, seconds });
+        }
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PendingState {
+    Unreached,
+    Clear,
+    Set(usize),
+}
+
+/// `docs/asm.md` §6.6: a boolean dataflow over the CFG. `FEXCITE` sets pending,
+/// `FLUSH` clears it, and a suspend point or `HALT` may only be reached clean.
+/// Branches join with **union** (pending on any incoming edge is pending), which
+/// is why a linear scan is not enough.
+fn check_pending(code: &[Insn]) -> Result<(), ImageGenError> {
+    let len = code.len();
+    if len == 0 {
+        return Ok(());
+    }
+
+    let mut states = vec![PendingState::Unreached; len];
+    let mut queue = VecDeque::new();
+    states[0] = PendingState::Clear;
+    queue.push_back(0usize);
+
+    while let Some(pc) = queue.pop_front() {
+        let state = states[pc];
+        let insn = code[pc];
+
+        if matches!(insn.op, OpCode::Yield | OpCode::Wait | OpCode::Halt) {
+            if let PendingState::Set(excite_pc) = state {
+                return Err(ImageGenError::PendingNotFlushed {
+                    excite_pc,
+                    suspend_pc: pc,
+                });
+            }
+        }
+
+        let after = match insn.op {
+            OpCode::Fexcite => PendingState::Set(pc),
+            OpCode::Flush => PendingState::Clear,
+            _ => state,
+        };
+
+        let mut successors = [None, None];
+        match insn.op {
+            OpCode::Halt => {}
+            OpCode::Jmp => successors[0] = jump_target(pc, insn.imm as i32),
+            OpCode::Yield | OpCode::Wait => successors[0] = Some(pc + 1),
+            op if op.imm_type() == ImmType::JumpOffset => {
+                successors[0] = Some(pc + 1);
+                successors[1] = jump_target(pc, insn.imm as i32);
+            }
+            _ => successors[0] = Some(pc + 1),
+        }
+
+        for successor in successors.into_iter().flatten() {
+            if successor >= len {
+                continue;
+            }
+            let merged = merge_pending(states[successor], after);
+            if merged != states[successor] {
+                states[successor] = merged;
+                queue.push_back(successor);
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn merge_pending(old: PendingState, new: PendingState) -> PendingState {
+    match (old, new) {
+        (PendingState::Unreached, other) | (other, PendingState::Unreached) => other,
+        (PendingState::Clear, PendingState::Clear) => PendingState::Clear,
+        (PendingState::Set(a), PendingState::Set(b)) => PendingState::Set(a.min(b)),
+        (PendingState::Set(a), PendingState::Clear)
+        | (PendingState::Clear, PendingState::Set(a)) => PendingState::Set(a),
+    }
 }

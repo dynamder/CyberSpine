@@ -14,7 +14,7 @@ use winnow::{
     error::{ContextError, ErrMode},
 };
 
-use crate::assembler::{Line, comments, ident, text::insn::insn};
+use crate::assembler::{Line, comments, ident, is_reserved_name, text::insn::insn};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AsmOperand {
@@ -62,20 +62,6 @@ pub struct AsmInsn {
 pub enum TextItem {
     Label(SmolStr),
     Insn(AsmInsn),
-}
-
-/// `docs/asm.md` §1 / §6.8: `fN`/`iN` are the register shape and `dt`/`tick` are
-/// built-in sensor names, so none of them may be used as a label.
-fn is_reserved_name(name: &str) -> bool {
-    if matches!(name, "dt" | "tick") {
-        return true;
-    }
-    let mut chars = name.chars();
-    if !matches!(chars.next(), Some('f' | 'i')) {
-        return false;
-    }
-    let rest = chars.as_str();
-    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
 }
 
 fn label(input: &mut Line<'_>) -> ModalResult<TextItem> {

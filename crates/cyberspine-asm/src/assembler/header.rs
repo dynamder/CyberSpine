@@ -2,7 +2,7 @@ use smol_str::SmolStr;
 use thiserror::Error;
 use winnow::{
     ModalResult, Parser,
-    ascii::{dec_int, dec_uint, float, space0, space1},
+    ascii::{dec_int, dec_uint, float, line_ending, space0, space1},
     combinator::{eof, opt, preceded, repeat, terminated, trace},
     error::{ContextError, ErrMode},
 };
@@ -210,7 +210,7 @@ fn group<'i>(input: &mut Line<'i>) -> ModalResult<GroupDef> {
 /// (`docs/asm.md` §2 / §7).
 pub fn header(input: &mut &str) -> ModalResult<AsmHeader> {
     let src: &str = *input;
-    let mut pos = 0usize;
+    let mut consumed = 0usize;
 
     let mut parsing_fixed_header = ParsingFixedHeader::default();
     let mut muscles: Vec<SmolStr> = Vec::new();
@@ -220,36 +220,25 @@ pub fn header(input: &mut &str) -> ModalResult<AsmHeader> {
     let mut vars_f: Vec<(SmolStr, f32)> = Vec::new();
     let mut vars_i: Vec<(SmolStr, i32)> = Vec::new();
 
-    while pos < src.len() {
-        let line_end = src[pos..]
-            .find('\n')
-            .map(|offset| pos + offset + 1)
-            .unwrap_or(src.len());
-        let line = src[pos..line_end]
-            .strip_suffix('\n')
-            .unwrap_or(&src[pos..line_end]);
-        let line = line.strip_suffix('\r').unwrap_or(line);
-        let line = line.trim_start_matches([' ', '\t']);
+    for raw_line in src.split_inclusive('\n') {
+        let trimmed = raw_line.trim();
 
         // Blank and comment-only lines are not statements; skip them.
-        if line.is_empty() || line.starts_with('#') {
-            pos = line_end;
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            consumed += raw_line.len();
             continue;
         }
 
         // The declaration section ends at the first instruction or label. That
         // line stays in the cursor for the text parser.
-        if !line.starts_with('.') {
+        if !trimmed.starts_with('.') {
             break;
         }
 
-        let mut cursor = line;
+        let mut cursor = raw_line;
         let header_stmt = terminated(
-            terminated(
-                opt(trace("header_stmt", header_stmt)),
-                (space0, opt(comments)),
-            ),
-            eof,
+            preceded(space0, opt(trace("header_stmt", header_stmt))),
+            (space0, opt(comments), opt(line_ending), eof),
         )
         .parse_next(&mut cursor)
         // A line that starts with `.` but is not a known directive is a typo,
@@ -257,7 +246,7 @@ pub fn header(input: &mut &str) -> ModalResult<AsmHeader> {
         .map_err(|_| ErrMode::Cut(ContextError::new()))?
         .ok_or_else(|| ErrMode::Cut(ContextError::new()))?;
 
-        pos = line_end;
+        consumed += raw_line.len();
 
         match header_stmt {
             HeaderStmt::Layer(layer) => parsing_fixed_header.layer(layer).unwrap(),
@@ -274,7 +263,7 @@ pub fn header(input: &mut &str) -> ModalResult<AsmHeader> {
         }
     }
 
-    *input = &src[pos..];
+    *input = &src[consumed..];
 
     Ok(AsmHeader {
         fixed: parsing_fixed_header.build().unwrap(),
