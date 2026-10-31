@@ -9,7 +9,8 @@
 //!   byte layout and its load-time validation checklist.
 //!
 //! [`docs/asm.md`](../../../docs/asm.md) specifies the `.csa` assembly source;
-//! the assembler itself is not written yet.
+//! the assembler lives in the `cyberspine-asm` crate, which also owns writing an
+//! image to disk (this crate only reads and validates one).
 
 pub mod binfmt;
 pub mod register;
