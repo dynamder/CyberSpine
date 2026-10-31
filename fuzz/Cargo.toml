@@ -1,0 +1,32 @@
+[package]
+name = "cyberspine-asm-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+cyberspine-asm = { path = "../crates/cyberspine-asm" }
+cyberspine-vm = { path = "../crates/cyberspine-vm" }
+
+[[bin]]
+name = "assemble"
+path = "fuzz_targets/assemble.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "assemble_unwind"
+path = "fuzz_targets/assemble_unwind.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1
+
+[workspace]
