@@ -15,10 +15,10 @@
 //!   `len - 32`, so a table that overruns its section is a truncation rather
 //!   than something that silently eats part of the hash.
 
-use std::collections::HashSet;
-use std::fs::File;
-use std::io::Read;
-use std::path::{Path, PathBuf};
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
+use core::fmt;
 
 use thiserror::Error;
 
@@ -30,13 +30,6 @@ use super::image::{
     MAGIC, MIN_FILE_LEN, Muscle, Sensor, SensorSource, VarF, VarI,
 };
 
-/// The largest file accepted from disk, in bytes.
-///
-/// §9.1 C5 stops the loader allocating from a *declared* count, but it cannot
-/// help with the read itself: `fs::read` allocates by actual file size before any
-/// of that runs. So the disk entry point needs its own gate, and this is it.
-pub const MAX_FILE_LEN: usize = 64 * 1024 * 1024;
-
 /// Which metadata table an error refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Table {
@@ -47,8 +40,8 @@ pub enum Table {
     VarsI,
 }
 
-impl std::fmt::Display for Table {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for Table {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
             Self::Muscles => "muscles",
             Self::SensorsF => "sensors_f",
@@ -66,16 +59,6 @@ impl std::fmt::Display for Table {
 /// comment so a failure can be traced back to the spec line that caused it.
 #[derive(Debug, Error)]
 pub enum LoadError {
-    // ----- reading from disk (not a format rule) -----
-    #[error("could not read {path}: {source}")]
-    Io {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-    #[error("file is {len} bytes, above the {max}-byte limit this loader will read")]
-    FileTooLarge { len: usize, max: usize },
-
     // ----- §9.1 container -----
     #[error("file is {len} bytes; the format needs at least {MIN_FILE_LEN}")]
     TooShort { len: usize }, // C1
@@ -206,51 +189,6 @@ pub enum LoadError {
 }
 
 impl Image {
-    /// Read and fully verify a `.csp` file from disk.
-    ///
-    /// The size gates run on the file's metadata *before* it is read, so an
-    /// oversized or undersized file never becomes an allocation. See
-    /// [`MAX_FILE_LEN`] for why this cannot be left to [`Image::from_bytes`].
-    pub fn from_path(path: impl AsRef<Path>) -> Result<Self, LoadError> {
-        let path = path.as_ref();
-        let file = File::open(path).map_err(|source| LoadError::Io {
-            path: path.to_path_buf(),
-            source,
-        })?;
-
-        let len = file
-            .metadata()
-            .map_err(|source| LoadError::Io {
-                path: path.to_path_buf(),
-                source,
-            })?
-            .len();
-
-        // Gate on the length we are about to trust, before trusting it.
-        if (len as usize) < MIN_FILE_LEN {
-            return Err(LoadError::TooShort { len: len as usize });
-        }
-        if (len as usize) > MAX_FILE_LEN {
-            return Err(LoadError::FileTooLarge {
-                len: len as usize,
-                max: MAX_FILE_LEN,
-            });
-        }
-
-        // Read one byte past the declared length: if the file grew between the
-        // metadata call and now, the extra byte shows up and C1 rejects the
-        // mismatch instead of the loader silently reading a partial image.
-        let mut bytes = Vec::with_capacity(len as usize + 1);
-        file.take(len + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|source| LoadError::Io {
-                path: path.to_path_buf(),
-                source,
-            })?;
-
-        Self::from_bytes(&bytes)
-    }
-
     /// Verify and parse an image from memory.
     ///
     /// On success the image has passed §9.1 C1–C8, §9.2 M1–M6 and §9.3 I1–I8, so
@@ -862,23 +800,24 @@ fn read_name<'a>(
     }
 
     // Every byte was just checked to be ASCII, so this cannot fail.
-    Ok(std::str::from_utf8(bytes).expect("ASCII is valid UTF-8"))
+    Ok(core::str::from_utf8(bytes).expect("ASCII is valid UTF-8"))
 }
 
 /// Read `count` bare names, enforcing M1 and M2.
 fn read_names(cursor: &mut Cursor<'_>, table: Table, count: u32) -> Result<Vec<Muscle>, LoadError> {
-    let mut seen: HashSet<&str> = HashSet::with_capacity(count as usize);
+    let mut seen: Vec<&str> = Vec::with_capacity(count as usize);
     let mut out = Vec::with_capacity(count as usize);
 
     for index in 0..count as usize {
         let name = read_name(cursor, table, index)?;
-        if !seen.insert(name) {
+        if seen.contains(&name) {
             return Err(LoadError::DuplicateName {
                 table,
                 index,
-                name: name.to_string(),
+                name: String::from(name),
             }); // M2
         }
+        seen.push(name);
         out.push(Muscle { name: name.into() });
     }
 
@@ -892,18 +831,21 @@ fn read_sensors(
     table: Table,
     count: u32,
 ) -> Result<Vec<Sensor>, LoadError> {
-    let mut seen: HashSet<&str> = HashSet::with_capacity(count as usize);
+    let mut seen: Vec<&str> = Vec::with_capacity(count as usize);
     let mut out = Vec::with_capacity(count as usize);
 
     for index in 0..count as usize {
         let name = read_name(cursor, table, index)?;
-        if !seen.insert(name) {
+        // O(n²) on purpose: the tables are tiny, and a `Vec` carries no iteration
+        // order that could leak into anything. §9.2 M2 only needs equality.
+        if seen.contains(&name) {
             return Err(LoadError::DuplicateName {
                 table,
                 index,
-                name: name.to_string(),
+                name: String::from(name),
             });
         }
+        seen.push(name);
 
         let src = cursor.take(1)?[0];
         let source = SensorSource::from_u8(src).ok_or(LoadError::UnknownSensorSource {
@@ -923,18 +865,21 @@ fn read_sensors(
 
 fn read_vars_f(cursor: &mut Cursor<'_>, count: u32) -> Result<Vec<VarF>, LoadError> {
     let table = Table::VarsF;
-    let mut seen: HashSet<&str> = HashSet::with_capacity(count as usize);
+    let mut seen: Vec<&str> = Vec::with_capacity(count as usize);
     let mut out = Vec::with_capacity(count as usize);
 
     for index in 0..count as usize {
         let name = read_name(cursor, table, index)?;
-        if !seen.insert(name) {
+        // O(n²) on purpose: the tables are tiny, and a `Vec` carries no iteration
+        // order that could leak into anything. §9.2 M2 only needs equality.
+        if seen.contains(&name) {
             return Err(LoadError::DuplicateName {
                 table,
                 index,
-                name: name.to_string(),
+                name: String::from(name),
             });
         }
+        seen.push(name);
         // §6.4: the initial value is a bit pattern, so NaN and both zeros survive.
         let init = f32::from_bits(cursor.u32_le()?);
         out.push(VarF {
@@ -948,18 +893,21 @@ fn read_vars_f(cursor: &mut Cursor<'_>, count: u32) -> Result<Vec<VarF>, LoadErr
 
 fn read_vars_i(cursor: &mut Cursor<'_>, count: u32) -> Result<Vec<VarI>, LoadError> {
     let table = Table::VarsI;
-    let mut seen: HashSet<&str> = HashSet::with_capacity(count as usize);
+    let mut seen: Vec<&str> = Vec::with_capacity(count as usize);
     let mut out = Vec::with_capacity(count as usize);
 
     for index in 0..count as usize {
         let name = read_name(cursor, table, index)?;
-        if !seen.insert(name) {
+        // O(n²) on purpose: the tables are tiny, and a `Vec` carries no iteration
+        // order that could leak into anything. §9.2 M2 only needs equality.
+        if seen.contains(&name) {
             return Err(LoadError::DuplicateName {
                 table,
                 index,
-                name: name.to_string(),
+                name: String::from(name),
             });
         }
+        seen.push(name);
         let init = cursor.u32_le()? as i32;
         out.push(VarI {
             name: name.into(),

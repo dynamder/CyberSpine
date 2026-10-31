@@ -182,17 +182,25 @@ name = "cyberspine-asm"
 version = "0.1.0"
 dependencies = [
  "clap",
- "cyberspine-vm",
+ "cyberspine-core",
  "smol_str",
  "thiserror",
  "winnow",
 ]
 
 [[package]]
-name = "cyberspine-vm"
+name = "cyberspine-core"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "thiserror",
+]
+
+[[package]]
+name = "cyberspine-vm"
+version = "0.1.0"
+dependencies = [
+ "cyberspine-core",
  "thiserror",
 ]
 

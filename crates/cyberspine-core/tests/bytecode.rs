@@ -13,8 +13,8 @@
 //!   * `docs/isa.md` §1.2 — per-opcode `imm` interpretation
 //!   * `docs/isa.md` §4    — opcode table
 
-use cyberspine_vm::register::RegId;
-use cyberspine_vm::vm::op::{DecodeError, Insn, OpCode};
+use cyberspine_core::register::RegId;
+use cyberspine_core::vm::op::{DecodeError, Insn, OpCode};
 
 // ---------------------------------------------------------------------------
 // Independent re-derivation of the encoding (isa.md §1.1).

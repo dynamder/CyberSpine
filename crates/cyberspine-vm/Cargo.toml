@@ -2,12 +2,8 @@
 name = "cyberspine-vm"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 
 [dependencies]
-blake3 = "1.8.7"
+cyberspine-core = { path = "../cyberspine-core" }
 thiserror = "2.0.21"
-
-# The integration tests in `tests/` hash bytes themselves: the goldens are
-# checked against blake3 directly rather than against the crate's own helper.
-[dev-dependencies]
-blake3 = "1.8.7"

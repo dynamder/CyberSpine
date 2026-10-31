@@ -22,15 +22,15 @@
 //! Regenerate the goldens deliberately with:
 //!
 //! ```text
-//! cargo test -p cyberspine-vm --test handmade -- --ignored
+//! cargo test -p cyberspine-core --test handmade -- --ignored
 //! ```
 
 use std::fs;
 use std::path::PathBuf;
 
-use cyberspine_vm::binfmt::image::{HASH_LEN, HEADER_LEN, Image, SensorSource};
-use cyberspine_vm::binfmt::load::{LoadError, Table};
-use cyberspine_vm::vm::op::OpCode;
+use cyberspine_core::binfmt::image::{HASH_LEN, HEADER_LEN, Image, SensorSource};
+use cyberspine_core::binfmt::load::{LoadError, Table};
+use cyberspine_core::vm::op::OpCode;
 
 // ---------------------------------------------------------------------------
 // The golden files
@@ -345,7 +345,7 @@ fn the_hand_assembled_bytes_match_the_offset_table() {
 
 #[test]
 fn golden_valid_all_exercises_every_opcode() {
-    let image = Image::from_path(fixtures_dir().join(VALID)).expect("the golden file is valid");
+    let image = Image::from_bytes(&fixture_bytes(VALID)).expect("the golden file is valid");
 
     let mut seen: Vec<u8> = image.code.iter().map(|insn| insn.op.byte()).collect();
     seen.sort_unstable();
@@ -364,7 +364,7 @@ fn golden_valid_all_exercises_every_opcode() {
 
 #[test]
 fn golden_valid_all_loads_and_decodes() {
-    let image = Image::from_path(fixtures_dir().join(VALID)).expect("the golden file is valid");
+    let image = Image::from_bytes(&fixture_bytes(VALID)).expect("the golden file is valid");
 
     // Header: every scalar non-default.
     assert_eq!(image.header.layer, 3);
@@ -432,7 +432,6 @@ fn golden_valid_all_loads_and_decodes() {
 
 #[test]
 fn golden_valid_all_is_byte_exact() {
-    let path = fixtures_dir().join(VALID);
     let bytes = fixture_bytes(VALID);
 
     // The committed artifact must be exactly the layout this file documents, so
@@ -444,7 +443,7 @@ fn golden_valid_all_is_byte_exact() {
     );
 
     // And the writer must reproduce a file it did not produce (§8).
-    let image = Image::from_path(&path).expect("the golden file is valid");
+    let image = Image::from_bytes(&fixture_bytes(VALID)).expect("the golden file is valid");
     assert_eq!(image.to_bytes(), bytes, "the writer must reproduce the golden bytes");
 }
 
@@ -454,7 +453,7 @@ fn golden_valid_all_is_byte_exact() {
 
 #[test]
 fn golden_invalid_bad_hash_is_refused() {
-    match Image::from_path(fixtures_dir().join(INVALID_BAD_HASH)) {
+    match Image::from_bytes(&fixture_bytes(INVALID_BAD_HASH)) {
         Err(LoadError::ContentHashMismatch { .. }) => {}
         other => panic!("the bad-hash golden was not refused by C6: {other:?}"),
     }
@@ -462,7 +461,7 @@ fn golden_invalid_bad_hash_is_refused() {
 
 #[test]
 fn golden_invalid_reserved_opcode_is_refused() {
-    match Image::from_path(fixtures_dir().join(INVALID_RESERVED)) {
+    match Image::from_bytes(&fixture_bytes(INVALID_RESERVED)) {
         Err(LoadError::InvalidInstruction { index: 0, source }) => {
             assert_eq!(source.to_string(), "Invalid Operation Code 4");
         }

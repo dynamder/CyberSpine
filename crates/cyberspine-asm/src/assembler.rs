@@ -1,6 +1,6 @@
 pub mod header;
 
-use cyberspine_vm::binfmt::image::Image;
+use cyberspine_core::binfmt::image::Image;
 use thiserror::Error;
 
 #[derive(Debug, Clone)]

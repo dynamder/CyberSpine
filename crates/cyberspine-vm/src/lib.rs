@@ -1,16 +1,12 @@
-//! cyber-spine: a bytecode VM that drives real or virtual robots through one
-//! uniform interface.
+//! The **platform layer**: everything that needs an operating system.
 //!
-//! The two normative documents live in `docs/`:
+//! `cyberspine-core` is `#![no_std]` and cannot open a file, spawn anything, or
+//! name `std` at all. This crate is the other side of that line: today it reads
+//! `.csp` images from disk; the backend adapters that need an OS (dynamic
+//! libraries, sockets) belong here too.
 //!
-//! * [`docs/isa.md`](../../../docs/isa.md) — instruction encoding and semantics,
-//!   registers, the clock, the instance model.
-//! * [`docs/binfmt.md`](../../../docs/binfmt.md) — the `.csp` executable-image
-//!   byte layout and its load-time validation checklist.
-//!
-//! [`docs/asm.md`](../../../docs/asm.md) specifies the `.csa` assembly source;
-//! the assembler itself is not written yet.
+//! Keeping the split at "can this compile on a microcontroller" rather than at
+//! "is this conceptually the VM" is what lets the same execution core run on a
+//! device and on a desktop with no `#if` between them.
 
-pub mod binfmt;
-pub mod register;
-pub mod vm;
+pub mod io;

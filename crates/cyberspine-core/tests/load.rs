@@ -12,15 +12,12 @@
 //! hash*, exactly as a forger would. Without the repair every one of them would
 //! be measuring C6 instead of its own rule.
 
-use std::fs;
-use std::path::PathBuf;
-
-use cyberspine_vm::binfmt::image::{
+use cyberspine_core::binfmt::image::{
     HASH_LEN, HEADER_LEN, INSN_LEN, Image, Muscle, Sensor, SensorSource, VarF, VarI,
 };
-use cyberspine_vm::binfmt::load::{LoadError, MAX_FILE_LEN, Table};
-use cyberspine_vm::register::RegId;
-use cyberspine_vm::vm::op::{Insn, OpCode};
+use cyberspine_core::binfmt::load::{LoadError, Table};
+use cyberspine_core::register::RegId;
+use cyberspine_core::vm::op::{Insn, OpCode};
 
 // ---------------------------------------------------------------------------
 // Fixed-header offsets (§4), transcribed independently of the writer
@@ -150,20 +147,6 @@ fn float_var_initial_values_round_trip_bit_for_bit() {
     let loaded = Image::from_bytes(&image.to_bytes()).expect("a well-formed image");
     let bits: Vec<u32> = loaded.vars_f.iter().map(|v| v.init.to_bits()).collect();
     assert_eq!(bits, cases.to_vec());
-}
-
-#[test]
-fn an_image_survives_a_trip_through_the_filesystem() {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    fs::create_dir_all(&dir).expect("create the test dir");
-    let path = dir.join("round_trip.csp");
-
-    let mut image = image_with(&[insn(OpCode::Yield, 0, 0, 0), insn(OpCode::Halt, 0, 0, 0)]);
-    image.push_muscle("jaw");
-    fs::write(&path, image.to_bytes()).expect("write the image");
-
-    let loaded = Image::from_path(&path).expect("read the image back");
-    assert_eq!(loaded, image);
 }
 
 #[test]
@@ -703,42 +686,6 @@ fn i7_wait_must_not_exceed_the_headers_max_wait() {
 }
 
 // ===========================================================================
-// The disk entry point
+// The disk entry point lives in `cyberspine-vm`; see its `tests/io.rs`.
 // ===========================================================================
 
-#[test]
-fn a_missing_file_is_an_io_error() {
-    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("does_not_exist.csp");
-    assert!(matches!(Image::from_path(&path), Err(LoadError::Io { .. })));
-}
-
-#[test]
-fn an_oversized_file_is_refused_by_the_metadata_gate() {
-    // A sparse file: the length is real to the filesystem, the bytes are not.
-    // C5 cannot help here, because the allocation would happen in the read
-    // itself — this gate is what stops it.
-    let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("oversized.csp");
-    let file = fs::File::create(&path).expect("create");
-    file.set_len(MAX_FILE_LEN as u64 + 1).expect("size the sparse file");
-    drop(file);
-
-    assert!(matches!(
-        Image::from_path(&path),
-        Err(LoadError::FileTooLarge { max: MAX_FILE_LEN, .. })
-    ));
-
-    let _ = fs::remove_file(&path);
-}
-
-#[test]
-fn a_truncated_file_on_disk_is_refused() {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    fs::create_dir_all(&dir).expect("create the test dir");
-    let path = dir.join("truncated.csp");
-    fs::write(&path, [0u8; 100]).expect("write");
-
-    assert!(matches!(
-        Image::from_path(&path),
-        Err(LoadError::TooShort { len: 100 })
-    ));
-}

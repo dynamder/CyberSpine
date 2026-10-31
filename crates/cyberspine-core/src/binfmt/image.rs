@@ -12,6 +12,10 @@
 //! tested — a malformed file is indistinguishable from a hand-forged one, and
 //! the loader has to reject both.
 
+use alloc::boxed::Box;
+use alloc::vec;
+use alloc::vec::Vec;
+
 use crate::vm::op::{Insn, OpCode};
 
 /// `b"CSPX"` (`docs/binfmt.md` §4). A big-endian reader sees `"XPSC"`, which is

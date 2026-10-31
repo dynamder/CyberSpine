@@ -5,12 +5,12 @@
 //! re-derives the bit layout: a test that asks the code what it wrote cannot tell
 //! you whether what it wrote is what the spec says.
 
-use cyberspine_vm::binfmt::image::{
+use cyberspine_core::binfmt::image::{
     DEFAULT_FUEL, HASH_LEN, HEADER_LEN, INSN_LEN, Image, MIN_FILE_LEN, Muscle, Sensor,
     SensorSource, VarF, VarI,
 };
-use cyberspine_vm::register::RegId;
-use cyberspine_vm::vm::op::{Insn, OpCode};
+use cyberspine_core::register::RegId;
+use cyberspine_core::vm::op::{Insn, OpCode};
 
 fn u32_at(bytes: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("4 bytes"))

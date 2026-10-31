@@ -18,8 +18,8 @@
 //!   * `docs/isa.md` §4    — which operands each opcode uses
 //!   * `docs/binfmt.md` §8 — canonical form, §9.3 I2 — the round-trip equation
 
-use cyberspine_vm::register::RegId;
-use cyberspine_vm::vm::op::{ImmType, Insn, OpCode, RegName};
+use cyberspine_core::register::RegId;
+use cyberspine_core::vm::op::{ImmType, Insn, OpCode, RegName};
 
 // ---------------------------------------------------------------------------
 // Independent re-derivation of the layout (isa.md §1.1).
