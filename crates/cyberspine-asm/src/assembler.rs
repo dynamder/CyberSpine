@@ -143,15 +143,16 @@ pub fn generate_image(asm: &Asm) -> Result<Image, ImageGenError> {
     check_header(&asm.header)?;
 
     let symbols = Symbols::build(&asm.header)?;
-    let labels = collect_labels(&asm.text, &symbols)?;
-    let mut code = emit(&asm.text, &labels, &symbols)?;
+    let layout = layout(&asm.text, &symbols)?;
+    let mut code: Vec<Insn> = emit(&layout, &symbols).collect::<Result<_, _>>()?;
+    debug_assert_eq!(code.len(), layout.code_len);
     append_trailing_halt(&mut code);
 
     if code.len() > u32::MAX as usize {
         return Err(ImageGenError::TooManyInstructions);
     }
 
-    check_labels(&labels, code.len())?;
+    check_labels(&layout.labels, code.len())?;
     check_jumps(&code)?;
     check_waits(&code, asm.header.fixed.max_wait)?;
     check_pending(&code)?;
@@ -344,13 +345,28 @@ fn check_declarable(name: &SmolStr) -> Result<(), ImageGenError> {
     }
 }
 
+/// One source instruction together with everything the second pass needs:
+/// where it starts in the code, and (for `FEXCITE`) the muscles it expands to.
+struct Emission<'a> {
+    insn: &'a AsmInsn,
+    start_pc: usize,
+    /// `None` for every instruction except `FEXCITE`; `Some` has one muscle
+    /// index per emitted instruction, so a group can yield N instructions.
+    targets: Option<Vec<u32>>,
+}
+
 /// First pass (`docs/asm.md` §5): labels point at the instruction that follows
-/// them, and a `group` FEXCITE contributes one instruction per member.
-fn collect_labels(
-    items: &[TextItem],
-    symbols: &Symbols,
-) -> Result<BTreeMap<SmolStr, usize>, ImageGenError> {
+/// them, and a `group` FEXCITE is expanded once into `Emission::targets`.
+struct Layout<'a> {
+    labels: BTreeMap<SmolStr, usize>,
+    emissions: Vec<Emission<'a>>,
+    /// Instruction count before the implicit `HALT`.
+    code_len: usize,
+}
+
+fn layout<'a>(items: &'a [TextItem], symbols: &Symbols) -> Result<Layout<'a>, ImageGenError> {
     let mut labels = BTreeMap::new();
+    let mut emissions = Vec::new();
     let mut pc = 0usize;
 
     for item in items {
@@ -360,48 +376,53 @@ fn collect_labels(
                     return Err(ImageGenError::DuplicateLabel(name.clone()));
                 }
             }
-            TextItem::Insn(insn) => pc += emit_count(insn, symbols)?,
-        }
-    }
-
-    Ok(labels)
-}
-
-fn emit_count(insn: &AsmInsn, symbols: &Symbols) -> Result<usize, ImageGenError> {
-    if insn.op == OpCode::Fexcite {
-        let name = excite_name(insn)?;
-        return Ok(excite_targets(name, symbols)?.len());
-    }
-    Ok(1)
-}
-
-/// Second pass: emit one `Insn` per item, expanding `FEXCITE group` to N
-/// instructions that share the same source register (`docs/asm.md` §4.2).
-fn emit(
-    items: &[TextItem],
-    labels: &BTreeMap<SmolStr, usize>,
-    symbols: &Symbols,
-) -> Result<Vec<Insn>, ImageGenError> {
-    let mut code = Vec::new();
-
-    for item in items {
-        let TextItem::Insn(asm) = item else {
-            continue;
-        };
-
-        if asm.op == OpCode::Fexcite {
-            let name = excite_name(asm)?;
-            for target in excite_targets(name, symbols)? {
-                let pc = code.len();
-                code.push(emit_insn(asm, pc, labels, symbols, Some(target))?);
+            TextItem::Insn(insn) => {
+                let targets = if insn.op == OpCode::Fexcite {
+                    Some(excite_targets(excite_name(insn)?, symbols)?)
+                } else {
+                    None
+                };
+                let count = targets.as_ref().map_or(1, Vec::len);
+                emissions.push(Emission {
+                    insn,
+                    start_pc: pc,
+                    targets,
+                });
+                pc += count;
             }
-        } else {
-            let pc = code.len();
-            code.push(emit_insn(asm, pc, labels, symbols, None)?);
         }
     }
 
-    Ok(code)
+    Ok(Layout {
+        labels,
+        emissions,
+        code_len: pc,
+    })
+}
+
+/// Second pass: yield one `Insn` per emitted instruction. A `FEXCITE group`
+/// becomes N items that share the same source register (`docs/asm.md` §4.2).
+///
+/// `start_pc` is fixed by the layout pass, so this needs no mutable code buffer
+/// and no running counter: `pc`, and therefore the jump offset, is known before
+/// the first item is yielded.
+fn emit<'a, 'i>(
+    layout: &'a Layout<'i>,
+    symbols: &'a Symbols,
+) -> impl Iterator<Item = Result<Insn, ImageGenError>> + 'a {
+    layout.emissions.iter().flat_map(move |emission| {
+        let count = emission.targets.as_ref().map_or(1, Vec::len);
+        (0..count).map(move |offset| {
+            let excite_index = emission.targets.as_ref().map(|targets| targets[offset]);
+            emit_insn(
+                emission.insn,
+                emission.start_pc + offset,
+                &layout.labels,
+                symbols,
+                excite_index,
+            )
+        })
+    })
 }
 
 fn excite_name(insn: &AsmInsn) -> Result<&SmolStr, ImageGenError> {
