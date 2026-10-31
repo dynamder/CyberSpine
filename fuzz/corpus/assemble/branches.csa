@@ -1,0 +1,18 @@
+.layer 1
+.clock hz = 30
+.fuel 128
+.max_wait 10.0
+
+.muscle mouth
+
+.text
+top:
+    ISENSE i1, tick
+    IJZ i1, done
+    FMOVI f1, 0.25
+    FEXCITE mouth, f1
+    FLUSH
+    YIELD
+    JMP top
+done:
+    HALT

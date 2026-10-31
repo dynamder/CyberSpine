@@ -1,23 +1,19 @@
 use smol_str::SmolStr;
-use thiserror::Error;
 use winnow::{
-    ModalResult, Parser,
-    ascii::{dec_int, dec_uint, float, line_ending, space0, space1},
-    combinator::{eof, iterator, opt, preceded, repeat, terminated, trace},
-    error::ContextError,
-    token::take_while,
+    Parser,
+    ascii::{dec_int, dec_uint, float, space0, space1},
+    combinator::preceded,
+    error::ErrMode,
 };
 
-type Line<'i> = &'i str;
-
-//TODO: make the error aggregatable to collect all errors in the asm_file
-#[derive(Debug, Error)]
-pub enum FixedHeaderError {
-    #[error("Duplicate fields in fixed header: {0}")]
-    Duplicate(SmolStr),
-    #[error("Missing fields in fixed header: {0}")]
-    Missing(SmolStr),
-}
+use crate::assembler::{
+    Line, comments,
+    diagnostic::{
+        AsmParseErrors, Location, PResult, ParseError, ParseErrorKind, SyntaxError, cut_at,
+        into_syntax, snippet, token_snippet,
+    },
+    ident,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GroupDef {
@@ -33,6 +29,11 @@ pub struct FixedHeader {
     pub max_wait: f32,
 }
 
+/// The fixed header while it is still being assembled.
+///
+/// A missing or repeated field is a diagnostic, not a panic: the parser keeps
+/// the first value and reports every problem at the end of the declaration
+/// section.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsingFixedHeader {
     layer: Option<u16>,
@@ -51,62 +52,74 @@ impl ParsingFixedHeader {
         }
     }
 
-    pub fn layer(&mut self, value: u16) -> Result<(), FixedHeaderError> {
+    pub fn layer(&mut self, value: u16) -> Result<(), ParseErrorKind> {
         if self.layer.is_some() {
-            return Err(FixedHeaderError::Duplicate(SmolStr::new("layer")));
+            return Err(ParseErrorKind::DuplicateField("layer"));
         }
 
         self.layer = Some(value);
         Ok(())
     }
 
-    pub fn clock_hz(&mut self, value: u32) -> Result<(), FixedHeaderError> {
+    pub fn clock_hz(&mut self, value: u32) -> Result<(), ParseErrorKind> {
         if self.clock_hz.is_some() {
-            return Err(FixedHeaderError::Duplicate(SmolStr::new("clock_hz")));
+            return Err(ParseErrorKind::DuplicateField("clock_hz"));
         }
 
         self.clock_hz = Some(value);
         Ok(())
     }
 
-    pub fn fuel(&mut self, value: u32) -> Result<(), FixedHeaderError> {
+    pub fn fuel(&mut self, value: u32) -> Result<(), ParseErrorKind> {
         if self.fuel.is_some() {
-            return Err(FixedHeaderError::Duplicate(SmolStr::new("fuel")));
+            return Err(ParseErrorKind::DuplicateField("fuel"));
         }
 
         self.fuel = Some(value);
         Ok(())
     }
 
-    pub fn max_wait(&mut self, value: f32) -> Result<(), FixedHeaderError> {
+    pub fn max_wait(&mut self, value: f32) -> Result<(), ParseErrorKind> {
         if self.max_wait.is_some() {
-            return Err(FixedHeaderError::Duplicate(SmolStr::new("max_wait")));
+            return Err(ParseErrorKind::DuplicateField("max_wait"));
         }
 
         self.max_wait = Some(value);
         Ok(())
     }
 
-    pub fn build(self) -> Result<FixedHeader, FixedHeaderError> {
+    /// Build the fixed header, or return **every** field that is still missing.
+    ///
+    /// `docs/asm.md` §3.1 requires all four scalars in v1; missing fields are
+    /// reported together so one run shows the complete set.
+    pub fn finish(self) -> Result<FixedHeader, Vec<ParseErrorKind>> {
+        let mut missing = Vec::new();
         if self.layer.is_none() {
-            return Err(FixedHeaderError::Missing(SmolStr::new("layer")));
+            missing.push(ParseErrorKind::MissingField("layer"));
         }
         if self.clock_hz.is_none() {
-            return Err(FixedHeaderError::Missing(SmolStr::new("clock_hz")));
+            missing.push(ParseErrorKind::MissingField("clock_hz"));
         }
         if self.fuel.is_none() {
-            return Err(FixedHeaderError::Missing(SmolStr::new("fuel")));
+            missing.push(ParseErrorKind::MissingField("fuel"));
         }
         if self.max_wait.is_none() {
-            return Err(FixedHeaderError::Missing(SmolStr::new("max_wait")));
+            missing.push(ParseErrorKind::MissingField("max_wait"));
         }
 
-        Ok(FixedHeader {
-            layer: self.layer.unwrap(),
-            clock_hz: self.clock_hz.unwrap(),
-            fuel: self.fuel.unwrap(),
-            max_wait: self.max_wait.unwrap(),
-        })
+        if !missing.is_empty() {
+            return Err(missing);
+        }
+
+        match (self.layer, self.clock_hz, self.fuel, self.max_wait) {
+            (Some(layer), Some(clock_hz), Some(fuel), Some(max_wait)) => Ok(FixedHeader {
+                layer,
+                clock_hz,
+                fuel,
+                max_wait,
+            }),
+            _ => Err(missing),
+        }
     }
 }
 
@@ -142,85 +155,215 @@ pub enum HeaderStmt {
     Text,
 }
 
-fn ident<'i>(input: &mut Line<'i>) -> ModalResult<&'i str> {
-    trace(
-        "ident",
-        (
-            take_while(1.., |c: char| c.is_ascii_alphabetic() || c == '_'),
-            take_while(0.., |c: char| c.is_ascii_alphanumeric() || c == '_'),
-        ),
-    )
-    .take()
-    .parse_next(input)
+fn name_arg<'i>(input: &mut Line<'i>) -> PResult<SmolStr> {
+    ident.map(SmolStr::new).parse_next(input)
 }
 
-fn name_arg<'i>(input: &mut Line<'i>) -> ModalResult<SmolStr> {
-    trace("name_arg", ident.map(SmolStr::new)).parse_next(input)
+fn eq(input: &mut Line<'_>) -> PResult<()> {
+    (space0, '=', space0).void().parse_next(input)
 }
 
-fn eq(input: &mut Line<'_>) -> ModalResult<()> {
-    trace("eq", (space0, '=', space0).void()).parse_next(input)
+/// Parse one directive argument, turning a bare winnow failure into a located,
+/// directive-aware diagnostic.
+fn argument<'i, T, P>(
+    input: &mut Line<'i>,
+    directive: &'static str,
+    expected: &'static str,
+    mut parser: P,
+) -> PResult<T>
+where
+    P: Parser<Line<'i>, T, ErrMode<SyntaxError>>,
+{
+    let start = *input;
+    match parser.parse_next(input) {
+        Ok(value) => Ok(value),
+        Err(_) => {
+            let kind = if start.trim_start().is_empty() {
+                ParseErrorKind::MissingFieldValue {
+                    directive,
+                    expected,
+                }
+            } else {
+                ParseErrorKind::InvalidFieldValue {
+                    directive,
+                    expected,
+                    found: token_snippet(start),
+                }
+            };
+            cut_at(start, kind)
+        }
+    }
 }
 
-fn header_stmt<'i>(input: &mut Line<'i>) -> ModalResult<HeaderStmt> {
-    let dir = trace("header_prefix", preceded('.', ident)).parse_next(input)?;
-    let stmt = match dir.to_lowercase().as_str() {
-        "layer" => HeaderStmt::Layer(preceded(space1, dec_uint).parse_next(input)?),
+fn space_after(input: &mut Line<'_>, directive: &'static str) -> PResult<()> {
+    let start = *input;
+    let parsed: PResult<&str> = space1.parse_next(input);
+    match parsed {
+        Ok(_) => Ok(()),
+        Err(_) => {
+            let kind = if start.trim_start().is_empty() {
+                ParseErrorKind::MissingFieldValue {
+                    directive,
+                    expected: "a space before its value",
+                }
+            } else {
+                ParseErrorKind::InvalidFieldValue {
+                    directive,
+                    expected: "a space before its value",
+                    found: token_snippet(start),
+                }
+            };
+            cut_at(start, kind)
+        }
+    }
+}
+
+fn expect_eq(input: &mut Line<'_>, directive: &'static str) -> PResult<()> {
+    let start = *input;
+    match eq.parse_next(input) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            let kind = if start.trim_start().is_empty() {
+                ParseErrorKind::MissingFieldValue {
+                    directive,
+                    expected: "`=`",
+                }
+            } else {
+                ParseErrorKind::InvalidFieldValue {
+                    directive,
+                    expected: "`=`",
+                    found: token_snippet(start),
+                }
+            };
+            cut_at(start, kind)
+        }
+    }
+}
+
+fn header_stmt<'i>(input: &mut Line<'i>) -> PResult<HeaderStmt> {
+    let start = *input;
+    let dir = match preceded('.', ident).parse_next(input) {
+        Ok(dir) => dir,
+        Err(_) => {
+            return cut_at(
+                start,
+                ParseErrorKind::MissingDirectiveName {
+                    found: token_snippet(start),
+                },
+            );
+        }
+    };
+
+    let stmt = match dir.to_ascii_lowercase().as_str() {
+        "layer" => {
+            space_after(input, "layer")?;
+            HeaderStmt::Layer(argument(input, "layer", "a u16", dec_uint)?)
+        }
         "clock" => {
-            let _ = (preceded(space1, "hz"), eq).parse_next(input)?;
+            space_after(input, "clock")?;
+            let _ = argument(input, "clock", "`hz`", "hz")?;
+            expect_eq(input, "clock")?;
             HeaderStmt::Clock {
-                hz: dec_uint.parse_next(input)?,
+                hz: argument(input, "clock", "a u32", dec_uint)?,
             }
         }
-        "fuel" => HeaderStmt::Fuel(preceded(space1, dec_uint).parse_next(input)?),
-        "max_wait" => HeaderStmt::MaxWait(preceded(space1, float).parse_next(input)?),
-        "muscle" => HeaderStmt::Muscle(preceded(space1, name_arg).parse_next(input)?),
-        "group" => HeaderStmt::Group(trace("group", group).parse_next(input)?),
-        "sensor_f" => HeaderStmt::Sensorf(preceded(space1, name_arg).parse_next(input)?),
-        "sensor_i" => HeaderStmt::SensorI(preceded(space1, name_arg).parse_next(input)?),
+        "fuel" => {
+            space_after(input, "fuel")?;
+            HeaderStmt::Fuel(argument(input, "fuel", "a u32", dec_uint)?)
+        }
+        "max_wait" => {
+            space_after(input, "max_wait")?;
+            HeaderStmt::MaxWait(argument(input, "max_wait", "an f32", float)?)
+        }
+        "muscle" => {
+            space_after(input, "muscle")?;
+            HeaderStmt::Muscle(argument(input, "muscle", "a name", name_arg)?)
+        }
+        "group" => HeaderStmt::Group(group(input)?),
+        "sensor_f" => {
+            space_after(input, "sensor_f")?;
+            HeaderStmt::Sensorf(argument(input, "sensor_f", "a name", name_arg)?)
+        }
+        "sensor_i" => {
+            space_after(input, "sensor_i")?;
+            HeaderStmt::SensorI(argument(input, "sensor_i", "a name", name_arg)?)
+        }
         "var_f" => {
-            let name = preceded(space1, name_arg).parse_next(input)?;
-            let value = preceded(eq, float).parse_next(input)?;
+            space_after(input, "var_f")?;
+            let name = argument(input, "var_f", "a name", name_arg)?;
+            expect_eq(input, "var_f")?;
+            let value = argument(input, "var_f", "an f32", float)?;
             HeaderStmt::Varf { name, value }
         }
         "var_i" => {
-            let name = preceded(space1, name_arg).parse_next(input)?;
-            let value = preceded(eq, dec_int).parse_next(input)?;
+            space_after(input, "var_i")?;
+            let name = argument(input, "var_i", "a name", name_arg)?;
+            expect_eq(input, "var_i")?;
+            let value = argument(input, "var_i", "an i32", dec_int)?;
             HeaderStmt::VarI { name, value }
         }
         "text" => HeaderStmt::Text,
-        _ => return Err(winnow::error::ErrMode::Backtrack(ContextError::new())),
+        _ => return cut_at(start, ParseErrorKind::UnknownDirective(SmolStr::new(dir))),
     };
 
-    // (space0, eof).parse_next(input)?;
+    finish_header_line(input)?;
     Ok(stmt)
 }
 
-fn group<'i>(input: &mut Line<'i>) -> ModalResult<GroupDef> {
-    let group_name = preceded(space1, name_arg).parse_next(input)?;
-    let _ = eq.parse_next(input)?;
+fn group<'i>(input: &mut Line<'i>) -> PResult<GroupDef> {
+    space_after(input, "group")?;
+    let name = argument(input, "group", "a group name", name_arg)?;
+    expect_eq(input, "group")?;
 
-    let first = name_arg.parse_next(input)?;
-    let rest: Vec<SmolStr> =
-        repeat(0.., preceded((space0, ',', space0), name_arg)).parse_next(input)?;
+    let first = argument(input, "group", "a muscle name", name_arg)?;
     let mut members = vec![first];
-    members.extend(rest);
 
-    Ok(GroupDef {
-        name: group_name,
-        members,
-    })
+    // A manually driven loop (instead of `repeat`) keeps a dangling comma from
+    // being silently accepted as "end of members".
+    loop {
+        let separator: PResult<()> = (space0, ',', space0).void().parse_next(input);
+        if separator.is_err() {
+            break;
+        }
+        members.push(argument(input, "group", "a muscle name", name_arg)?);
+    }
+
+    Ok(GroupDef { name, members })
 }
 
-fn comments<'i>(input: &mut Line<'i>) -> ModalResult<()> {
-    trace(
-        "comments",
-        ('#', take_while(0.., |c: char| c != '\n')).void(),
-    )
-    .parse_next(input)
+fn finish_header_line(input: &mut Line<'_>) -> PResult<()> {
+    space0.parse_next(input)?;
+
+    if input.is_empty() {
+        return Ok(());
+    }
+    if input.starts_with('#') {
+        return comments.parse_next(input);
+    }
+
+    let start = *input;
+    cut_at(start, ParseErrorKind::TrailingTokens(snippet(start)))
 }
 
-pub fn header(input: &mut str) -> ModalResult<AsmHeader> {
+/// Parse one declaration line (leading whitespace included).
+fn parse_header_line(input: &mut Line<'_>) -> PResult<HeaderStmt> {
+    space0.parse_next(input)?;
+    header_stmt(input)
+}
+
+/// Parses the declaration section and advances `*input` past it.
+///
+/// The cursor stops after the optional `.text` marker, or before the first line
+/// that cannot be a declaration (an instruction or a label), so
+/// [`crate::assembler::text::text`] can continue on the same cursor
+/// (`docs/asm.md` §2 / §7).
+///
+/// Errors are collected line by line; a malformed declaration does not stop the
+/// parser from checking the rest of the header and the instruction section.
+pub fn header(input: &mut &str) -> Result<AsmHeader, AsmParseErrors> {
+    let src = *input;
+    let mut consumed = 0usize;
+
     let mut parsing_fixed_header = ParsingFixedHeader::default();
     let mut muscles: Vec<SmolStr> = Vec::new();
     let mut muscle_groups: Vec<GroupDef> = Vec::new();
@@ -228,43 +371,114 @@ pub fn header(input: &mut str) -> ModalResult<AsmHeader> {
     let mut sensors_i: Vec<SmolStr> = Vec::new();
     let mut vars_f: Vec<(SmolStr, f32)> = Vec::new();
     let mut vars_i: Vec<(SmolStr, i32)> = Vec::new();
+    let mut errors = Vec::new();
+    let mut header_end_line = None;
 
-    for mut line in input.split_inclusive('\n') {
-        let header_stmt = terminated(
-            terminated(
-                opt(trace("header_stmt", header_stmt)),
-                (space0, opt(comments)),
-            ),
-            (line_ending, eof),
-        )
-        .parse_next(&mut line)?;
+    for (index, raw_line) in src.split_inclusive('\n').enumerate() {
+        let line_no = index + 1;
+        let trimmed = raw_line.trim();
 
-        if header_stmt.is_none() {
+        // Blank and comment-only lines are not statements; skip them.
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            consumed += raw_line.len();
             continue;
         }
 
-        match header_stmt.unwrap() {
-            HeaderStmt::Layer(layer) => parsing_fixed_header.layer(layer).unwrap(),
-            HeaderStmt::Clock { hz } => parsing_fixed_header.clock_hz(hz).unwrap(),
-            HeaderStmt::Fuel(fuel) => parsing_fixed_header.fuel(fuel).unwrap(),
-            HeaderStmt::MaxWait(max_wait) => parsing_fixed_header.max_wait(max_wait).unwrap(),
-            HeaderStmt::Muscle(muscle) => muscles.push(muscle),
-            HeaderStmt::Group(group_def) => muscle_groups.push(group_def),
-            HeaderStmt::Sensorf(sensor_f) => sensors_f.push(sensor_f),
-            HeaderStmt::SensorI(sensor_i) => sensors_i.push(sensor_i),
-            HeaderStmt::Varf { name, value } => vars_f.push((name, value)),
-            HeaderStmt::VarI { name, value } => vars_i.push((name, value)),
-            HeaderStmt::Text => break,
+        // The declaration section ends at the first instruction or label. That
+        // line stays in the cursor for the text parser.
+        if !trimmed.starts_with('.') {
+            header_end_line = Some(line_no);
+            break;
+        }
+
+        let line = raw_line.trim_end_matches('\n').trim_end_matches('\r');
+        let mut cursor = line;
+        match parse_header_line(&mut cursor) {
+            Ok(stmt) => {
+                consumed += raw_line.len();
+
+                if matches!(stmt, HeaderStmt::Text) {
+                    header_end_line = Some(line_no);
+                    break;
+                }
+
+                let location = Location::new(line_no, directive_column(line));
+                match stmt {
+                    HeaderStmt::Layer(value) => {
+                        push_field(parsing_fixed_header.layer(value), location, &mut errors)
+                    }
+                    HeaderStmt::Clock { hz } => {
+                        push_field(parsing_fixed_header.clock_hz(hz), location, &mut errors)
+                    }
+                    HeaderStmt::Fuel(value) => {
+                        push_field(parsing_fixed_header.fuel(value), location, &mut errors)
+                    }
+                    HeaderStmt::MaxWait(value) => {
+                        push_field(parsing_fixed_header.max_wait(value), location, &mut errors)
+                    }
+                    HeaderStmt::Muscle(muscle) => muscles.push(muscle),
+                    HeaderStmt::Group(group_def) => muscle_groups.push(group_def),
+                    HeaderStmt::Sensorf(sensor_f) => sensors_f.push(sensor_f),
+                    HeaderStmt::SensorI(sensor_i) => sensors_i.push(sensor_i),
+                    HeaderStmt::Varf { name, value } => vars_f.push((name, value)),
+                    HeaderStmt::VarI { name, value } => vars_i.push((name, value)),
+                    // `.text` was handled above so it can end the loop before
+                    // the declaration tables are updated.
+                    HeaderStmt::Text => {}
+                }
+            }
+            Err(err) => {
+                consumed += raw_line.len();
+                errors.push(into_syntax(err).located(line, line_no));
+            }
         }
     }
 
-    Ok(AsmHeader {
-        fixed: parsing_fixed_header.build().unwrap(),
-        muscles,
-        muscle_groups,
-        sensors_f,
-        sensors_i,
-        vars_f,
-        vars_i,
-    })
+    *input = &src[consumed..];
+
+    let end_line = header_end_line.unwrap_or_else(|| src.lines().count().max(1));
+
+    match parsing_fixed_header.finish() {
+        Ok(fixed) => {
+            if errors.is_empty() {
+                Ok(AsmHeader {
+                    fixed,
+                    muscles,
+                    muscle_groups,
+                    sensors_f,
+                    sensors_i,
+                    vars_f,
+                    vars_i,
+                })
+            } else {
+                sort_errors(&mut errors);
+                Err(AsmParseErrors::new(errors))
+            }
+        }
+        Err(missing) => {
+            for kind in missing {
+                errors.push(ParseError::new(Location::new(end_line, 1), kind));
+            }
+            sort_errors(&mut errors);
+            Err(AsmParseErrors::new(errors))
+        }
+    }
+}
+
+fn push_field(
+    result: Result<(), ParseErrorKind>,
+    location: Location,
+    errors: &mut Vec<ParseError>,
+) {
+    if let Err(kind) = result {
+        errors.push(ParseError::new(location, kind));
+    }
+}
+
+fn sort_errors(errors: &mut [ParseError]) {
+    errors.sort_by_key(|error| (error.location.line, error.location.column));
+}
+
+fn directive_column(line: &str) -> usize {
+    line.chars().take_while(|c| c.is_whitespace()).count() + 1
 }

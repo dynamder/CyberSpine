@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      # The assembler crate is rustfmt-clean; cyberspine-vm is not yet, so the
+      # check is scoped. Widening it to `--all` is a separate cleanup commit.
+      - name: rustfmt (cyberspine-asm)
+        run: cargo fmt -p cyberspine-asm --check
+
+      - name: clippy (cyberspine-asm)
+        run: cargo clippy -p cyberspine-asm --all-targets --no-deps -- -D warnings
+
+      # `fuzz/` is its own workspace and is not covered by `--workspace`.
+      - name: test (all platforms)
+        run: cargo test --workspace --all-targets

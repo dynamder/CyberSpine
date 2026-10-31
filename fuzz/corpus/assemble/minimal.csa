@@ -1,0 +1,6 @@
+.layer 10
+.clock hz = 60
+.fuel 4096
+.max_wait 600.0
+.text
+HALT

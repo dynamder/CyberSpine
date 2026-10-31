@@ -1,9 +1,12 @@
 //! The **platform layer**: everything that needs an operating system.
 //!
 //! `cyberspine-core` is `#![no_std]` and cannot open a file, spawn anything, or
-//! name `std` at all. This crate is the other side of that line: today it reads
-//! `.csp` images from disk; the backend adapters that need an OS (dynamic
-//! libraries, sockets) belong here too.
+//! name `std` at all. This crate is the other side of that line: it reads `.csp`
+//! images from disk and gates the read on the file's size; the backend adapters
+//! that need an OS (dynamic libraries, sockets) belong here too.
+//!
+//! The assembler lives in `cyberspine-asm`, which also owns writing an image to
+//! disk — this crate only reads and validates one.
 //!
 //! Keeping the split at "can this compile on a microcontroller" rather than at
 //! "is this conceptually the VM" is what lets the same execution core run on a

@@ -1,0 +1,11 @@
+/target
+/artifacts
+/coverage
+
+# libFuzzer writes coverage-increasing units here; keep only the hand-written
+# seeds in git.
+/corpus/assemble/*
+!/corpus/assemble/minimal.csa
+!/corpus/assemble/tables.csa
+!/corpus/assemble/branches.csa
+!/corpus/assemble/docs_example.csa
