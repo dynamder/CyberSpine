@@ -1,0 +1,22 @@
+[workspace]
+
+[package]
+name = "cyberspine-firmware"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+
+[dependencies]
+cyberspine-core = { path = "../crates/cyberspine-core" }
+cortex-m-rt = "0.7"
+cortex-m-semihosting = "0.5"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1

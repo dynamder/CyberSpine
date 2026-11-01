@@ -41,3 +41,31 @@ jobs:
       # `fuzz/` is its own workspace and is not covered by `--workspace`.
       - name: test (all platforms)
         run: cargo test --workspace --all-targets
+
+  qemu:
+    name: qemu (cortex-m4)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+
+      - name: qemu-system-arm
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
+
+      # `firmware/` is its own workspace, and its `.cargo/config.toml` fixes the
+      # target and the linker script, so the build runs from inside it.
+      - name: build (firmware)
+        working-directory: firmware
+        run: cargo build --release
+
+      # The assertion, not just the compile: a failing check panics and exits 1.
+      - name: run under QEMU
+        working-directory: firmware
+        run: |
+          qemu-system-arm -M mps2-an386 -cpu cortex-m4 \
+            -semihosting-config enable=on,target=native \
+            -nographic \
+            -kernel target/thumbv7em-none-eabihf/release/cyberspine-firmware
