@@ -26,12 +26,21 @@
 ///
 /// This is the disassembler/loader direction; [`jump_offset`] is its inverse.
 pub fn jump_target(pc: usize, off: i32) -> Option<usize> {
-    let next = pc.checked_add(1)?;
-    if off >= 0 {
-        next.checked_add(off as usize)
-    } else {
-        next.checked_sub(off.unsigned_abs() as usize)
-    }
+    usize::try_from(target_raw(pc, off)).ok()
+}
+
+/// The execution-time direction: the loader has already accepted every jump in
+/// the image (`docs/binfmt.md` §9.3 I6), so the target is in range.
+#[inline]
+pub fn jump_target_unchecked(pc: usize, off: i32) -> usize {
+    target_raw(pc, off) as usize
+}
+
+/// `pc + 1 + off`, exact for every `usize` and every `i32` — hence `i128`, where
+/// `pc + 1` cannot overflow and the sign of the sum is still real.
+#[inline]
+fn target_raw(pc: usize, off: i32) -> i128 {
+    pc as i128 + 1 + off as i128
 }
 
 /// The offset that makes a jump at `pc` transfer control to `target` — the

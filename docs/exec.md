@@ -43,7 +43,7 @@
 pub struct Instance<'p> {
     prog: &'p Program,        // 已通过 C/M/I 校验；借用而非 Arc（thumbv6m 无 CAS）
 
-    pc: u32,                  // 指令下标，不是字节偏移
+    pc: usize,                // 指令下标，不是字节偏移
     regs: Registers,          // [f32; 64] + [i32; 64]
 
     vars_f: Box<[f32]>,       // 初值来自镜像
@@ -92,7 +92,7 @@ pub enum Step {
 }
 
 pub enum Fault {
-    FuelExhausted { pc: u32 },   // G12：v1 只有这一种 fault
+    FuelExhausted { pc: usize },   // G12：v1 只有这一种 fault
 }
 ```
 
@@ -196,10 +196,13 @@ FCLAMP: fmin(fmax(x, lo), hi)            // 复合定义：lo > hi 时结果是 
 偏移算术只存在于 `jump.rs`。执行期用一个无检版本，与 `jump_target` 共用同一个内部算式：
 
 ```rust
-#[inline] fn target_raw(pc: usize, off: i32) -> i64 { pc as i64 + 1 + off as i64 }
+#[inline] fn target_raw(pc: usize, off: i32) -> i128 { pc as i128 + 1 + off as i128 }
 
 pub fn jump_target(pc: usize, off: i32) -> Option<usize>;                // 加载期，带检查
 #[inline] pub fn jump_target_unchecked(pc: usize, off: i32) -> usize;    // 执行期
+```
+
+算术用 `i128` 而不是 `i64`：`pc + 1` 在 `usize::MAX` 处会溢出，`i64` 在那里变成负数，于是「无检版本」与带检版本对同一条偏移给出不同答案。`i128` 对任何 `usize` 与任何 `i32` 都精确。
 ```
 
 条件跳转统一成「不跳 `Flow::Next`，跳 `Flow::Jump`」：
@@ -249,17 +252,23 @@ k = 秒数 ÷ dt = 秒数 × hz
 执行 `WAIT` 时记一个绝对值，不做倒计时。`now = 100` 时执行 `WAIT 0.3`（hz = 60）：
 
 ```
-k = ceil(0.3 × 60) = 18
-wake_at = 100 + 18 = 118
+k = ceil(0.3 × 60) = 19
+wake_at = 100 + 19 = 119
 ```
+
+> **是 19 不是 18。** 镜像里的 `0.3` 是 f32 位模式，实际值 `0.300000012`，
+> 乘 60 得 `18.0000007`，`ceil` 进到 19。这正是 §7.4 说的「误差被 `ceil`
+> 放大成整整一个 tick」——方向是**晚**，不是早。
+> `1/hz` 同理：`f32(1/60)` 略大于 1/60，等 2 个 tick；只有 `hz` 为 2 的幂时
+> `1/hz` 才是精确的 1 个 tick。
 
 宿主的规则只有一条：`wake_at <= now` 就恢复。
 
 | now | 跑不跑 | 说明 |
 |---|---|---|
 | 100 | — | 刚执行完 `WAIT`，本 tick 到此为止 |
-| 101 … 117 | 不跑 | 睡着的 17 个 tick |
-| 118 | **跑** | `118 <= 118`，从 `WAIT` 的下一条指令继续 |
+| 101 … 118 | 不跑 | 睡着的 18 个 tick |
+| 119 | **跑** | `119 <= 119`，从 `WAIT` 的下一条指令继续 |
 
 `WAIT` 自己不睡；「睡」是宿主不叫它。
 
@@ -268,9 +277,9 @@ wake_at = 100 + 18 = 118
 ```rust
 fn ceil_ticks(secs: f32, hz: u32) -> u64 {
     let x = secs as f64 * hz as f64;                 // f64：见 7.4
-    if !(x > 0.0) { return 0; }                      // 0 / 负数 / NaN 一起挡掉
-    let i = x as u64;                                // 向零截断
-    if x - i as f64 > 0.0 { i + 1 } else { i }       // 小数部分非零则进一
+    if x.is_nan() || x <= 0.0 { return 0; }          // 0 / 负数 / NaN 一起挡掉
+    let i = x as u64;                                // 饱和转换
+    if x > i as f64 { i.saturating_add(1) } else { i }   // 小数部分非零则进一
 }
 ```
 
@@ -334,7 +343,7 @@ pend_mask.clear_all();
 | `FSIN`/`FCOS` | 定点输入表 → 固定位模式；网格测试对照 host libm 报最大 ULP |
 | `FSQRT` | `#[ignore]` 的 2³² 全穷举（与 `f32::sqrt` 逐位比较） |
 | fuel | 恰好 N 条后 fault 在同一 `pc`；`fuel = 0` 在 `pc = 0` 零条指令 fault |
-| `WAIT` | `0` / `1/hz` / `0.3@60Hz = 18` / 上界 / 饱和 |
+| `WAIT` | `0` / `1/64@64Hz = 1` / `0.3@60Hz = 19` / 上界 / 饱和 |
 | 挂起存活 | 寄存器与变量跨 `YIELD`/`WAIT` 不变 |
 | `FLUSH` | §8.2 的两个数组例子；`publish` 保持；`FEXCITE` 不动 `published` |
 | 纯函数性 | 同输入跑两遍，命令字节流逐位相同 |
