@@ -1,9 +1,6 @@
 use std::str::FromStr;
 
-use cyberspine_core::{
-    register::RegType,
-    vm::op::{ImmType, OpCode, OperandParam},
-};
+use cyberspine_core::isa::{ImmType, OpCode, OperandParam, register::RegType};
 use smol_str::SmolStr;
 use winnow::{Parser, ascii::space0, error::ErrMode};
 

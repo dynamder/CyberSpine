@@ -22,8 +22,8 @@ use core::fmt;
 
 use thiserror::Error;
 
-use crate::vm::jump::jump_target;
-use crate::vm::op::{DecodeError, Insn, OpCode};
+use crate::isa::jump::jump_target;
+use crate::isa::{DecodeError, Insn, OpCode};
 
 use super::image::{
     FORMAT_MAJOR, FORMAT_MINOR, FixedHeader, HASH_LEN, HEADER_LEN, INSN_LEN, ISA_VERSION, Image,

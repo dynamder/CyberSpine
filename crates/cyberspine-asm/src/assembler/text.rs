@@ -2,9 +2,9 @@ pub mod imm;
 pub mod insn;
 pub mod reg;
 
-use cyberspine_core::{
+use cyberspine_core::isa::{
+    OpCode, RegName,
     register::{RegId, RegType},
-    vm::op::{OpCode, RegName},
 };
 use smol_str::SmolStr;
 use winnow::{

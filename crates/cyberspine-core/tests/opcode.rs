@@ -24,7 +24,7 @@
 
 use std::str::FromStr;
 
-use cyberspine_core::vm::op::OpCode;
+use cyberspine_core::isa::OpCode;
 
 // ---------------------------------------------------------------------------
 // 脚手架

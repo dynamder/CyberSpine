@@ -8,8 +8,8 @@ use cyberspine_core::binfmt::image::{
     FORMAT_VERSION, FixedHeader as ImageFixedHeader, ISA_VERSION, Image, Muscle, Sensor,
     SensorSource, VarF, VarI,
 };
-use cyberspine_core::vm::jump::{jump_offset, jump_target};
-use cyberspine_core::vm::op::{ImmType, Insn, OpCode, RegName};
+use cyberspine_core::isa::jump::{jump_offset, jump_target};
+use cyberspine_core::isa::{ImmType, Insn, OpCode, RegName};
 use smol_str::SmolStr;
 use thiserror::Error;
 use winnow::{Parser, combinator::trace, token::take_while};

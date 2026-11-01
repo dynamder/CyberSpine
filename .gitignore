@@ -1,3 +1,4 @@
 /target
+/.cargo-target
 /.cargo-check
 /.acl-diagnosis

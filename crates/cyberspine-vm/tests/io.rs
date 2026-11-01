@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use cyberspine_core::binfmt::image::Image;
 use cyberspine_core::binfmt::load::LoadError;
-use cyberspine_core::vm::op::{Insn, OpCode};
+use cyberspine_core::isa::{Insn, OpCode};
 use cyberspine_vm::io::{LoadFileError, MAX_FILE_LEN, read_image};
 
 fn tmp_dir() -> PathBuf {

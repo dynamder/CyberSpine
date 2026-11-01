@@ -30,7 +30,7 @@ use std::path::PathBuf;
 
 use cyberspine_core::binfmt::image::{HASH_LEN, HEADER_LEN, Image, SensorSource};
 use cyberspine_core::binfmt::load::{LoadError, Table};
-use cyberspine_core::vm::op::OpCode;
+use cyberspine_core::isa::OpCode;
 
 // ---------------------------------------------------------------------------
 // The golden files

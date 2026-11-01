@@ -37,8 +37,8 @@
 use cyberspine_asm::assembler::header::header;
 use cyberspine_asm::assembler::text::{AsmInsn, AsmOperand, TextItem, text};
 use cyberspine_asm::assembler::{AsmParseErrors, Location, ParseError, ParseErrorKind};
-use cyberspine_core::register::{RegId, RegType};
-use cyberspine_core::vm::op::{OpCode, RegName};
+use cyberspine_core::isa::register::{RegId, RegType};
+use cyberspine_core::isa::{OpCode, RegName};
 use smol_str::SmolStr;
 
 // ---------------------------------------------------------------------------

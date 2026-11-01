@@ -16,7 +16,7 @@ use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::vm::op::{Insn, OpCode};
+use crate::isa::{Insn, OpCode};
 
 /// `b"CSPX"` (`docs/binfmt.md` §4). A big-endian reader sees `"XPSC"`, which is
 /// a byte-order check for free.

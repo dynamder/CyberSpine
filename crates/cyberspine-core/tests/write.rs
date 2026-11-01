@@ -9,8 +9,8 @@ use cyberspine_core::binfmt::image::{
     DEFAULT_FUEL, HASH_LEN, HEADER_LEN, INSN_LEN, Image, MIN_FILE_LEN, Muscle, Sensor,
     SensorSource, VarF, VarI,
 };
-use cyberspine_core::register::RegId;
-use cyberspine_core::vm::op::{Insn, OpCode};
+use cyberspine_core::isa::register::RegId;
+use cyberspine_core::isa::{Insn, OpCode};
 
 fn u32_at(bytes: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("4 bytes"))

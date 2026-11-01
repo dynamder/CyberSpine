@@ -1,4 +1,4 @@
-use cyberspine_core::register::{RegId, RegType};
+use cyberspine_core::isa::register::{RegId, RegType};
 use winnow::{Parser, ascii::digit1, combinator::alt};
 
 use crate::assembler::{
@@ -11,7 +11,7 @@ pub(crate) fn reg(input: &mut Line<'_>) -> PResult<(RegId, RegType)> {
     let reg_type = alt(('f', 'i')).map(map_reg_type).parse_next(input)?;
     let index: u32 = digit1.parse_to().parse_next(input)?;
 
-    if index >= 64 {
+    if index >= RegId::COUNT as u32 {
         return cut_at(
             start,
             ParseErrorKind::RegisterOutOfRange {
@@ -24,8 +24,8 @@ pub(crate) fn reg(input: &mut Line<'_>) -> PResult<(RegId, RegType)> {
         );
     }
 
-    // `index < 64` was checked above, so the 6-bit constructor cannot fail.
-    Ok((RegId::from_6bit(index as u8), reg_type))
+    // `index < COUNT` was checked above, so the checked constructor cannot fail.
+    Ok((RegId::new(index as u8).expect("index < COUNT"), reg_type))
 }
 
 fn map_reg_type(c: char) -> RegType {

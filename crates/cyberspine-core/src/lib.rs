@@ -28,5 +28,5 @@
 extern crate alloc;
 
 pub mod binfmt;
-pub mod register;
-pub mod vm;
+pub mod exec;
+pub mod isa;

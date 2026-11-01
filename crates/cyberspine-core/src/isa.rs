@@ -1,10 +1,20 @@
+//! The instruction set: the table, the encoding, the jump-offset convention and
+//! the floating-point kernel (`docs/isa.md`).
+//!
+//! This is the bottom layer of the crate. `binfmt` and `cyberspine-asm` both
+//! depend on it; nothing here knows about images or execution.
+
+pub mod jump;
+pub mod math;
+pub mod register;
+
 use alloc::borrow::ToOwned;
 use alloc::string::String;
 use core::str::FromStr;
 
 use thiserror::Error;
 
-use crate::register::{RegId, RegType};
+use crate::isa::register::{RegId, RegType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegName {

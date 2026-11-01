@@ -16,8 +16,8 @@ use cyberspine_core::binfmt::image::{
     HASH_LEN, HEADER_LEN, INSN_LEN, Image, Muscle, Sensor, SensorSource, VarF, VarI,
 };
 use cyberspine_core::binfmt::load::{LoadError, Table};
-use cyberspine_core::register::RegId;
-use cyberspine_core::vm::op::{Insn, OpCode};
+use cyberspine_core::isa::register::RegId;
+use cyberspine_core::isa::{Insn, OpCode};
 
 // ---------------------------------------------------------------------------
 // Fixed-header offsets (§4), transcribed independently of the writer

@@ -6,8 +6,8 @@
 
 use cyberspine_asm::assembler::{ImageGenError, generate_image, parse};
 use cyberspine_core::binfmt::image::{Image, SensorSource};
-use cyberspine_core::vm::jump::jump_target;
-use cyberspine_core::vm::op::{ImmType, Insn, OpCode};
+use cyberspine_core::isa::jump::jump_target;
+use cyberspine_core::isa::{ImmType, Insn, OpCode};
 
 /// The scalar header is currently mandatory (see `tests/header.rs`).
 const HEADER: &str = ".layer 10\n.clock hz = 60\n.fuel 4096\n.max_wait 600.0\n";

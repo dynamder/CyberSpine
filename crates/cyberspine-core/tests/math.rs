@@ -6,7 +6,7 @@
 //! the **oracle** for accuracy — while the crate's own implementation remains the
 //! only thing that ever runs on a device.
 
-use cyberspine_core::vm::math as m;
+use cyberspine_core::isa::math as m;
 
 // ---------------------------------------------------------------------------
 // Sign and selection
