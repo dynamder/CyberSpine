@@ -198,6 +198,9 @@ pending 检查是一个布尔数据流：`FEXCITE` 置真，`FLUSH` 清假，在
 - 固定头段：重复字段在**重复行**报告；缺失字段在**声明段结束处**（`.text` 行、
   第一条指令行或 EOF）报告，且四个缺失字段全部报告。
 - `text()` 的行号从它自己的输入算起；`parse()` 会把指令段错误平移回文件坐标。
+- 生成阶段的错误（未定义标签、跳转越界、pending 泄漏、`WAIT` 越界）同样带 `path:line:col`，
+  定位到对应的指令或标签；头段字段错误（`hz = 0`、`max_wait`）没有单行位置，只报字段名。
+- 可读性问题（未使用的标签、单成员 group）以 warning 输出，`--deny-warnings` 可让 CI 拒绝。
 - 渲染使用 [`annotate-snippets`](https://crates.io/crates/annotate-snippets)：
   ```
   error: unknown mnemonic `FADDD`
@@ -218,7 +221,7 @@ cyinea -a greet.csa -o out.csp   # 指定输出路径
 ### 6.2 输出（落盘）
 
 写盘不属于格式（`binfmt.md`）也不属于 VM：VM 只读，写是生产者的动作。实现见
-`crates/cyberspine-asm/src/store.rs`，契约如下。
+`cyberspine-store`（`crates/cyberspine-store/src/lib.rs`），契约如下。
 
 - **原子替换**：字节先写进目标**同目录**的临时文件，再 `rename` 覆盖目标。
   崩溃或磁盘满时旧文件保持原样；不会留下半截 `.csp`——半截文件在加载期只会报

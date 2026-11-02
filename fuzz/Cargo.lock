@@ -197,6 +197,7 @@ dependencies = [
  "clap",
  "cyberspine-core",
  "cyberspine-rig",
+ "cyberspine-store",
  "smol_str",
  "thiserror",
  "winnow",
@@ -226,6 +227,14 @@ dependencies = [
  "cyberspine-core",
  "serde",
  "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "cyberspine-store"
+version = "0.1.0"
+dependencies = [
+ "cyberspine-core",
  "thiserror",
 ]
 
