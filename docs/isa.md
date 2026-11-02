@@ -622,7 +622,7 @@ L_done:
 ## 7. Fuel 系统
 
 > **实现状态：已实现。** `fuel` 是每次恢复的指令预算，耗尽即 `Fault::FuelExhausted { pc }`
-> （`crates/cyberspine-core/src/exec/instance.rs`），`tests/exec.rs` 钉住了 `pc`。下述契约已冻结：
+> （`crates/cyberspine-exec/src/instance.rs`），`tests/exec.rs` 钉住了 `pc`。下述契约已冻结：
 > fuel 的值可以变，程序语义不能跟着变——除了那些本来就会耗尽它的程序。
 
 ### 7.1 契约

@@ -8,9 +8,9 @@
 
 ## 0. 定位
 
-- 输入：UTF-8 文本 `.csa`；输出：`Image`（`crates/cyberspine-core/src/binfmt/image.rs`）→ `.csp` 字节。调试信息（`DebugInfo { labels, line_map }`）是**尚未落地**的独立产物，见 §8。
+- 输入：UTF-8 文本 `.csa`；输出：`Image`（`crates/cyberspine-binfmt/src/image.rs`）→ `.csp` 字节。调试信息（`DebugInfo { labels, line_map }`）是**尚未落地**的独立产物，见 §8。
 - 汇编器**只读 manifest，不接触 rig 的实现**。manifest 声明肌肉、可观测量和身份（[`rig.md`](rig.md)）；名字在装配期解析成 **rig 的物理下标**，直接写进 `imm`（`isa.md` §13.2）。镜像因此与 rig 一一对应，加载期用指纹校验。
-- 指令语法由 `OpCode::signature()` 派生；助记符表由 `OpCode::ALL` + `mnemonic()` 反查生成。**加一条指令只改 `crates/cyberspine-core/src/isa.rs`，不手抄任何清单。**
+- 指令语法由 `OpCode::signature()` 派生；助记符表由 `OpCode::ALL` + `mnemonic()` 反查生成。**加一条指令只改 `crates/cyberspine-isa/src/lib.rs`，不手抄任何清单。**
 - 装配期完成：标签→偏移、名字→物理下标、`group` 展开、隐式 `HALT` 补齐、所有静态可判定的校验。
 
 ## 1. 词法
@@ -168,7 +168,7 @@ FLUSH                            # 无操作数；published ← pending，清 pe
       pc += emit_count(item)
 ```
 
-- 偏移由 `crates/cyberspine-core/src/isa/jump.rs::jump_offset` 唯一计算，汇编器不得重推 `pc + 1 + off`。
+- 偏移由 `crates/cyberspine-isa/src/jump.rs::jump_offset` 唯一计算，汇编器不得重推 `pc + 1 + off`。
 - 末尾非 `HALT` 时补一条隐式 `HALT`；末标签指向它（`isa.md` §5.3「跳到末尾」）。
 - 校验：未定义标签、重复标签、`off` 装不进 i32；末标签在手写末尾 `HALT` 之后 = 越界错误。
 
@@ -306,4 +306,4 @@ L_done:
 
 ## 9. 与 opcode 表的绑定
 
-助记符、操作数、arity、立即数类型全部由 `crates/cyberspine-core/src/isa.rs` 的 `isa_table!` 派生。本文件描述的是**词法**（怎么写寄存器/数字/名字/标签）；指令语义见 `isa.md` §4。
+助记符、操作数、arity、立即数类型全部由 `crates/cyberspine-isa/src/lib.rs` 的 `isa_table!` 派生。本文件描述的是**词法**（怎么写寄存器/数字/名字/标签）；指令语义见 `isa.md` §4。

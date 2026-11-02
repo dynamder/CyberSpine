@@ -4,7 +4,7 @@
 适用范围：磁盘容器布局、对齐与 padding、元数据表、内容哈希、加载期校验
 依赖：`docs/isa.md` 定义指令语义；本文件定义**字节布局**。
 
-> **本文件是格式的唯一规范。** 实现已落地：写侧 `crates/cyberspine-core/src/binfmt/image.rs`，
+> **本文件是格式的唯一规范。** 实现已落地：写侧 `crates/cyberspine-binfmt/src/image.rs`，
 > 读侧 `binfmt/load.rs`，逐条对应 §9 的校验清单。
 > 若实现与本文件冲突，以本文件为准。实现是手写的字节编解码，**没有用 `binrw`**——附录 A 是未采用的备忘。
 
@@ -303,7 +303,7 @@ content_hash = blake3(file[0 .. file_len - 32])
    既然 1 文件 = 1 动作，建议统一为「单元」，并在 §0 明确「单元 ≡ 一个动作 ≡ 一个 `.csp` 文件」。
 3. **§7.1「可选的单元级覆盖」应删除**：没有多单元，就没有覆盖层级。
 4. **§4.12 汇总与 §4.5 助记符不一致**：§4.5 是 `ITOF`/`FTOI`，§4.12/§6.2/§11 是 `I2F`/`F2I`。
-   需要二选一（现有 `crates/cyberspine-core/src/isa.rs` 用的是 `Itof`/`Ftoi`，建议以 §4.5 为准）。
+   需要二选一（现有 `crates/cyberspine-isa/src/lib.rs` 用的是 `Itof`/`Ftoi`，建议以 §4.5 为准）。
 5. **§6.2 周期表漏了 `IMOVI`**：§4.1 有 4 条传送指令，表里只列了 3 条再加 `NOP`，
    按行统计只有 47 条。补 `IMOVI = 1` 后恰好 48 条。
 6. **§6.3 的计费表版本没有落在头段声明里**。§13.1 必须补上 `cycle_table_version`，
