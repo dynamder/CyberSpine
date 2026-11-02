@@ -235,10 +235,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cyberspine-testkit"
+version = "0.1.0"
+dependencies = [
+ "cyberspine-core",
+]
+
+[[package]]
 name = "cyberspine-vm"
 version = "0.1.0"
 dependencies = [
  "cyberspine-core",
+ "cyberspine-testkit",
  "thiserror",
 ]
 

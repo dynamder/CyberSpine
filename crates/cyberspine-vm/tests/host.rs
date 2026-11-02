@@ -7,167 +7,17 @@
 //! step — it emits exactly the metadata tables `generate_image` would emit for
 //! the same rig, so the fixtures stay legal images, not just acceptable ones.
 
-use cyberspine_core::binfmt::image::{Image, Sensor, SensorSource, VarF};
+use cyberspine_core::binfmt::image::{Image, VarF};
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::exec::Fault;
+use cyberspine_core::isa::OpCode;
 use cyberspine_core::isa::clock::Hz;
-use cyberspine_core::isa::register::RegId;
-use cyberspine_core::isa::{Insn, OpCode};
-use cyberspine_core::rig::Name;
 use cyberspine_core::rig::{Fingerprint, Rig};
+use cyberspine_testkit::{
+    action, binary, excite, flush, fmovi, halt, imovi, isense, jump, name as n, nop, reg, rig,
+    sense, var_set, verified, wait, yield_,
+};
 use cyberspine_vm::{Backend, Call, DummyBackend, FaultRecord, Host, LoadError, Snapshot};
-
-fn n(text: &str) -> Name {
-    Name::new(text).expect("test fixture name")
-}
-
-fn reg(id: u8) -> RegId {
-    RegId::new(id).expect("id < RegId::COUNT")
-}
-
-fn halt() -> Insn {
-    Insn::new(OpCode::Halt)
-}
-
-fn nop() -> Insn {
-    Insn::new(OpCode::Nop)
-}
-
-fn yield_() -> Insn {
-    Insn::new(OpCode::Yield)
-}
-
-fn flush() -> Insn {
-    Insn::new(OpCode::Flush)
-}
-
-fn fmovi(rd: u8, value: f32) -> Insn {
-    Insn {
-        rd: reg(rd),
-        imm: value.to_bits(),
-        ..Insn::new(OpCode::Fmovi)
-    }
-}
-
-fn imovi(rd: u8, value: i32) -> Insn {
-    Insn {
-        rd: reg(rd),
-        imm: value as u32,
-        ..Insn::new(OpCode::Imovi)
-    }
-}
-
-fn binary(op: OpCode, rd: u8, ra: u8, rb: u8) -> Insn {
-    Insn {
-        rd: reg(rd),
-        ra: reg(ra),
-        rb: reg(rb),
-        ..Insn::new(op)
-    }
-}
-
-fn jump(off: i32) -> Insn {
-    Insn {
-        imm: off as u32,
-        ..Insn::new(OpCode::Jmp)
-    }
-}
-
-fn wait(seconds: f32) -> Insn {
-    Insn {
-        imm: seconds.to_bits(),
-        ..Insn::new(OpCode::Wait)
-    }
-}
-
-fn excite(muscle: usize, ra: u8) -> Insn {
-    Insn {
-        ra: reg(ra),
-        imm: muscle as u32,
-        ..Insn::new(OpCode::Fexcite)
-    }
-}
-
-fn sense(rd: u8, index: usize) -> Insn {
-    Insn {
-        rd: reg(rd),
-        imm: index as u32,
-        ..Insn::new(OpCode::Fsense)
-    }
-}
-
-fn isense(rd: u8, index: usize) -> Insn {
-    Insn {
-        rd: reg(rd),
-        imm: index as u32,
-        ..Insn::new(OpCode::Isense)
-    }
-}
-
-fn var_set(index: usize, ra: u8) -> Insn {
-    Insn {
-        ra: reg(ra),
-        imm: index as u32,
-        ..Insn::new(OpCode::Fvset)
-    }
-}
-
-/// A rig of `count` muscles named `m0`.., and no observables: the tests that do
-/// not care about sensors only ever read a muscle back.
-fn rig(count: usize) -> Rig {
-    let mut rig = Rig::new("test", 1);
-    for index in 0..count {
-        rig = rig.muscle(n(&format!("m{index}")));
-    }
-    rig
-}
-
-fn verified(image: Image) -> VerifiedImage {
-    VerifiedImage::verify(image).expect("the fixture is a legal image")
-}
-
-fn backend(rig: &Rig) -> DummyBackend {
-    DummyBackend::new(rig.clone())
-}
-
-/// An image bound to `rig`, carrying the tables the assembler would have
-/// generated for it (`docs/asm.md` §3.3).
-///
-/// A legal image ends in `HALT` (§5 puts the implicit one on the binder), so
-/// this appends it when the fixture does not: the tests below that loop forever
-/// simply never reach it.
-fn action(mut code: Vec<Insn>, rig: &Rig) -> Image {
-    if code.last().map(|insn| insn.op) != Some(OpCode::Halt) {
-        code.push(halt());
-    }
-    let mut image = Image::new(code);
-    image.header.rig = rig.fingerprint();
-
-    for muscle in &rig.muscles {
-        image.push_muscle(muscle.clone());
-    }
-    for name in &rig.sensors_f {
-        image.sensors_f.push(Sensor {
-            name: name.clone(),
-            source: SensorSource::Backend,
-        });
-    }
-    image.sensors_f.push(Sensor {
-        name: n("dt"),
-        source: SensorSource::BuiltinDt,
-    });
-    for name in &rig.sensors_i {
-        image.sensors_i.push(Sensor {
-            name: name.clone(),
-            source: SensorSource::Backend,
-        });
-    }
-    image.sensors_i.push(Sensor {
-        name: n("tick"),
-        source: SensorSource::BuiltinTick,
-    });
-    image
-}
 
 /// `FEXCITE` once, `FLUSH` once, then yield forever without touching b2 again.
 fn publish_then_idle(muscle: usize, value: f32, rig: &Rig) -> Image {
@@ -183,9 +33,9 @@ fn publish_then_idle(muscle: usize, value: f32, rig: &Rig) -> Image {
     )
 }
 
-// ---------------------------------------------------------------------------
-// The shape of one tick
-// ---------------------------------------------------------------------------
+fn backend(rig: &Rig) -> DummyBackend {
+    DummyBackend::new(rig.clone())
+}
 
 #[test]
 fn the_first_tick_sees_the_rigs_state() {
