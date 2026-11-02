@@ -69,6 +69,8 @@ pub enum ParseErrorKind {
     DescriptionMisaligned { expected: usize, found: usize },
 
     // -- instructions -------------------------------------------------------
+    #[error("a string literal is not closed before the end of the line")]
+    UnterminatedString,
     #[error("unknown mnemonic `{0}`")]
     UnknownMnemonic(SmolStr),
     #[error("`{mnemonic}` is missing operand {index} of {arity}")]

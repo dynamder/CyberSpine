@@ -41,9 +41,32 @@ fn parse_errors(src: &str) -> Vec<ParseError> {
     }
 }
 
+type KindMatcher = fn(&ParseErrorKind) -> bool;
+
+fn invalid_value(kind: &ParseErrorKind) -> bool {
+    matches!(kind, ParseErrorKind::InvalidFieldValue { .. })
+}
+
+fn unknown_directive(kind: &ParseErrorKind) -> bool {
+    matches!(kind, ParseErrorKind::UnknownDirective(_))
+}
+
+/// The fixture keeps exactly one defect, so the test can demand the one rule
+/// that must fire — "it was rejected" would pass against a parser that rejected
+/// everything (`docs/asm.md` §6.1).
 #[track_caller]
-fn parse_rejected(src: &str) {
-    let _ = parse_errors(src);
+fn assert_rejected(src: &str, why: &str, expected: KindMatcher) {
+    let errors = parse_errors(src);
+    assert_eq!(errors.len(), 1, "{why}: {errors:?}");
+    assert!(
+        expected(&errors[0].kind),
+        "{why}: unexpected kind {:?}",
+        errors[0].kind
+    );
+    assert_eq!(
+        errors[0].location.line, 5,
+        "{why}: the error belongs on the perturbed line"
+    );
 }
 
 /// 把若干行拼成一份以 `\n` 结尾的源码 —— 这是磁盘上真实文件的形状。
@@ -402,46 +425,56 @@ fn independent_header_errors_are_all_reported() {
 // ---------------------------------------------------------------------------
 
 /// 每一条都是「基线 + 一行类型不对的伪指令」。左侧期望被拒绝，右侧说明原因。
-const TYPE_MISMATCHES: &[(&str, &str)] = &[
-    (".layer abc", "layer 是 u16，给了标识符"),
-    (".layer -1", "u16 不接受负号"),
-    (".layer 70000", "u16 上溢"),
-    (".clock hz = 1.5", "hz 是 u32，给了浮点"),
-    (".clock hz = abc", "hz 是 u32，给了标识符"),
-    (".fuel 1.5", "fuel 是 u32，给了浮点"),
-    (".max_wait abc", "max_wait 是 f32，给了标识符"),
-    (".var_i state = 1.5", "var_i 是 i32，给了浮点"),
-    (".var_i state = abc", "var_i 是 i32，给了标识符"),
-    (".var_f phase = abc", "var_f 是 f32，给了标识符"),
+const TYPE_MISMATCHES: &[(&str, &str, KindMatcher)] = &[
+    (".layer abc", "layer 是 u16，给了标识符", invalid_value),
+    (".layer -1", "u16 不接受负号", invalid_value),
+    (".layer 70000", "u16 上溢", invalid_value),
+    (".clock hz = 1.5", "hz 是 u32，给了浮点", invalid_value),
+    (".clock hz = abc", "hz 是 u32，给了标识符", invalid_value),
+    (".fuel 1.5", "fuel 是 u32，给了浮点", invalid_value),
+    (
+        ".max_wait abc",
+        "max_wait 是 f32，给了标识符",
+        invalid_value,
+    ),
+    (
+        ".var_i state = 1.5",
+        "var_i 是 i32，给了浮点",
+        invalid_value,
+    ),
+    (
+        ".var_i state = abc",
+        "var_i 是 i32，给了标识符",
+        invalid_value,
+    ),
+    (
+        ".var_f phase = abc",
+        "var_f 是 f32，给了标识符",
+        invalid_value,
+    ),
 ];
 
 #[test]
 fn optional_field_type_mismatches_are_rejected() {
-    for (line, why) in TYPE_MISMATCHES {
-        let src = base_with(line);
-        if parse(&src).is_ok() {
-            panic!("应当拒绝（{why}），却解析成功：{line}\n--- 输入 ---\n{src}");
-        }
+    for (line, why, expected) in TYPE_MISMATCHES {
+        assert_rejected(&base_with(line), why, *expected);
     }
 }
 
 /// 缺 `=`、缺字段名一类"记号不对"的写法。
-const MALFORMED_MARKERS: &[(&str, &str)] = &[
-    (".clock = 60", "缺 hz 字段名"),
-    (".clock hz 60", "缺 ="),
-    (".clock 60", "既缺 hz 也缺 ="),
-    (".var_f phase 1.0", "缺 ="),
-    (".var_i state 0", "缺 ="),
-    (".group brows brow_l, brow_r", "缺 ="),
+const MALFORMED_MARKERS: &[(&str, &str, KindMatcher)] = &[
+    (".clock = 60", "缺 hz 字段名", invalid_value),
+    (".clock hz 60", "缺 =", invalid_value),
+    (".clock 60", "既缺 hz 也缺 =", invalid_value),
+    (".var_f phase 1.0", "缺 =", invalid_value),
+    (".var_i state 0", "缺 =", invalid_value),
+    (".group brows brow_l, brow_r", "缺 =", invalid_value),
 ];
 
 #[test]
 fn malformed_markers_are_rejected() {
-    for (line, why) in MALFORMED_MARKERS {
-        let src = base_with(line);
-        if parse(&src).is_ok() {
-            panic!("应当拒绝（{why}），却解析成功：{line}\n--- 输入 ---\n{src}");
-        }
+    for (line, why, expected) in MALFORMED_MARKERS {
+        assert_rejected(&base_with(line), why, *expected);
     }
 }
 
@@ -449,34 +482,35 @@ fn malformed_markers_are_rejected() {
 // 3c. 非法：拼写错误
 // ---------------------------------------------------------------------------
 
-const TYPOS: &[(&str, &str)] = &[
-    (".layr 10", "layer 拼错"),
-    (".laye 10", "layer 拼错"),
-    (".clockk hz = 60", "clock 拼错"),
-    (".clock hr = 60", "字段名 hz 拼错"),
-    (".fuell 4096", "fuel 拼错"),
-    (".max_waitt 1.0", "max_wait 拼错"),
-    (".muscel brow_l", "muscle 拼错"),
-    (".sensorf smile", "sensor_f 拼错"),
-    (".sensor_f_ smile", "sensor_f 拼错"),
-    (".varr_i state = 0", "var_i 拼错"),
-    (".textt", "text 拼错"),
+const TYPOS: &[(&str, &str, KindMatcher)] = &[
+    (".layr 10", "layer 拼错", unknown_directive),
+    (".laye 10", "layer 拼错", unknown_directive),
+    (".clockk hz = 60", "clock 拼错", unknown_directive),
+    (".clock hr = 60", "字段名 hz 拼错", invalid_value),
+    (".fuell 4096", "fuel 拼错", unknown_directive),
+    (".max_waitt 1.0", "max_wait 拼错", unknown_directive),
+    (".muscel brow_l", "muscle 拼错", unknown_directive),
+    (".sensorf smile", "sensor_f 拼错", unknown_directive),
+    (".sensor_f_ smile", "sensor_f 拼错", unknown_directive),
+    (".varr_i state = 0", "var_i 拼错", unknown_directive),
+    (".textt", "text 拼错", unknown_directive),
 ];
 
 #[test]
 fn typos_are_rejected() {
-    for (line, why) in TYPOS {
-        let src = base_with(line);
-        if parse(&src).is_ok() {
-            panic!("应当拒绝（{why}），却解析成功：{line}\n--- 输入 ---\n{src}");
-        }
+    for (line, why, expected) in TYPOS {
+        assert_rejected(&base_with(line), why, *expected);
     }
 }
 
 /// 未知伪指令必须是错误，而且不能被"当成没看见"跳过。
 #[test]
 fn unknown_directive_is_rejected() {
-    parse_rejected(&base_with(".wobble 1"));
+    assert_rejected(
+        &base_with(".wobble 1"),
+        "unknown directive",
+        unknown_directive,
+    );
 }
 
 /// §3.2：肌肉与可观测量已由 manifest 声明，旧伪指令就此消失 —— 它们没有被留成
@@ -568,7 +602,9 @@ fn an_unterminated_rig_path_is_rejected() {
         ".rig \"a.rig.json",
         ".text",
     ]);
-    parse_rejected(&src);
+    assert_rejected(&src, "an unterminated string literal", |kind| {
+        matches!(kind, ParseErrorKind::UnterminatedString)
+    });
 }
 
 // ---------------------------------------------------------------------------

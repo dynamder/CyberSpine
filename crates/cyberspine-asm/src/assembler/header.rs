@@ -1,9 +1,10 @@
 use smol_str::SmolStr;
 use winnow::{
     Parser,
-    ascii::{dec_int, dec_uint, float, space0, space1},
+    ascii::{space0, space1},
     combinator::preceded,
     error::ErrMode,
+    token::take_while,
 };
 
 use crate::assembler::{
@@ -180,11 +181,32 @@ fn quoted_path<'i>(input: &mut Line<'i>) -> PResult<SmolStr> {
             other => out.push(other),
         }
     }
-    cut_at(text, ParseErrorKind::Unexpected)
+    cut_at(text, ParseErrorKind::UnterminatedString)
 }
 
 fn name_arg<'i>(input: &mut Line<'i>) -> PResult<SmolStr> {
     ident.map(SmolStr::new).parse_next(input)
+}
+
+/// One value token: everything up to whitespace or a comment.
+///
+/// Parsing the lexeme first and converting second is what keeps `.clock hz = 1.5`
+/// from being read as `1` followed by the trailing input `.5` — the error then
+/// says the value is not a `u32`, which is what the author wrote wrong.
+fn token<'i>(input: &mut Line<'i>) -> PResult<&'i str> {
+    take_while(1.., |c: char| {
+        !matches!(c, ' ' | '\t' | '\r' | '\n' | ',' | '#')
+    })
+    .parse_next(input)
+}
+
+fn number<'i, T>(input: &mut Line<'i>) -> PResult<T>
+where
+    T: std::str::FromStr,
+{
+    let text = token(input)?;
+    text.parse()
+        .map_err(|_| ErrMode::Backtrack(SyntaxError::at(input, ParseErrorKind::Unexpected)))
 }
 
 fn eq(input: &mut Line<'_>) -> PResult<()> {
@@ -205,6 +227,10 @@ where
     let start = *input;
     match parser.parse_next(input) {
         Ok(value) => Ok(value),
+        // A `Cut` is the parser saying "this is not a value-shaped token at all"
+        // and it already has a precise kind (`UnterminatedString`); re-kinding it
+        // as `InvalidFieldValue` would lose that.
+        Err(ErrMode::Cut(error)) => Err(ErrMode::Cut(error)),
         Err(_) => {
             let kind = if start.trim_start().is_empty() {
                 ParseErrorKind::MissingFieldValue {
@@ -285,23 +311,23 @@ fn header_stmt<'i>(input: &mut Line<'i>) -> PResult<HeaderStmt> {
     let stmt = match dir.to_ascii_lowercase().as_str() {
         "layer" => {
             space_after(input, "layer")?;
-            HeaderStmt::Layer(argument(input, "layer", "a u16", dec_uint)?)
+            HeaderStmt::Layer(argument(input, "layer", "a u16", number::<u16>)?)
         }
         "clock" => {
             space_after(input, "clock")?;
             let _ = argument(input, "clock", "`hz`", "hz")?;
             expect_eq(input, "clock")?;
             HeaderStmt::Clock {
-                hz: argument(input, "clock", "a u32", dec_uint)?,
+                hz: argument(input, "clock", "a u32", number::<u32>)?,
             }
         }
         "fuel" => {
             space_after(input, "fuel")?;
-            HeaderStmt::Fuel(argument(input, "fuel", "a u32", dec_uint)?)
+            HeaderStmt::Fuel(argument(input, "fuel", "a u32", number::<u32>)?)
         }
         "max_wait" => {
             space_after(input, "max_wait")?;
-            HeaderStmt::MaxWait(argument(input, "max_wait", "an f32", float)?)
+            HeaderStmt::MaxWait(argument(input, "max_wait", "an f32", number::<f32>)?)
         }
         "description" => {
             let rest = input.trim_start();
@@ -331,14 +357,14 @@ fn header_stmt<'i>(input: &mut Line<'i>) -> PResult<HeaderStmt> {
             space_after(input, "var_f")?;
             let name = argument(input, "var_f", "a name", name_arg)?;
             expect_eq(input, "var_f")?;
-            let value = argument(input, "var_f", "an f32", float)?;
+            let value = argument(input, "var_f", "an f32", number::<f32>)?;
             HeaderStmt::Varf { name, value }
         }
         "var_i" => {
             space_after(input, "var_i")?;
             let name = argument(input, "var_i", "a name", name_arg)?;
             expect_eq(input, "var_i")?;
-            let value = argument(input, "var_i", "an i32", dec_int)?;
+            let value = argument(input, "var_i", "an i32", number::<i32>)?;
             HeaderStmt::VarI { name, value }
         }
         "text" => HeaderStmt::Text,
