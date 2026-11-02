@@ -126,22 +126,6 @@ impl ParseError {
     pub fn render(&self, path: &Path, source: &str) -> String {
         render_errors(std::slice::from_ref(self), path, source)
     }
-
-    /// Byte range to annotate. Normally one character; a missing token at the
-    /// end of a line becomes a zero-length span so the reported column is exact.
-    fn byte_span(&self, source: &str) -> Option<Range<usize>> {
-        let start = byte_offset(source, self.location)?;
-
-        // A missing token points just past the line's last character.
-        // annotate-snippets supports a zero-length span and reports the exact
-        // column, so do not back up onto the previous character.
-        if start >= source.len() || matches!(source[start..].chars().next(), Some('\n' | '\r')) {
-            return Some(start..start);
-        }
-
-        let end = start + source[start..].chars().next()?.len_utf8();
-        Some(start..end)
-    }
 }
 
 impl fmt::Display for ParseError {
@@ -312,39 +296,77 @@ fn byte_offset(source: &str, location: Location) -> Option<usize> {
     None
 }
 
+/// Byte range to annotate. Normally one character; a missing token at the end of
+/// a line becomes a zero-length span so the reported column is exact.
+fn span_at(source: &str, location: Location) -> Option<Range<usize>> {
+    let start = byte_offset(source, location)?;
+
+    if start >= source.len() || matches!(source[start..].chars().next(), Some('\n' | '\r')) {
+        return Some(start..start);
+    }
+
+    let end = start + source[start..].chars().next()?.len_utf8();
+    Some(start..end)
+}
+
 fn render_errors(errors: &[ParseError], path: &Path, source: &str) -> String {
-    let path = path.display().to_string();
-    let renderer = Renderer::plain().decor_style(DecorStyle::Unicode);
     let mut out = String::new();
 
     for (index, error) in errors.iter().enumerate() {
         if index > 0 {
             out.push('\n');
         }
-
-        let title = Level::ERROR.primary_title(error.kind.to_string());
-        let group = match error.byte_span(source) {
-            Some(span) => title.element(
-                Snippet::source(source)
-                    .path(path.clone())
-                    .line_start(1)
-                    .annotation(AnnotationKind::Primary.span(span)),
-            ),
-            // The line is past the end of the source (for example a missing
-            // header field at EOF). Keep the file:line:column location even
-            // though there is no line to quote.
-            None => title.element(
-                Origin::path(path.clone())
-                    .line(error.location.line)
-                    .char_column(error.location.column),
-            ),
-        };
-
-        out.push_str(&renderer.render(&[group]));
-        if !out.ends_with('\n') {
-            out.push('\n');
-        }
+        out.push_str(&render_one(
+            Level::ERROR,
+            &error.kind.to_string(),
+            error.location,
+            path,
+            source,
+        ));
     }
 
+    out
+}
+
+/// Render one diagnostic at `location`, with the source line and a caret.
+///
+/// Shared by the parse stage (which has a `ParseErrorKind`) and the generation
+/// stage (which has an `ImageGenError` and, sometimes, no line at all — that case
+/// is handled by the caller, not here).
+pub fn render_error(title: &str, location: Location, path: &Path, source: &str) -> String {
+    render_one(Level::ERROR, title, location, path, source)
+}
+
+/// A readability diagnostic: same rendering, warning level.
+pub fn render_warning(title: &str, location: Location, path: &Path, source: &str) -> String {
+    render_one(Level::WARNING, title, location, path, source)
+}
+
+fn render_one(level: Level, title: &str, location: Location, path: &Path, source: &str) -> String {
+    let path = path.display().to_string();
+    let renderer = Renderer::plain().decor_style(DecorStyle::Unicode);
+    let title = level.primary_title(title);
+
+    let group = match span_at(source, location) {
+        Some(span) => title.element(
+            Snippet::source(source)
+                .path(path.clone())
+                .line_start(1)
+                .annotation(AnnotationKind::Primary.span(span)),
+        ),
+        // The line is past the end of the source (for example a missing header
+        // field at EOF). Keep the file:line:column location even though there is
+        // no line to quote.
+        None => title.element(
+            Origin::path(path)
+                .line(location.line)
+                .char_column(location.column),
+        ),
+    };
+
+    let mut out = renderer.render(&[group]);
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
     out
 }

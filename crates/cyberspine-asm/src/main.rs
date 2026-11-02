@@ -6,7 +6,7 @@ use std::{
 
 use clap::Parser;
 use cyberspine_asm::{
-    assembler::{self, Asm},
+    assembler::{self, Asm, ImageGenError, diagnostic},
     cli::CliArgs,
     store::{self, WriteError},
 };
@@ -37,8 +37,21 @@ fn run(cli_args: &CliArgs) -> Result<(), String> {
 
     let rig = load_rig(cli_args, &asm)?;
 
-    let image = assembler::generate_image(&asm, &rig)
-        .map_err(|error| format!("{}: error: {error}\n", cli_args.asm_file.display()))?;
+    let image = assembler::generate_image(&asm, &rig).map_err(|error| {
+        let title = error.to_string();
+        match error.location() {
+            Some(location) => {
+                diagnostic::render_error(&title, location, &cli_args.asm_file, &asm_str)
+            }
+            // A bug in the assembler, not in the source: say which one it is so
+            // the report does not read like a user error.
+            None if matches!(error, ImageGenError::Internal { .. }) => format!(
+                "{}: error: {title}\nthis is an assembler bug, please report it\n",
+                cli_args.asm_file.display()
+            ),
+            None => format!("{}: error: {title}\n", cli_args.asm_file.display()),
+        }
+    })?;
 
     let output = cli_args
         .output

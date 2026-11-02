@@ -365,6 +365,40 @@ fn a_generation_error_produces_no_file() {
     assert_eq!(entries(&dir), vec!["greet.rig.json", "pending.csa"]);
 }
 
+/// `docs/asm.md` §6.1: the CLI prints `path:line:col: error: …` — for the
+/// generation stage too, not just for parse errors.
+#[test]
+fn a_generation_error_is_rendered_at_its_line() {
+    let dir = scratch("generation-location");
+    let source = write_source(
+        &dir,
+        "jump.csa",
+        "\
+.layer 10
+.clock hz = 60
+.fuel 4096
+.max_wait 600.0
+.rig \"greet.rig.json\"
+.text
+    FMOVI   f1, 1.0
+    JMP     nowhere
+    HALT
+",
+    );
+    write_manifest(&dir, "greet.rig.json", MANIFEST);
+
+    let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
+
+    assert_eq!(output.status.code(), Some(1));
+    let message = stderr(&output);
+    assert!(message.contains("undefined label"), "stderr: {message}");
+    assert!(
+        message.contains("jump.csa:8:5"),
+        "the error must carry path:line:col, got: {message}"
+    );
+    assert!(!dir.join("jump.csp").exists(), "nothing is written");
+}
+
 #[test]
 fn an_unwritable_destination_is_reported() {
     let dir = scratch("unwritable");

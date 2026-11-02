@@ -157,6 +157,10 @@ pub enum ImageGenError {
     InvalidMaxWait,
     #[error("the program is too large for the format's 32-bit instruction count")]
     TooManyInstructions,
+    /// A mismatch between the layout pass and the emitted code. No source can
+    /// cause it: it means the assembler is wrong, and the CLI says so.
+    #[error("emitted {emitted} instructions, the layout says {layout}")]
+    Internal { emitted: usize, layout: usize },
 }
 
 impl ImageGenError {
@@ -185,7 +189,8 @@ impl ImageGenError {
             | Self::Rig(_)
             | Self::ZeroHz
             | Self::InvalidMaxWait
-            | Self::TooManyInstructions => None,
+            | Self::TooManyInstructions
+            | Self::Internal { .. } => None,
         }
     }
 }
@@ -206,7 +211,12 @@ pub fn generate_image(asm: &Asm, rig: &Rig) -> Result<Image, ImageGenError> {
         code.push(insn);
         locations.push(location);
     }
-    debug_assert_eq!(code.len(), layout.code_len);
+    if code.len() != layout.code_len {
+        return Err(ImageGenError::Internal {
+            emitted: code.len(),
+            layout: layout.code_len,
+        });
+    }
 
     // The implicit `HALT` has no line of its own; if it ever becomes the site of
     // a diagnostic, the last real instruction is the closest thing to it.
