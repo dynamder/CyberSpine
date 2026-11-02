@@ -90,7 +90,9 @@ pub fn write_image(image: &Image, path: impl AsRef<Path>) -> Result<(), WriteErr
 
     // The same property the fuzz oracle asserts, enforced on the one path that
     // actually ships.
-    Image::from_bytes(&bytes).map_err(|source| WriteError::NotCanonical { source })?;
+    image
+        .validate()
+        .map_err(|source| WriteError::NotCanonical { source })?;
 
     write_atomic(path, &bytes).map_err(|source| WriteError::Io {
         path: path.to_path_buf(),

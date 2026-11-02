@@ -14,8 +14,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use cyberspine_core::binfmt::image::Image;
-use cyberspine_core::binfmt::load::LoadError;
+use cyberspine_core::binfmt::load::{LoadError, VerifiedImage};
 use thiserror::Error;
 
 /// The largest file this loader will read, in bytes.
@@ -51,7 +50,7 @@ pub enum LoadFileError {
 ///
 /// The size gate runs on the file's metadata *before* it is read, so an
 /// oversized file never becomes an allocation.
-pub fn read_image(path: impl AsRef<Path>) -> Result<Image, LoadFileError> {
+pub fn read_image(path: impl AsRef<Path>) -> Result<VerifiedImage, LoadFileError> {
     let path = path.as_ref();
     let file = File::open(path).map_err(|source| LoadFileError::Io {
         path: path.to_path_buf(),
@@ -85,5 +84,5 @@ pub fn read_image(path: impl AsRef<Path>) -> Result<Image, LoadFileError> {
             source,
         })?;
 
-    Ok(Image::from_bytes(&bytes)?)
+    Ok(VerifiedImage::from_bytes(&bytes)?)
 }

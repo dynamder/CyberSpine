@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use cyberspine_asm::store::{WriteError, write_atomic, write_image};
 use cyberspine_core::binfmt::image::Image;
+use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::isa::{Insn, OpCode};
 
 /// A scratch directory owned by one test. `CARGO_TARGET_TMPDIR` is the crate's
@@ -53,8 +54,10 @@ fn a_new_image_is_written_whole() {
         "the file is the canonical encoding"
     );
     assert_eq!(
-        Image::from_bytes(&bytes).expect("the loader accepts what we wrote"),
-        image
+        VerifiedImage::from_bytes(&bytes)
+            .expect("the loader accepts what we wrote")
+            .image(),
+        &image
     );
     assert_eq!(entries(&dir), vec!["halt.csp"], "no temporary file is left");
 }

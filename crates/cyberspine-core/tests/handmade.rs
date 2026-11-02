@@ -29,6 +29,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use cyberspine_core::binfmt::image::{HASH_LEN, HEADER_LEN, Image, SensorSource};
+use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::binfmt::load::{LoadError, Table};
 use cyberspine_core::isa::OpCode;
 
@@ -248,7 +249,7 @@ fn rehash(bytes: &[u8], patches: &[(usize, &[u8])]) -> Vec<u8> {
 }
 
 fn reject(bytes: &[u8]) -> LoadError {
-    match Image::from_bytes(bytes) {
+    match VerifiedImage::from_bytes(bytes) {
         Ok(image) => panic!(
             "expected rejection, but the loader accepted a {} instruction image",
             image.code.len()
@@ -360,7 +361,7 @@ fn the_hand_assembled_bytes_match_the_offset_table() {
 
 #[test]
 fn golden_valid_all_exercises_every_opcode() {
-    let image = Image::from_bytes(&fixture_bytes(VALID)).expect("the golden file is valid");
+    let image = VerifiedImage::from_bytes(&fixture_bytes(VALID)).expect("the golden file is valid");
 
     let mut seen: Vec<u8> = image.code.iter().map(|insn| insn.op.byte()).collect();
     seen.sort_unstable();
@@ -380,7 +381,7 @@ fn golden_valid_all_exercises_every_opcode() {
 
 #[test]
 fn golden_valid_all_loads_and_decodes() {
-    let image = Image::from_bytes(&fixture_bytes(VALID)).expect("the golden file is valid");
+    let image = VerifiedImage::from_bytes(&fixture_bytes(VALID)).expect("the golden file is valid");
 
     // Header: every scalar non-default.
     assert_eq!(image.header.layer, 3);
@@ -463,7 +464,7 @@ fn golden_valid_all_is_byte_exact() {
     );
 
     // And the writer must reproduce a file it did not produce (§8).
-    let image = Image::from_bytes(&fixture_bytes(VALID)).expect("the golden file is valid");
+    let image = VerifiedImage::from_bytes(&fixture_bytes(VALID)).expect("the golden file is valid");
     assert_eq!(
         image.to_bytes(),
         bytes,
@@ -477,7 +478,7 @@ fn golden_valid_all_is_byte_exact() {
 
 #[test]
 fn golden_invalid_bad_hash_is_refused() {
-    match Image::from_bytes(&fixture_bytes(INVALID_BAD_HASH)) {
+    match VerifiedImage::from_bytes(&fixture_bytes(INVALID_BAD_HASH)) {
         Err(LoadError::ContentHashMismatch { .. }) => {}
         other => panic!("the bad-hash golden was not refused by C6: {other:?}"),
     }
@@ -485,7 +486,7 @@ fn golden_invalid_bad_hash_is_refused() {
 
 #[test]
 fn golden_invalid_reserved_opcode_is_refused() {
-    match Image::from_bytes(&fixture_bytes(INVALID_RESERVED)) {
+    match VerifiedImage::from_bytes(&fixture_bytes(INVALID_RESERVED)) {
         Err(LoadError::InvalidInstruction { index: 0, source }) => {
             assert_eq!(source.to_string(), "Invalid Operation Code 4");
         }

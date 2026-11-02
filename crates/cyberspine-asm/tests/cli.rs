@@ -16,6 +16,7 @@ use std::process::{Command, Output};
 
 use cyberspine_asm::assembler::{generate_image, parse};
 use cyberspine_core::binfmt::image::Image;
+use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::rig::Rig;
 
 const SOURCE: &str = "\
@@ -130,8 +131,10 @@ fn a_source_is_assembled_into_the_requested_file() {
     let expected = expected_image(MANIFEST);
     let written = fs::read(&target).expect("read the file");
     assert_eq!(
-        Image::from_bytes(&written).expect("the loader accepts the file"),
-        expected
+        VerifiedImage::from_bytes(&written)
+            .expect("the loader accepts the file")
+            .image(),
+        &expected
     );
     assert_eq!(
         written,
@@ -230,7 +233,7 @@ fn the_rig_flag_overrides_the_directive() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
 
-    let written = Image::from_bytes(&fs::read(&target).expect("read the file"))
+    let written = VerifiedImage::from_bytes(&fs::read(&target).expect("read the file"))
         .expect("the loader accepts the file");
     assert_eq!(
         written.header.rig,

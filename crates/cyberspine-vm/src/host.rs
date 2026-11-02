@@ -8,7 +8,8 @@
 //! (`docs/isa.md` §13.3). Nothing here compares names — they became indices at
 //! assembly time.
 
-use cyberspine_core::binfmt::image::{Image, Sensor, SensorSource};
+use cyberspine_core::binfmt::image::{Sensor, SensorSource};
+use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::exec::{Fault, Instance, Program, Sensors, Status};
 use cyberspine_core::rig::Fingerprint;
 
@@ -42,6 +43,9 @@ pub struct Tick {
     pub commands: Vec<Option<f32>>,
 }
 
+/// The host own refusals, all of them about compatibility rather than validity:
+/// a `VerifiedImage` is a legal action, but it may still be an action for another
+/// body, another clock, or another shape.
 #[derive(Debug, thiserror::Error)]
 pub enum LoadError {
     #[error("the image was assembled for rig {declared}, this backend implements {backend}")]
@@ -51,14 +55,14 @@ pub enum LoadError {
     },
     #[error("the image carries no rig fingerprint; call `Host::allow_unbound` to load it anyway")]
     Unbound,
-    #[error("image declares {declared} float sensors, the rig provides {rig}")]
-    SensorFCount { declared: usize, rig: usize },
-    #[error("image declares {declared} integer sensors, the rig provides {rig}")]
-    SensorICount { declared: usize, rig: usize },
-    #[error("image declares {declared} muscles, the rig provides {rig}")]
-    MuscleCount { declared: usize, rig: usize },
-    #[error("image declares {readbacks} muscle read-backs but only has {muscles} muscles")]
-    ReadbacksExceedMuscles { readbacks: usize, muscles: usize },
+    #[error(
+        "the image's {table} table has {declared} entries, the host is already sized for {host}"
+    )]
+    ShapeMismatch {
+        table: &'static str,
+        declared: usize,
+        host: usize,
+    },
     #[error("image declares {declared} Hz, the host is already ticking at {host} Hz")]
     Hz { declared: u32, host: u32 },
 }
@@ -77,24 +81,16 @@ struct Scale {
 }
 
 impl Scale {
-    fn of(image: &Image) -> Result<Self, LoadError> {
+    /// The image's own counts. M3/M4/M6 already guarantee that the read-backs
+    /// match the muscles, so "how many back-end observables" is all that is left
+    /// to count.
+    fn of(image: &VerifiedImage) -> Self {
         let backend = |sensor: &&Sensor| sensor.source == SensorSource::Backend;
-        let readbacks = image
-            .sensors_f
-            .iter()
-            .filter(|sensor| sensor.source == SensorSource::Muscle)
-            .count();
-        if readbacks > image.muscles.len() {
-            return Err(LoadError::ReadbacksExceedMuscles {
-                readbacks,
-                muscles: image.muscles.len(),
-            });
-        }
-        Ok(Self {
+        Self {
             muscles: image.muscles.len(),
             sensors_f: image.sensors_f.iter().filter(backend).count(),
             sensors_i: image.sensors_i.iter().filter(backend).count(),
-        })
+        }
     }
 }
 
@@ -118,7 +114,7 @@ enum SourceI {
 struct Slot {
     id: InstanceId,
     layer: u16,
-    image: Image,
+    image: VerifiedImage,
     instance: Instance,
     sensors_f: Vec<f32>,
     sensors_i: Vec<i32>,
@@ -200,9 +196,10 @@ impl<B: Backend> Host<B> {
     /// An image assembled without a rig carries [`Fingerprint::UNBOUND`] and is
     /// refused, because nothing ties it to this body. Tests and firmware that
     /// never see a host may opt out with [`Host::allow_unbound`].
-    pub fn load(&mut self, image: Image) -> Result<InstanceId, LoadError> {
+    pub fn load(&mut self, image: VerifiedImage) -> Result<InstanceId, LoadError> {
         self.check_rig(&image)?;
-        self.fit_scale(&image)?;
+        let scale = Scale::of(&image);
+        self.fit_scale(scale)?;
 
         let hz = image.header.hz;
         match self.hz {
@@ -366,7 +363,7 @@ impl<B: Backend> Host<B> {
     /// An all-zero fingerprint means the image has no rig at all, which is a
     /// different failure from a mismatch — it says "unbound", not "another
     /// body", and only an explicit opt-out lets it through.
-    fn check_rig(&self, image: &Image) -> Result<(), LoadError> {
+    fn check_rig(&self, image: &VerifiedImage) -> Result<(), LoadError> {
         let declared = image.header.rig;
         let backend = self.backend.fingerprint();
         if declared == backend {
@@ -387,8 +384,7 @@ impl<B: Backend> Host<B> {
     /// Later images only have to agree with it. With equal fingerprints they
     /// always do; this check is what an unbound image (which proves nothing
     /// about its shape) is measured against.
-    fn fit_scale(&mut self, image: &Image) -> Result<(), LoadError> {
-        let scale = Scale::of(image)?;
+    fn fit_scale(&mut self, scale: Scale) -> Result<(), LoadError> {
         match self.scale {
             None => {
                 self.rig_f = vec![0.0; scale.sensors_f];
@@ -397,17 +393,20 @@ impl<B: Backend> Host<B> {
                 self.scale = Some(scale);
                 Ok(())
             }
-            Some(host) if scale.sensors_f != host.sensors_f => Err(LoadError::SensorFCount {
+            Some(host) if scale.sensors_f != host.sensors_f => Err(LoadError::ShapeMismatch {
+                table: "sensors_f",
                 declared: scale.sensors_f,
-                rig: host.sensors_f,
+                host: host.sensors_f,
             }),
-            Some(host) if scale.sensors_i != host.sensors_i => Err(LoadError::SensorICount {
+            Some(host) if scale.sensors_i != host.sensors_i => Err(LoadError::ShapeMismatch {
+                table: "sensors_i",
                 declared: scale.sensors_i,
-                rig: host.sensors_i,
+                host: host.sensors_i,
             }),
-            Some(host) if scale.muscles != host.muscles => Err(LoadError::MuscleCount {
+            Some(host) if scale.muscles != host.muscles => Err(LoadError::ShapeMismatch {
+                table: "muscles",
                 declared: scale.muscles,
-                rig: host.muscles,
+                host: host.muscles,
             }),
             Some(_) => Ok(()),
         }

@@ -8,6 +8,7 @@ pub mod render;
 
 use cyberspine_asm::assembler::{self, AsmParseErrors, ImageGenError};
 use cyberspine_core::binfmt::image::Image;
+use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::rig::Rig;
 use cyberspine_vm::{FaultRecord, Host, LoadError};
 
@@ -26,6 +27,8 @@ pub enum Error {
     Parse(#[from] AsmParseErrors),
     #[error("the program does not assemble: {0}")]
     Assemble(#[from] ImageGenError),
+    #[error("the image is not valid: {0}")]
+    Invalid(#[from] cyberspine_core::binfmt::load::LoadError),
     #[error("the image does not load: {0}")]
     Load(#[from] LoadError),
 }
@@ -55,7 +58,7 @@ impl Session {
 
         let mut host = Host::new(MazeBackend::new());
         host.set_tracing(true);
-        host.load(image)?;
+        host.load(VerifiedImage::verify(image)?)?;
         Ok(Self { host, ticks: 0 })
     }
 

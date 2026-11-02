@@ -2,7 +2,7 @@
 //! and they only run against the rig they were assembled for.
 
 use cyberspine_asm::assembler::{generate_image, parse};
-use cyberspine_core::binfmt::image::Image;
+use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::rig::{Name, Rig};
 use cyberspine_vm::{DummyBackend, Host};
 
@@ -34,7 +34,7 @@ fn an_assembled_source_runs_and_produces_the_expected_commands() {
     let image = generate_image(&asm, &rig).expect("the source assembles");
 
     let bytes = image.to_bytes();
-    let loaded = Image::from_bytes(&bytes).expect("the assembler's own output loads");
+    let loaded = VerifiedImage::from_bytes(&bytes).expect("the assembler's own output loads");
 
     let mut host = Host::new(DummyBackend::new(rig));
     host.set_tracing(true);

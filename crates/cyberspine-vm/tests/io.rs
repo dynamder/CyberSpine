@@ -35,7 +35,7 @@ fn an_image_survives_a_trip_through_the_filesystem() {
     fs::write(&path, image.to_bytes()).expect("write the image");
 
     let loaded = read_image(&path).expect("read the image back");
-    assert_eq!(loaded, image);
+    assert_eq!(loaded.image(), &image);
 }
 
 #[test]

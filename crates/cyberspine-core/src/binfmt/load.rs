@@ -189,15 +189,22 @@ pub enum LoadError {
     UnterminatedName { table: Table, index: usize }, // M1
 }
 
-impl Image {
-    /// Verify and parse an image from memory.
-    ///
-    /// On success the image has passed §9.1 C1–C8, §9.2 M1–M6 and §9.3 I1–I8, so
-    /// the runtime that consumes it owes it no further bounds checks
-    /// (`docs/isa.md` §0.4).
+/// An image that passed `docs/binfmt.md` §9.
+///
+/// The only ways to get one are [`VerifiedImage::from_bytes`] (decode, then
+/// validate) and [`VerifiedImage::verify`] (validate an image the assembler or a
+/// test built). Runtime code takes this type rather than [`Image`], so "the
+/// loader already checked" stops being a promise and becomes a compile-time fact
+/// (`docs/isa.md` §0.4).
+///
+/// There is no `&mut` access: an action is immutable once it has loaded.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VerifiedImage(Image);
+
+impl VerifiedImage {
+    /// Decode and verify an image from memory.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, LoadError> {
-        // ----- Step 1: the fixed header, and every check that needs no parsing.
-        // Nothing below allocates until `check_container` has passed (C5).
+        // ----- the container, before a single `Vec` is allocated (C5) -----
         if bytes.len() < MIN_FILE_LEN {
             return Err(LoadError::TooShort { len: bytes.len() });
         }
@@ -205,15 +212,25 @@ impl Image {
         let raw = RawHeader::parse(&bytes[..HEADER_LEN])?;
         check_container(&raw, bytes)?;
 
-        // ----- Step 2: allocate, now that the counts are known to be sane.
         let body_end = bytes.len() - HASH_LEN;
         let mut cursor = Cursor::new(&bytes[..body_end], HEADER_LEN);
 
-        // The code section is read as raw words; I1/I2 are checked in
-        // `check_code` (the I phase), after M — the order §9 fixes.
-        let mut raw_code = Vec::with_capacity(raw.code_len as usize);
-        for _ in 0..raw.code_len {
-            raw_code.push(cursor.u64_le()?);
+        // I1 happens here: a word that is not an instruction fails the decode.
+        //
+        // I2 is checked twice on purpose, once per representation: here it is
+        // the §9.3 equation `encode(decode(word)) == word`, which only the byte
+        // path can decide; `check_code` checks the other direction
+        // (`decode(encode(insn)) == insn`) so an `Image` built in memory is held
+        // to the same canonical form.
+        let mut code = Vec::with_capacity(raw.code_len as usize);
+        for index in 0..raw.code_len as usize {
+            let word = cursor.u64_le()?;
+            let insn = Insn::decode(word)
+                .map_err(|source| LoadError::InvalidInstruction { index, source })?;
+            if insn.encode() != word {
+                return Err(LoadError::NonCanonicalInstruction { index, word });
+            }
+            code.push(insn);
         }
 
         let muscles = read_table::<Muscle>(&mut cursor, Table::Muscles, raw.muscle_count)?;
@@ -229,30 +246,73 @@ impl Image {
             }); // C7
         }
 
-        let max_wait = f32::from_bits(raw.max_wait_bits);
-        let mut image = Image {
+        Self::verify(Image {
             header: FixedHeader {
                 format_version: raw.format_version,
                 isa_version: raw.isa_version,
                 layer: raw.layer,
                 hz: raw.hz,
                 fuel: raw.fuel,
-                max_wait,
+                max_wait: f32::from_bits(raw.max_wait_bits),
                 rig: Fingerprint(raw.rig),
             },
-            code: Vec::new(),
+            code,
             muscles,
             sensors_f,
             sensors_i,
             vars_f,
             vars_i,
-        };
+        })
+    }
 
-        // ----- M, then I. Both are O(n) single passes; the runtime pays nothing.
-        check_metadata(&image)?;
-        image.code = check_code(&raw_code, &image)?;
+    /// Validate an image that was built in memory.
+    ///
+    /// This is the rule set [`VerifiedImage::from_bytes`] applies minus the
+    /// container checks, which need the original bytes.
+    pub fn verify(image: Image) -> Result<Self, LoadError> {
+        image.validate()?;
+        Ok(Self(image))
+    }
 
-        Ok(image)
+    /// The image itself. Mutable access is deliberately absent.
+    pub fn image(&self) -> &Image {
+        &self.0
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.0.to_bytes()
+    }
+}
+
+impl core::ops::Deref for VerifiedImage {
+    type Target = Image;
+
+    fn deref(&self) -> &Image {
+        &self.0
+    }
+}
+
+impl Image {
+    /// §9.1 C4 / C8 and §9.2 M1–M6, §9.3 I2–I8: everything a valid byte string
+    /// implies once it has been decoded.
+    ///
+    /// [`VerifiedImage::from_bytes`] runs this after the container checks;
+    /// [`VerifiedImage::verify`] runs it on its own. One implementation, so a
+    /// rule cannot pass on the disk path and fail on the in-memory one.
+    pub fn validate(&self) -> Result<(), LoadError> {
+        if self.header.hz == 0 {
+            return Err(LoadError::ZeroHz);
+        }
+        if !self.header.max_wait.is_finite() || self.header.max_wait < 0.0 {
+            return Err(LoadError::InvalidMaxWait {
+                bits: self.header.max_wait.to_bits(),
+            });
+        }
+
+        // ----- M, then I, the order §9 fixes -----
+        check_metadata(self)?;
+        check_code(self)?;
+        Ok(())
     }
 
     /// Compute the content hash the way §7 defines it, for use as a cache key.
@@ -407,24 +467,17 @@ fn check_container(raw: &RawHeader, bytes: &[u8]) -> Result<(), LoadError> {
         return Err(LoadError::ReservedNotZero { field: "reserved1" });
     }
 
-    // C4 — the clock must be usable, and the `WAIT` bound must be a sane f32.
-    // The old tick-budget check is gone with the cycle table: fuel is the only
-    // work bound, and it is charged per resume, not per tick.
-    if raw.hz == 0 {
-        return Err(LoadError::ZeroHz);
-    }
-    let max_wait = f32::from_bits(raw.max_wait_bits);
-    if !max_wait.is_finite() || max_wait < 0.0 {
-        return Err(LoadError::InvalidMaxWait {
-            bits: raw.max_wait_bits,
-        });
-    }
-
-    // C8, first half. Checked here rather than with the code section so that a
-    // zero-instruction file is refused before anything is allocated for it.
+    // C8, the early half. `validate` checks this too, for images built in
+    // memory; here it also has to be checked *before* the cursor starts reading a
+    // code section of length zero, or the table reads begin one instruction too
+    // early and report a misleading truncation instead.
     if raw.code_len == 0 {
         return Err(LoadError::CodeLenZero);
     }
+
+    // C4 and C8 live in `Image::validate`: they are properties of the decoded
+    // image, so the in-memory path has to check them too, and one implementation
+    // is what keeps the two paths from drifting.
 
     // C6 — one blake3 pass over everything before the hash. A file that fails
     // here is corrupt or forged, and nothing downstream is worth attempting.
@@ -561,36 +614,31 @@ fn check_metadata(image: &Image) -> Result<(), LoadError> {
 // §9.3 instructions
 // ---------------------------------------------------------------------------
 
-/// I1–I8. One linear pass over the raw words; everything it needs was already
+/// I2–I8. One linear pass over the decoded code; everything it needs was already
 /// bounded by C and M, which is what lets the runtime skip all of it
 /// (`docs/isa.md` §0.4).
 ///
-/// Returns the decoded instructions, which become `Image::code`. Decoding here
-/// rather than at execution time is what lets the runtime read a canonical
-/// `Insn` with no per-tick word parsing.
-fn check_code(raw_code: &[u64], image: &Image) -> Result<Vec<Insn>, LoadError> {
-    let code_len = raw_code.len();
+/// I1 is the decoder's job and lives in `VerifiedImage::from_bytes`: a word that
+/// is not an instruction never becomes an `Insn`, so there is nothing to check
+/// here.
+fn check_code(image: &Image) -> Result<(), LoadError> {
+    let code_len = image.code.len();
 
-    // C8, second half / I8 — the implicit HALT that the binder appends is the
-    // last instruction here, so "jump to the end" means "jump to code_len - 1".
-    if !matches!(
-        raw_code.last().map(|&word| Insn::decode(word)),
-        Some(Ok(insn)) if insn.op == OpCode::Halt
-    ) {
+    // C8 / I8 — the implicit HALT that the binder appends is the last
+    // instruction, so "jump to the end" means "jump to code_len - 1".
+    if image.code.is_empty() {
+        return Err(LoadError::CodeLenZero);
+    }
+    if image.code.last().map(|insn| insn.op) != Some(OpCode::Halt) {
         return Err(LoadError::MissingTrailingHalt);
     }
 
-    let mut code = Vec::with_capacity(code_len);
-
-    for (index, &word) in raw_code.iter().enumerate() {
-        // I1 — a reserved opcode is refused outright.
-        let insn =
-            Insn::decode(word).map_err(|source| LoadError::InvalidInstruction { index, source })?;
-
+    for (index, insn) in image.code.iter().enumerate() {
         // I2 — the canonical-form equation. Decoding zeroes the fields the
-        // opcode does not use, so a word that re-encodes differently is exactly
-        // a word with bits in unused positions.
-        if insn.encode() != word {
+        // opcode does not use, so an instruction whose re-encoding does not
+        // decode back to itself is exactly one with bits in unused positions.
+        let word = insn.encode();
+        if Insn::decode(word) != Ok(*insn) {
             return Err(LoadError::NonCanonicalInstruction { index, word });
         }
 
@@ -703,11 +751,9 @@ fn check_code(raw_code: &[u64], image: &Image) -> Result<Vec<Insn>, LoadError> {
 
             _ => {}
         }
-
-        code.push(insn);
     }
 
-    Ok(code)
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

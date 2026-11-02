@@ -22,6 +22,7 @@ use std::sync::{Mutex, Once, OnceLock};
 use cyberspine_asm::assembler::{generate_image, parse};
 use cyberspine_core::binfmt::image::Image;
 use libfuzzer_sys::fuzz_target;
+use cyberspine_core::binfmt::load::VerifiedImage;
 
 mod rig_for;
 
@@ -61,7 +62,7 @@ fuzz_target!(|data: &[u8]| {
     };
 
     let bytes = image.to_bytes();
-    let reloaded = match Image::from_bytes(&bytes) {
+    let reloaded = match VerifiedImage::from_bytes(&bytes) {
         Ok(reloaded) => reloaded,
         Err(err) => {
             eprintln!("assembler accepted a program the loader rejects: {err}");

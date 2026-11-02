@@ -218,6 +218,22 @@ impl Image {
         });
     }
 
+    pub fn push_sensor_f(&mut self, sensor: Sensor) {
+        self.sensors_f.push(sensor);
+    }
+
+    pub fn push_sensor_i(&mut self, sensor: Sensor) {
+        self.sensors_i.push(sensor);
+    }
+
+    pub fn push_var_f(&mut self, var: VarF) {
+        self.vars_f.push(var);
+    }
+
+    pub fn push_var_i(&mut self, var: VarI) {
+        self.vars_i.push(var);
+    }
+
     /// The metadata tables, laid out back to back with no gaps and no length
     /// prefixes (§6). Lengths are derived by writing, never stored (§3).
     fn encode_tables(&self) -> Vec<u8> {

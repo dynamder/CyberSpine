@@ -11,6 +11,7 @@
 
 use cyberspine_asm::assembler::{ImageGenError, generate_image, parse};
 use cyberspine_core::binfmt::image::{Image, SensorSource};
+use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::isa::jump::jump_target;
 use cyberspine_core::isa::{ImmType, Insn, OpCode};
 use cyberspine_core::rig::{Name, Rig, RigError};
@@ -102,8 +103,8 @@ fn a_minimal_program_gets_the_implicit_halt_and_the_header() {
     assert_eq!(image.code[0].op, OpCode::Nop);
     assert_eq!(image.code[1].op, OpCode::Halt);
 
-    let reloaded = Image::from_bytes(&image.to_bytes()).expect("the loader must accept it");
-    assert_eq!(reloaded, image);
+    let reloaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("the loader must accept it");
+    assert_eq!(reloaded.image(), &image);
 }
 
 #[test]
@@ -184,8 +185,8 @@ HALT
     let imm: Vec<u32> = image.code.iter().map(|insn| insn.imm).collect();
     assert_eq!(imm, vec![0, 2, 3, 0, 1, 0, 0, 1, 0, 1, 0, 0]);
 
-    let reloaded = Image::from_bytes(&image.to_bytes()).expect("the loader must accept it");
-    assert_eq!(reloaded, image);
+    let reloaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("the loader must accept it");
+    assert_eq!(reloaded.image(), &image);
 }
 
 /// The table order is the rig's order, not the source's: swapping two names in
@@ -360,8 +361,8 @@ L_done:
     assert_eq!(jump_target(17, image.code[17].imm as i32), Some(20));
     assert_eq!(jump_target(19, image.code[19].imm as i32), Some(16));
 
-    let reloaded = Image::from_bytes(&image.to_bytes()).expect("the loader must accept it");
-    assert_eq!(reloaded, image);
+    let reloaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("the loader must accept it");
+    assert_eq!(reloaded.image(), &image);
 }
 
 // ---------------------------------------------------------------------------

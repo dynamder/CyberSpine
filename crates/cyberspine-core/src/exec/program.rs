@@ -1,6 +1,7 @@
 //! The executor's read-only view of a loaded image (`docs/exec.md` §2).
 
-use crate::binfmt::image::{Image, VarF, VarI};
+use crate::binfmt::image::{VarF, VarI};
+use crate::binfmt::load::VerifiedImage;
 use crate::isa::Insn;
 
 /// A loaded action with the names stripped: exactly what execution reads.
@@ -21,7 +22,7 @@ pub struct Program<'p> {
 }
 
 impl<'p> Program<'p> {
-    pub fn new(image: &'p Image) -> Self {
+    pub fn new(image: &'p VerifiedImage) -> Self {
         Self {
             code: &image.code,
             vars_f: &image.vars_f,

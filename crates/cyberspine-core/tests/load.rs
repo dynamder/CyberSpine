@@ -15,6 +15,7 @@
 use cyberspine_core::binfmt::image::{
     HASH_LEN, HEADER_LEN, INSN_LEN, Image, Muscle, Sensor, SensorSource, VarF, VarI,
 };
+use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::binfmt::load::{LoadError, Table};
 use cyberspine_core::isa::register::RegId;
 use cyberspine_core::isa::{Insn, OpCode};
@@ -96,7 +97,7 @@ fn forge(image: &Image, patches: &[(usize, &[u8])]) -> Vec<u8> {
 }
 
 fn reject(bytes: &[u8]) -> LoadError {
-    match Image::from_bytes(bytes) {
+    match VerifiedImage::from_bytes(bytes) {
         Ok(image) => panic!(
             "expected rejection, but the loader accepted a {} instruction image",
             image.code.len()
@@ -112,8 +113,8 @@ fn reject(bytes: &[u8]) -> LoadError {
 #[test]
 fn a_minimal_image_round_trips() {
     let image = Image::halt_only();
-    let loaded = Image::from_bytes(&image.to_bytes()).expect("the minimum legal file");
-    assert_eq!(loaded, image);
+    let loaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("the minimum legal file");
+    assert_eq!(loaded.image(), &image);
 }
 
 #[test]
@@ -152,8 +153,8 @@ fn a_populated_image_round_trips() {
     image.header.layer = 3;
     image.header.fuel = 1234;
 
-    let loaded = Image::from_bytes(&image.to_bytes()).expect("a well-formed image");
-    assert_eq!(loaded, image);
+    let loaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("a well-formed image");
+    assert_eq!(loaded.image(), &image);
 }
 
 #[test]
@@ -177,7 +178,7 @@ fn float_var_initial_values_round_trip_bit_for_bit() {
         });
     }
 
-    let loaded = Image::from_bytes(&image.to_bytes()).expect("a well-formed image");
+    let loaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("a well-formed image");
     let bits: Vec<u32> = loaded.vars_f.iter().map(|v| v.init.to_bits()).collect();
     assert_eq!(bits, cases.to_vec());
 }
@@ -254,7 +255,7 @@ fn c2_isa_version_is_accepted_only_in_the_supported_set() {
     // must load.
     let current = forge(&image, &[(OFF_ISA_VERSION, &1u16.to_le_bytes())]);
     assert!(
-        Image::from_bytes(&current).is_ok(),
+        VerifiedImage::from_bytes(&current).is_ok(),
         "isa_version = 1 is the current version and must be accepted"
     );
 
@@ -311,7 +312,7 @@ fn a_rig_fingerprint_survives_the_round_trip() {
         "the fingerprint lives in the header's last 32 bytes"
     );
 
-    let loaded = Image::from_bytes(&bytes).expect("a fingerprinted image loads");
+    let loaded = VerifiedImage::from_bytes(&bytes).expect("a fingerprinted image loads");
     assert_eq!(loaded.header.rig, fingerprint);
     assert!(!loaded.header.rig.is_unbound());
 }
@@ -480,7 +481,7 @@ fn m1_a_name_that_is_not_an_ascii_identifier_is_refused() {
     image.push_muscle(n("_"));
     image.push_muscle(n("_9x"));
     assert!(
-        Image::from_bytes(&image.to_bytes()).is_ok(),
+        VerifiedImage::from_bytes(&image.to_bytes()).is_ok(),
         "'_' and '_9x' are valid identifiers"
     );
 }
@@ -523,7 +524,7 @@ fn m2_names_are_only_unique_within_a_table() {
         name: n("shared"),
         init: 0,
     });
-    assert!(Image::from_bytes(&image.to_bytes()).is_ok());
+    assert!(VerifiedImage::from_bytes(&image.to_bytes()).is_ok());
 }
 
 #[test]
@@ -829,7 +830,7 @@ fn i6_a_jump_to_the_last_instruction_is_legal() {
     // `target < code_len` — "jump to the end" means the trailing HALT, which is
     // reachable. The boundary must be inclusive on the inside.
     let image = image_with(&[insn(OpCode::Jmp, 0, 0, 0), insn(OpCode::Halt, 0, 0, 0)]);
-    assert!(Image::from_bytes(&image.to_bytes()).is_ok());
+    assert!(VerifiedImage::from_bytes(&image.to_bytes()).is_ok());
 
     let image = image_with(&[insn(OpCode::Jmp, 0, 0, 1), insn(OpCode::Halt, 0, 0, 0)]);
     assert!(matches!(
@@ -859,7 +860,7 @@ fn i7_wait_must_be_a_non_negative_finite_duration() {
         insn(OpCode::Wait, 0, 0, (-0.0f32).to_bits()),
         insn(OpCode::Halt, 0, 0, 0),
     ]);
-    assert!(Image::from_bytes(&image.to_bytes()).is_ok());
+    assert!(VerifiedImage::from_bytes(&image.to_bytes()).is_ok());
 }
 
 #[test]
@@ -883,7 +884,7 @@ fn i7_wait_must_not_exceed_the_headers_max_wait() {
         insn(OpCode::Wait, 0, 0, 600.0f32.to_bits()),
         insn(OpCode::Halt, 0, 0, 0),
     ]);
-    assert!(Image::from_bytes(&image.to_bytes()).is_ok());
+    assert!(VerifiedImage::from_bytes(&image.to_bytes()).is_ok());
 }
 
 // ===========================================================================

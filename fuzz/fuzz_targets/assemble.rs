@@ -17,6 +17,7 @@
 use cyberspine_asm::assembler::{generate_image, parse};
 use cyberspine_core::binfmt::image::Image;
 use libfuzzer_sys::fuzz_target;
+use cyberspine_core::binfmt::load::VerifiedImage;
 
 mod rig_for;
 
@@ -34,7 +35,7 @@ fuzz_target!(|data: &[u8]| {
 
     // Accepted means "this is a legal program". The loader must agree.
     let bytes = image.to_bytes();
-    let reloaded = match Image::from_bytes(&bytes) {
+    let reloaded = match VerifiedImage::from_bytes(&bytes) {
         Ok(reloaded) => reloaded,
         Err(err) => panic!("assembler accepted a program the loader rejects: {err}"),
     };

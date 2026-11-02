@@ -21,6 +21,7 @@ use cyberspine_core::exec::{Fault, Instance, Program, Sensors, Step};
 use cyberspine_core::isa::register::RegId;
 use cyberspine_core::isa::{Insn, OpCode};
 use cyberspine_core::rig::Name;
+use cyberspine_core::binfmt::load::VerifiedImage;
 
 fn muscle_name(text: &str) -> Name {
     Name::new(text).expect("the firmware's hand-built images use literal names")
@@ -106,7 +107,7 @@ fn halt() -> Insn {
 
 fn check_loader() {
     let bytes = include_bytes!("../../crates/cyberspine-core/tests/fixtures/valid_all.csp");
-    let image = Image::from_bytes(bytes).expect("the golden fixture must load");
+    let image = VerifiedImage::from_bytes(bytes).expect("the golden fixture must load");
     assert!(!image.code.is_empty());
 }
 
@@ -125,6 +126,7 @@ fn check_arithmetic() {
         unary(OpCode::Fsin, 9, 1),
         halt(),
     ]);
+    let image = VerifiedImage::verify(image).expect("the fixture is a legal image");
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
     assert_eq!(instance.resume(&program, &Sensors::new(&[], &[]), 0), Step::Halted);
@@ -160,6 +162,7 @@ fn check_control() {
         },
         halt(),
     ]);
+    let image = VerifiedImage::verify(image).expect("the fixture is a legal image");
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
     assert_eq!(instance.resume(&program, &Sensors::new(&[], &[]), 0), Step::Halted);
@@ -178,6 +181,7 @@ fn check_commands() {
         halt(),
     ]);
     image.push_muscle(muscle_name("m0"));
+    let image = VerifiedImage::verify(image).expect("the fixture is a legal image");
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -189,6 +193,7 @@ fn check_commands() {
 
 fn check_suspend() {
     let image = Image::new(vec![imovi(1, 9), Insn::new(OpCode::Yield), wait(0.3), halt()]);
+    let image = VerifiedImage::verify(image).expect("the fixture is a legal image");
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -214,6 +219,7 @@ fn check_fuel() {
         Insn::new(OpCode::Nop),
     ]);
     image.header.fuel = 2;
+    let image = VerifiedImage::verify(image).expect("the fixture is a legal image");
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 

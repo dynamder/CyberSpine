@@ -1,7 +1,8 @@
 //! The execution core against `docs/exec.md` §10: the 49 instruction bodies, fuel,
 //! `WAIT`, `FLUSH`, suspension and the pure-function guarantee.
 
-use cyberspine_core::binfmt::image::{Image, VarF, VarI};
+use cyberspine_core::binfmt::image::{Image, Sensor, SensorSource, VarF, VarI};
+use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::exec::{Fault, Instance, Program, Sensors, Status, Step};
 use cyberspine_core::isa::register::RegId;
 use cyberspine_core::isa::{Insn, OpCode, math};
@@ -108,6 +109,10 @@ fn clocked(code: Vec<Insn>, hz: u32) -> Image {
     image
 }
 
+fn verified(image: Image) -> VerifiedImage {
+    VerifiedImage::verify(image).expect("the fixture is a legal image")
+}
+
 // ---------------------------------------------------------------------------
 // Lifecycle (`docs/isa.md` §8.3)
 // ---------------------------------------------------------------------------
@@ -115,6 +120,7 @@ fn clocked(code: Vec<Insn>, hz: u32) -> Image {
 #[test]
 fn halt_terminates_and_a_second_resume_is_dead() {
     let image = image(vec![halt()]);
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -130,7 +136,8 @@ fn halt_terminates_and_a_second_resume_is_dead() {
 
 #[test]
 fn a_faulted_instance_stays_faulted() {
-    let image = fed(vec![nop()], 1);
+    let image = fed(vec![nop(), halt()], 1);
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -145,6 +152,7 @@ fn a_faulted_instance_stays_faulted() {
 #[test]
 fn yield_suspends_at_the_next_instruction_and_keeps_state() {
     let image = image(vec![imovi(1, 42), Insn::new(OpCode::Yield), halt()]);
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -170,6 +178,7 @@ fn the_whole_register_file_survives_a_suspend() {
         Insn::new(OpCode::Yield),
         halt(),
     ]);
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -185,6 +194,7 @@ fn the_whole_register_file_survives_a_suspend() {
 #[test]
 fn writes_to_f0_and_i0_are_dropped_by_every_instruction() {
     let image = image(vec![fmovi(0, 1.0), imovi(0, 1), halt()]);
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -206,6 +216,7 @@ fn moves_and_immediates() {
         unary(OpCode::Imov, 4, 2),
         halt(),
     ]);
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -225,6 +236,7 @@ fn float_arithmetic_is_ieee_binary32() {
         binary(OpCode::Fdiv, 6, 1, 2),
         halt(),
     ]);
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -246,6 +258,7 @@ fn integer_arithmetic_wraps_instead_of_trapping() {
         binary(OpCode::Imul, 6, 5, 2),
         halt(),
     ]);
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -273,6 +286,7 @@ fn min_and_max_follow_ieee_754_2019_minimum_and_maximum() {
             binary(OpCode::Fmax, 4, 2, 3),
             halt(),
         ]);
+        let image = verified(image);
         let program = Program::new(&image);
         let mut instance = Instance::new(&program);
 
@@ -301,6 +315,7 @@ fn neg_and_abs_are_bit_operations() {
         unary(OpCode::Fabs, 6, 5),
         halt(),
     ]);
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -325,6 +340,7 @@ fn sqrt_sin_cos_and_frac_use_the_frozen_kernel() {
         unary(OpCode::Ffrac, 9, 8),
         halt(),
     ]);
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -353,6 +369,7 @@ fn madd_rounds_twice_and_is_never_fused() {
         ternary(OpCode::Fmadd, 4, 1, 2, 3),
         halt(),
     ]);
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -386,6 +403,7 @@ fn lerp_follows_the_specified_order_and_clamp_is_a_composition() {
         ternary(OpCode::Fclamp, 12, 9, 10, 11),
         halt(),
     ]);
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -416,6 +434,7 @@ fn conversions_saturate_and_round_to_nearest_even() {
         unary(OpCode::Itof, 12, 11),
         halt(),
     ]);
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -454,6 +473,7 @@ fn condition_taken(setup: Vec<Insn>, condition: Insn) -> bool {
     code.push(halt());
 
     let image = image(code);
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
     assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Halted);
@@ -528,6 +548,7 @@ fn a_backward_jump_drives_a_counted_loop() {
         },
         halt(),
     ]);
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -543,7 +564,7 @@ fn a_backward_jump_drives_a_counted_loop() {
 fn senses_read_the_frozen_snapshot() {
     let floats = [1.5, -2.5];
     let ints = [7, -9];
-    let image = image(vec![
+    let mut image = image(vec![
         Insn {
             rd: reg(1),
             imm: 0,
@@ -561,6 +582,19 @@ fn senses_read_the_frozen_snapshot() {
         },
         halt(),
     ]);
+    for name in ["a", "b"] {
+        image.push_sensor_f(Sensor {
+            name: n(name),
+            source: SensorSource::Backend,
+        });
+    }
+    for name in ["c", "d"] {
+        image.push_sensor_i(Sensor {
+            name: n(name),
+            source: SensorSource::Backend,
+        });
+    }
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -588,6 +622,7 @@ fn an_instance_cannot_read_back_its_own_excitation() {
         halt(),
     ]);
     image.push_muscle(n("m0"));
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -625,6 +660,7 @@ fn variables_take_their_initial_value_from_the_image() {
         init: -4,
     });
 
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
     assert_eq!(instance.vars_f(), [2.5]);
@@ -656,6 +692,7 @@ fn variables_survive_a_suspend() {
         init: 0.0,
     });
 
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
     assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Yielded);
@@ -676,6 +713,7 @@ fn excite_alone_publishes_nothing() {
         halt(),
     ]);
     image.push_muscle(n("m0"));
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -708,6 +746,7 @@ fn flush_publishes_only_what_was_pending_and_keeps_it_afterwards() {
     ]);
     image.push_muscle(n("m0"));
     image.push_muscle(n("m1"));
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -746,6 +785,7 @@ fn a_published_value_stays_across_a_flush_of_another_muscle() {
     ]);
     image.push_muscle(n("m0"));
     image.push_muscle(n("m1"));
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -770,7 +810,8 @@ fn a_published_value_stays_across_a_flush_of_another_muscle() {
 
 #[test]
 fn fuel_stops_exactly_before_the_next_instruction() {
-    let image = fed(vec![nop(), nop(), nop()], 2);
+    let image = fed(vec![nop(), nop(), nop(), halt()], 2);
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -784,6 +825,7 @@ fn fuel_stops_exactly_before_the_next_instruction() {
 #[test]
 fn zero_fuel_faults_at_the_entry_without_executing_anything() {
     let image = fed(vec![imovi(1, 1), halt()], 0);
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -796,7 +838,8 @@ fn zero_fuel_faults_at_the_entry_without_executing_anything() {
 
 #[test]
 fn a_self_jump_burns_fuel_at_the_same_pc() {
-    let image = fed(vec![jump(-1)], 3);
+    let image = fed(vec![jump(-1), halt()], 3);
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -812,6 +855,7 @@ fn every_executed_instruction_costs_one_including_jumps() {
         vec![imovi(2, 1), binary(OpCode::Iadd, 1, 1, 2), jump(-2), halt()],
         6,
     );
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -825,6 +869,7 @@ fn every_executed_instruction_costs_one_including_jumps() {
 #[test]
 fn fuel_is_refilled_on_every_resume() {
     let image = fed(vec![nop(), Insn::new(OpCode::Yield), nop(), halt()], 2);
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -838,6 +883,7 @@ fn fuel_is_refilled_on_every_resume() {
 
 fn waited_at(seconds: f32, hz: u32, now: u64) -> u64 {
     let image = clocked(vec![wait(seconds), halt()], hz);
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -857,12 +903,6 @@ fn wait_rounds_ticks_up_never_down() {
         101,
         "any positive duration is one tick"
     );
-    assert_eq!(
-        waited_at(-1.0, 60, 100),
-        100,
-        "a negative duration is zero ticks"
-    );
-    assert_eq!(waited_at(f32::NAN, 60, 100), 100);
     assert_eq!(waited_at(0.5, 30, 0), 15);
 }
 
@@ -877,13 +917,14 @@ fn wait_rounds_a_f32_a_whole_tick_up_because_ceil_amplifies_the_error() {
 
 #[test]
 fn wait_saturates_instead_of_overflowing() {
-    assert_eq!(waited_at(f32::MAX, 60, u64::MAX - 10), u64::MAX);
+    assert_eq!(waited_at(600.0, 60, u64::MAX - 10), u64::MAX);
     assert_eq!(waited_at(1.0, 60, u64::MAX - 5), u64::MAX);
 }
 
 #[test]
 fn a_waited_instance_runs_again_when_the_host_decides() {
     let image = image(vec![wait(0.25), fmovi(1, 1.0), halt()]);
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -932,7 +973,8 @@ fn the_same_inputs_produce_bit_identical_commands() {
     let zeros = [0.0];
     let sensors = Sensors::new(&zeros, &[]);
     let trace = |image: &Image| {
-        let program = Program::new(image);
+        let image = verified(image.clone());
+        let program = Program::new(&image);
         let mut instance = Instance::new(&program);
         let mut steps = Vec::new();
         let mut published = Vec::new();
@@ -959,6 +1001,7 @@ fn the_same_inputs_produce_bit_identical_commands() {
 fn a_short_float_snapshot_is_a_host_violation() {
     let mut image = Image::new(vec![halt()]);
     image.push_muscle(n("m0"));
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -975,6 +1018,7 @@ fn a_short_integer_snapshot_is_a_host_violation() {
             name: n("tick"),
             source: cyberspine_core::binfmt::image::SensorSource::BuiltinTick,
         });
+    let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 

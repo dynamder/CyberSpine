@@ -1,4 +1,4 @@
-use cyberspine_core::binfmt::image::Image;
+use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_demo_maze::{
     Error, MANIFEST, MAX_TICKS, SOURCE, Session, assemble,
     backend::{MazeBackend, rig},
@@ -44,7 +44,7 @@ fn the_assembled_bytes_load_and_run() {
     let bytes = assemble(SOURCE, &rig)
         .expect("the shipped source assembles")
         .to_bytes();
-    let loaded = Image::from_bytes(&bytes).expect("the assembler's own output loads");
+    let loaded = VerifiedImage::from_bytes(&bytes).expect("the assembler's own output loads");
 
     let mut host = Host::new(MazeBackend::new());
     host.load(loaded)
