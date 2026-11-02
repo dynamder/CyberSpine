@@ -35,7 +35,7 @@
 //! 哪个字段"，而 `register_file_mismatch_is_rejected` 负责证明文件不匹配会被拒绝。
 
 use cyberspine_asm::assembler::header::header;
-use cyberspine_asm::assembler::text::{AsmInsn, AsmOperand, TextItem, text};
+use cyberspine_asm::assembler::text::{AsmInsn, AsmOperand, Located, TextItem, text};
 use cyberspine_asm::assembler::{AsmParseErrors, Location, ParseError, ParseErrorKind};
 use cyberspine_core::isa::register::{RegId, RegType};
 use cyberspine_core::isa::{OpCode, RegName};
@@ -45,9 +45,20 @@ use smol_str::SmolStr;
 // 脚手架
 // ---------------------------------------------------------------------------
 
+/// The section's items without their locations; the location tests below check
+/// those on their own.
+fn strip(items: Vec<Located<TextItem>>) -> Vec<TextItem> {
+    items.into_iter().map(|located| located.item).collect()
+}
+
+/// The instruction section as items only; the location tests check the rest.
+fn section_items(input: &mut &str) -> Result<Vec<TextItem>, AsmParseErrors> {
+    text(input).map(strip)
+}
+
 fn text_of(source: &str) -> Result<Vec<TextItem>, AsmParseErrors> {
     let mut cursor = source;
-    text(&mut cursor)
+    text(&mut cursor).map(strip)
 }
 
 #[track_caller]
@@ -469,7 +480,7 @@ fn blank_and_comment_only_lines_are_skipped() {
     let source = src(&["", "   ", "# 整行注释", "\t# 缩进注释", "HALT"]);
     let mut cursor = source.as_str();
     assert_eq!(
-        text(&mut cursor).expect("应当成功"),
+        section_items(&mut cursor).expect("应当成功"),
         vec![insn(OpCode::Halt, vec![])]
     );
 }
@@ -752,7 +763,7 @@ fn header_and_text_share_one_cursor() {
     );
 
     assert_eq!(
-        text(&mut cursor).expect("text 阶段应当成功"),
+        section_items(&mut cursor).expect("text 阶段应当成功"),
         vec![
             label("entry"),
             insn(OpCode::Fmovi, vec![frd(1), AsmOperand::ImmF32(1.0)]),
@@ -781,7 +792,7 @@ fn text_marker_is_optional_but_header_still_ends_at_the_first_instruction() {
     header(&mut cursor).expect("没有 .text 时 header 也应当成功");
     assert_eq!(cursor, "entry:\nHALT\n");
     assert_eq!(
-        text(&mut cursor).expect("text 应当成功"),
+        section_items(&mut cursor).expect("text 应当成功"),
         vec![label("entry"), insn(OpCode::Halt, vec![])]
     );
 }
@@ -801,7 +812,7 @@ fn empty_instruction_section_yields_no_items() {
     let mut cursor = source.as_str();
     header(&mut cursor).expect("header 应当成功");
     assert_eq!(cursor, "");
-    assert_eq!(text(&mut cursor).expect("text 应当成功"), vec![]);
+    assert_eq!(section_items(&mut cursor).expect("text 应当成功"), vec![]);
 }
 
 // ---------------------------------------------------------------------------
@@ -826,7 +837,7 @@ fn crlf_line_endings_are_accepted() {
     let mut cursor = source;
     header(&mut cursor).expect("header 应当成功");
     assert_eq!(
-        text(&mut cursor).expect("text 应当成功"),
+        section_items(&mut cursor).expect("text 应当成功"),
         vec![insn(OpCode::Halt, vec![])]
     );
 }

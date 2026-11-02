@@ -373,11 +373,11 @@ L_done:
 fn duplicate_and_undefined_labels_are_rejected() {
     assert!(matches!(
         generation_error(".text\na:\na:\nHALT\n"),
-        ImageGenError::DuplicateLabel(_)
+        ImageGenError::DuplicateLabel { .. }
     ));
     assert!(matches!(
         generation_error(".text\nJMP nowhere\nHALT\n"),
-        ImageGenError::UndefinedLabel(_)
+        ImageGenError::UndefinedLabel { .. }
     ));
 }
 
@@ -387,23 +387,23 @@ fn unknown_names_are_rejected_per_namespace() {
 
     assert!(matches!(
         error_with(".text\nFSENSE f1, nope\nHALT\n", &rig),
-        ImageGenError::UnknownSensorF(_)
+        ImageGenError::UnknownSensorF { .. }
     ));
     assert!(matches!(
         error_with(".text\nISENSE i1, nope\nHALT\n", &rig),
-        ImageGenError::UnknownSensorI(_)
+        ImageGenError::UnknownSensorI { .. }
     ));
     assert!(matches!(
         error_with(".text\nFVGET f1, nope\nHALT\n", &rig),
-        ImageGenError::UnknownVarF(_)
+        ImageGenError::UnknownVarF { .. }
     ));
     assert!(matches!(
         error_with(".text\nIVGET i1, nope\nHALT\n", &rig),
-        ImageGenError::UnknownVarI(_)
+        ImageGenError::UnknownVarI { .. }
     ));
     assert!(matches!(
         error_with(".text\nFEXCITE nope, f1\nHALT\n", &rig),
-        ImageGenError::UnknownExciteTarget(_)
+        ImageGenError::UnknownExciteTarget { .. }
     ));
 }
 
@@ -420,7 +420,7 @@ HALT
         &rig,
     );
     assert!(
-        matches!(err, ImageGenError::GroupOutsideExcite(_)),
+        matches!(err, ImageGenError::GroupOutsideExcite { .. }),
         "unexpected error: {err}"
     );
 }
@@ -526,7 +526,8 @@ HALT
             err,
             ImageGenError::PendingNotFlushed {
                 excite_pc: 0,
-                suspend_pc: 1
+                suspend_pc: 1,
+                ..
             }
         ),
         "unexpected error: {err}"
@@ -660,4 +661,45 @@ top:
             assert!(target < image.code.len(), "jump at {pc} -> {target}");
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Source locations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_generation_error_points_at_its_own_line() {
+    use cyberspine_asm::assembler::Location;
+
+    // The standard header is four lines, so `.text` is line 5.
+    let err = error_with(".text\nNOP\nJMP missing\nHALT\n", &empty_rig());
+    assert!(matches!(err, ImageGenError::UndefinedLabel { .. }));
+    assert_eq!(err.location(), Some(Location::new(7, 1)));
+
+    // A label's location is where the label is, not where the section starts.
+    let err = error_with(".text\n  dup:\n  dup:\nHALT\n", &empty_rig());
+    assert!(matches!(err, ImageGenError::DuplicateLabel { .. }));
+    assert_eq!(err.location(), Some(Location::new(7, 3)));
+
+    // An instruction error is located at the instruction, columns included.
+    let err = error_with(".text\n  WAIT -1.0\nHALT\n", &empty_rig());
+    assert!(matches!(err, ImageGenError::InvalidWait { .. }));
+    assert_eq!(err.location(), Some(Location::new(6, 3)));
+}
+
+#[test]
+fn a_header_error_has_no_line() {
+    // The clock is a header field, and the header is not located per field yet:
+    // the message names the field, and `location` says so honestly.
+    let bad_header = "\
+.layer 10
+.clock hz = 0
+.fuel 4096
+.max_wait 600.0
+.text
+HALT
+";
+    let err = generate_with(bad_header, &empty_rig()).expect_err("hz = 0 is refused");
+    assert!(matches!(err, ImageGenError::ZeroHz));
+    assert_eq!(err.location(), None);
 }

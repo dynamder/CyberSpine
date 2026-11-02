@@ -46,7 +46,7 @@ pub fn rig_for(asm: &Asm) -> Rig {
     }
 
     for item in &asm.text {
-        let TextItem::Insn(insn) = item else {
+        let TextItem::Insn(insn) = &item.item else {
             continue;
         };
         for operand in &insn.operands {

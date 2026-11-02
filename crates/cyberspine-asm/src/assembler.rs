@@ -19,7 +19,7 @@ use winnow::{Parser, combinator::trace, token::take_while};
 use diagnostic::PResult;
 pub use diagnostic::{AsmParseErrors, Location, ParseError, ParseErrorKind};
 use header::{AsmHeader, header as header_section};
-use text::{AsmInsn, AsmOperand, TextItem, text as text_section};
+use text::{AsmInsn, AsmOperand, Located, TextItem, text as text_section};
 
 pub type Line<'i> = &'i str;
 
@@ -47,7 +47,7 @@ pub(crate) fn comments<'i>(input: &mut Line<'i>) -> PResult<()> {
 #[derive(Debug, Clone)]
 pub struct Asm {
     pub header: AsmHeader,
-    pub text: Vec<TextItem>,
+    pub text: Vec<Located<TextItem>>,
 }
 
 /// Parse a whole `.csa` source. `header` owns the cursor up to `.text` (or the
@@ -60,13 +60,19 @@ pub fn parse(asm_str: &str) -> Result<Asm, AsmParseErrors> {
     let header = header_section(&mut cursor);
 
     // `text()` numbers lines from its own input, which starts *after* the
-    // declaration section. Shift its errors back into file coordinates.
+    // declaration section. Shift both its errors and its item locations back
+    // into file coordinates, so a generation error points at the real line.
     let header_len = asm_str.len() - cursor.len();
     let text_line_offset = asm_str[..header_len].matches('\n').count();
     let text = text_section(&mut cursor);
 
     match (header, text) {
-        (Ok(header), Ok(text)) => Ok(Asm { header, text }),
+        (Ok(header), Ok(mut text)) => {
+            for item in &mut text {
+                item.location.line += text_line_offset;
+            }
+            Ok(Asm { header, text })
+        }
         (header, text) => {
             let mut errors = Vec::new();
             if let Err(mut section_errors) = header {
@@ -87,10 +93,10 @@ pub fn parse(asm_str: &str) -> Result<Asm, AsmParseErrors> {
 /// Everything the assembler can reject without a backend (`docs/asm.md` §6).
 #[derive(Debug, Error, PartialEq)]
 pub enum ImageGenError {
-    #[error("duplicate label `{0}`")]
-    DuplicateLabel(SmolStr),
-    #[error("undefined label `{0}`")]
-    UndefinedLabel(SmolStr),
+    #[error("duplicate label `{label}`")]
+    DuplicateLabel { label: SmolStr, location: Location },
+    #[error("undefined label `{label}`")]
+    UndefinedLabel { label: SmolStr, location: Location },
     #[error(
         "label `{label}` points to {index}, past the end of the code ({code_len} instructions)"
     )]
@@ -98,49 +104,90 @@ pub enum ImageGenError {
         label: SmolStr,
         index: usize,
         code_len: usize,
+        location: Location,
     },
-    #[error("instruction {pc}: offset {offset} leaves the code (code_len {code_len})")]
+    #[error("offset {offset} leaves the code (code_len {code_len})")]
     JumpTargetOutOfRange {
         pc: usize,
         offset: i32,
         code_len: usize,
+        location: Location,
     },
-    #[error("instruction {pc}: jump distance does not fit an i32 offset")]
-    JumpOffsetOverflow { pc: usize },
-    #[error("malformed {0:?}: expected an index operand")]
-    MissingIndexOperand(OpCode),
+    #[error("jump distance does not fit an i32 offset")]
+    JumpOffsetOverflow { pc: usize, location: Location },
+    #[error("malformed {op:?}: expected an index operand")]
+    MissingIndexOperand { op: OpCode, location: Location },
     #[error("`{0}` is declared more than once")]
     DuplicateName(SmolStr),
     #[error("`{0}` is a reserved name")]
     ReservedName(SmolStr),
     #[error("the rig is not usable: {0}")]
     Rig(#[from] RigError),
-    #[error("FEXCITE target `{0}` is neither a muscle nor a group")]
-    UnknownExciteTarget(SmolStr),
-    #[error("unknown float sensor `{0}`")]
-    UnknownSensorF(SmolStr),
-    #[error("unknown integer sensor `{0}`")]
-    UnknownSensorI(SmolStr),
-    #[error("unknown float variable `{0}`")]
-    UnknownVarF(SmolStr),
-    #[error("unknown integer variable `{0}`")]
-    UnknownVarI(SmolStr),
-    #[error("group `{0}` is only legal as a FEXCITE target")]
-    GroupOutsideExcite(SmolStr),
+    #[error("FEXCITE target `{name}` is neither a muscle nor a group")]
+    UnknownExciteTarget { name: SmolStr, location: Location },
+    #[error("unknown float sensor `{name}`")]
+    UnknownSensorF { name: SmolStr, location: Location },
+    #[error("unknown integer sensor `{name}`")]
+    UnknownSensorI { name: SmolStr, location: Location },
+    #[error("unknown float variable `{name}`")]
+    UnknownVarF { name: SmolStr, location: Location },
+    #[error("unknown integer variable `{name}`")]
+    UnknownVarI { name: SmolStr, location: Location },
+    #[error("group `{name}` is only legal as a FEXCITE target")]
+    GroupOutsideExcite { name: SmolStr, location: Location },
     #[error("group `{group}` contains unknown muscle `{member}`")]
     UnknownGroupMember { group: SmolStr, member: SmolStr },
     #[error("group `{0}` collides with a muscle name")]
     GroupNameCollision(SmolStr),
-    #[error("FEXCITE at {excite_pc} is still pending at {suspend_pc}; FLUSH is missing")]
-    PendingNotFlushed { excite_pc: usize, suspend_pc: usize },
-    #[error("WAIT at {pc} is not a non-negative finite duration up to max_wait")]
-    InvalidWait { pc: usize, seconds: f32 },
+    #[error("FEXCITE is still pending here; FLUSH is missing")]
+    PendingNotFlushed {
+        excite_pc: usize,
+        suspend_pc: usize,
+        location: Location,
+    },
+    #[error("WAIT {seconds} is not a non-negative finite duration up to max_wait")]
+    InvalidWait {
+        pc: usize,
+        seconds: f32,
+        location: Location,
+    },
     #[error("`hz` must be greater than zero")]
     ZeroHz,
     #[error("`max_wait` must be a non-negative finite f32")]
     InvalidMaxWait,
     #[error("the program is too large for the format's 32-bit instruction count")]
     TooManyInstructions,
+}
+
+impl ImageGenError {
+    /// Where in the source this error belongs, when the source construct is
+    /// known. Header, rig and size errors have no single line to point at.
+    pub fn location(&self) -> Option<Location> {
+        match self {
+            Self::DuplicateLabel { location, .. }
+            | Self::UndefinedLabel { location, .. }
+            | Self::LabelOutOfRange { location, .. }
+            | Self::JumpTargetOutOfRange { location, .. }
+            | Self::JumpOffsetOverflow { location, .. }
+            | Self::MissingIndexOperand { location, .. }
+            | Self::UnknownExciteTarget { location, .. }
+            | Self::UnknownSensorF { location, .. }
+            | Self::UnknownSensorI { location, .. }
+            | Self::UnknownVarF { location, .. }
+            | Self::UnknownVarI { location, .. }
+            | Self::GroupOutsideExcite { location, .. }
+            | Self::PendingNotFlushed { location, .. }
+            | Self::InvalidWait { location, .. } => Some(*location),
+            Self::DuplicateName(_)
+            | Self::ReservedName(_)
+            | Self::UnknownGroupMember { .. }
+            | Self::GroupNameCollision(_)
+            | Self::Rig(_)
+            | Self::ZeroHz
+            | Self::InvalidMaxWait
+            | Self::TooManyInstructions => None,
+        }
+    }
 }
 
 /// Resolve names, labels and groups against `rig`, then produce the canonical
@@ -151,18 +198,36 @@ pub fn generate_image(asm: &Asm, rig: &Rig) -> Result<Image, ImageGenError> {
 
     let symbols = Symbols::build(&asm.header, rig)?;
     let layout = layout(&asm.text, &symbols)?;
-    let mut code: Vec<Insn> = emit(&layout, &symbols).collect::<Result<_, _>>()?;
+
+    let mut code = Vec::with_capacity(layout.code_len);
+    let mut locations = Vec::with_capacity(layout.code_len);
+    for emitted in emit(&layout, &symbols) {
+        let (insn, location) = emitted?;
+        code.push(insn);
+        locations.push(location);
+    }
     debug_assert_eq!(code.len(), layout.code_len);
-    append_trailing_halt(&mut code);
+
+    // The implicit `HALT` has no line of its own; if it ever becomes the site of
+    // a diagnostic, the last real instruction is the closest thing to it.
+    if append_trailing_halt(&mut code) {
+        locations.push(
+            layout
+                .emissions
+                .last()
+                .map_or(Location::new(1, 1), |e| e.location),
+        );
+    }
+    debug_assert_eq!(locations.len(), code.len());
 
     if code.len() > u32::MAX as usize {
         return Err(ImageGenError::TooManyInstructions);
     }
 
     check_labels(&layout.labels, code.len())?;
-    check_jumps(&code)?;
-    check_waits(&code, max_wait(&asm.header)?)?;
-    check_pending(&code)?;
+    check_jumps(&code, &locations)?;
+    check_waits(&code, &locations, max_wait(&asm.header)?)?;
+    check_pending(&code, &locations)?;
 
     Ok(Image {
         header: ImageFixedHeader {
@@ -357,6 +422,7 @@ fn check_declarable(name: &SmolStr) -> Result<(), ImageGenError> {
 /// where it starts in the code, and (for `FEXCITE`) the muscles it expands to.
 struct Emission<'a> {
     insn: &'a AsmInsn,
+    location: Location,
     start_pc: usize,
     /// `None` for every instruction except `FEXCITE`; `Some` has one muscle
     /// index per emitted instruction, so a group can yield N instructions.
@@ -366,33 +432,45 @@ struct Emission<'a> {
 /// First pass (`docs/asm.md` §5): labels point at the instruction that follows
 /// them, and a `group` FEXCITE is expanded once into `Emission::targets`.
 struct Layout<'a> {
-    labels: BTreeMap<SmolStr, usize>,
+    labels: BTreeMap<SmolStr, (usize, Location)>,
     emissions: Vec<Emission<'a>>,
     /// Instruction count before the implicit `HALT`.
     code_len: usize,
 }
 
-fn layout<'a>(items: &'a [TextItem], symbols: &Symbols) -> Result<Layout<'a>, ImageGenError> {
+fn layout<'a>(
+    items: &'a [Located<TextItem>],
+    symbols: &Symbols,
+) -> Result<Layout<'a>, ImageGenError> {
     let mut labels = BTreeMap::new();
     let mut emissions = Vec::new();
     let mut pc = 0usize;
 
-    for item in items {
-        match item {
+    for located in items {
+        let location = located.location;
+        match &located.item {
             TextItem::Label(name) => {
-                if labels.insert(name.clone(), pc).is_some() {
-                    return Err(ImageGenError::DuplicateLabel(name.clone()));
+                if labels.insert(name.clone(), (pc, location)).is_some() {
+                    return Err(ImageGenError::DuplicateLabel {
+                        label: name.clone(),
+                        location,
+                    });
                 }
             }
             TextItem::Insn(insn) => {
                 let targets = if insn.op == OpCode::Fexcite {
-                    Some(excite_targets(excite_name(insn)?, symbols)?)
+                    Some(excite_targets(
+                        excite_name(insn, location)?,
+                        location,
+                        symbols,
+                    )?)
                 } else {
                     None
                 };
                 let count = targets.as_ref().map_or(1, Vec::len);
                 emissions.push(Emission {
                     insn,
+                    location,
                     start_pc: pc,
                     targets,
                 });
@@ -417,43 +495,56 @@ fn layout<'a>(items: &'a [TextItem], symbols: &Symbols) -> Result<Layout<'a>, Im
 fn emit<'a, 'i>(
     layout: &'a Layout<'i>,
     symbols: &'a Symbols,
-) -> impl Iterator<Item = Result<Insn, ImageGenError>> + 'a {
+) -> impl Iterator<Item = Result<(Insn, Location), ImageGenError>> + 'a {
     layout.emissions.iter().flat_map(move |emission| {
         let count = emission.targets.as_ref().map_or(1, Vec::len);
         (0..count).map(move |offset| {
             let excite_index = emission.targets.as_ref().map(|targets| targets[offset]);
             emit_insn(
                 emission.insn,
+                emission.location,
                 emission.start_pc + offset,
                 &layout.labels,
                 symbols,
                 excite_index,
             )
+            .map(|insn| (insn, emission.location))
         })
     })
 }
 
-fn excite_name(insn: &AsmInsn) -> Result<&SmolStr, ImageGenError> {
+fn excite_name(insn: &AsmInsn, location: Location) -> Result<&SmolStr, ImageGenError> {
     match insn.operands.first() {
         Some(AsmOperand::Index(name)) => Ok(name),
-        _ => Err(ImageGenError::MissingIndexOperand(insn.op)),
+        _ => Err(ImageGenError::MissingIndexOperand {
+            op: insn.op,
+            location,
+        }),
     }
 }
 
-fn excite_targets(name: &SmolStr, symbols: &Symbols) -> Result<Vec<u32>, ImageGenError> {
+fn excite_targets(
+    name: &SmolStr,
+    location: Location,
+    symbols: &Symbols,
+) -> Result<Vec<u32>, ImageGenError> {
     if let Some(members) = symbols.groups.get(name) {
         return Ok(members.clone());
     }
     if let Some(&muscle) = symbols.muscles.get(name) {
         return Ok(vec![muscle]);
     }
-    Err(ImageGenError::UnknownExciteTarget(name.clone()))
+    Err(ImageGenError::UnknownExciteTarget {
+        name: name.clone(),
+        location,
+    })
 }
 
 fn emit_insn(
     asm: &AsmInsn,
+    location: Location,
     pc: usize,
-    labels: &BTreeMap<SmolStr, usize>,
+    labels: &BTreeMap<SmolStr, (usize, Location)>,
     symbols: &Symbols,
     excite_index: Option<u32>,
 ) -> Result<Insn, ImageGenError> {
@@ -473,15 +564,19 @@ fn emit_insn(
             AsmOperand::Index(name) => {
                 insn.imm = match excite_index {
                     Some(index) => index,
-                    None => resolve_index(asm.op, name, symbols)?,
+                    None => resolve_index(asm.op, name, location, symbols)?,
                 };
             }
             AsmOperand::Target(name) => {
-                let target = *labels
-                    .get(name)
-                    .ok_or_else(|| ImageGenError::UndefinedLabel(name.clone()))?;
-                let offset =
-                    jump_offset(pc, target).ok_or(ImageGenError::JumpOffsetOverflow { pc })?;
+                let (target, _) =
+                    *labels
+                        .get(name)
+                        .ok_or_else(|| ImageGenError::UndefinedLabel {
+                            label: name.clone(),
+                            location,
+                        })?;
+                let offset = jump_offset(pc, target)
+                    .ok_or(ImageGenError::JumpOffsetOverflow { pc, location })?;
                 insn.imm = offset as u32;
             }
         }
@@ -490,49 +585,82 @@ fn emit_insn(
     Ok(insn)
 }
 
-fn resolve_index(op: OpCode, name: &SmolStr, symbols: &Symbols) -> Result<u32, ImageGenError> {
+fn resolve_index(
+    op: OpCode,
+    name: &SmolStr,
+    location: Location,
+    symbols: &Symbols,
+) -> Result<u32, ImageGenError> {
     let (table, unknown) = match op {
         OpCode::Fsense => (
             &symbols.sensors_f,
-            ImageGenError::UnknownSensorF(name.clone()),
+            ImageGenError::UnknownSensorF {
+                name: name.clone(),
+                location,
+            },
         ),
         OpCode::Isense => (
             &symbols.sensors_i,
-            ImageGenError::UnknownSensorI(name.clone()),
+            ImageGenError::UnknownSensorI {
+                name: name.clone(),
+                location,
+            },
         ),
-        OpCode::Fvget | OpCode::Fvset => {
-            (&symbols.vars_f, ImageGenError::UnknownVarF(name.clone()))
-        }
-        OpCode::Ivget | OpCode::Ivset => {
-            (&symbols.vars_i, ImageGenError::UnknownVarI(name.clone()))
-        }
+        OpCode::Fvget | OpCode::Fvset => (
+            &symbols.vars_f,
+            ImageGenError::UnknownVarF {
+                name: name.clone(),
+                location,
+            },
+        ),
+        OpCode::Ivget | OpCode::Ivset => (
+            &symbols.vars_i,
+            ImageGenError::UnknownVarI {
+                name: name.clone(),
+                location,
+            },
+        ),
         // No other opcode declares an `Index` operand. Treat the impossible
         // combination as a malformed instruction rather than a panic.
-        _ => return Err(ImageGenError::MissingIndexOperand(op)),
+        _ => {
+            return Err(ImageGenError::MissingIndexOperand { op, location });
+        }
     };
 
     if let Some(&index) = table.get(name) {
         return Ok(index);
     }
     if symbols.groups.contains_key(name) {
-        return Err(ImageGenError::GroupOutsideExcite(name.clone()));
+        return Err(ImageGenError::GroupOutsideExcite {
+            name: name.clone(),
+            location,
+        });
     }
     Err(unknown)
 }
 
-fn append_trailing_halt(code: &mut Vec<Insn>) {
-    if code.last().map(|insn| insn.op) != Some(OpCode::Halt) {
-        code.push(Insn::new(OpCode::Halt));
+/// Append the implicit `HALT` (§5) when the source does not end in one.
+/// Returns whether it had to, so the caller can keep the location vector in
+/// step with the code.
+fn append_trailing_halt(code: &mut Vec<Insn>) -> bool {
+    if code.last().map(|insn| insn.op) == Some(OpCode::Halt) {
+        return false;
     }
+    code.push(Insn::new(OpCode::Halt));
+    true
 }
 
-fn check_labels(labels: &BTreeMap<SmolStr, usize>, code_len: usize) -> Result<(), ImageGenError> {
-    for (label, &index) in labels {
+fn check_labels(
+    labels: &BTreeMap<SmolStr, (usize, Location)>,
+    code_len: usize,
+) -> Result<(), ImageGenError> {
+    for (label, &(index, location)) in labels {
         if index >= code_len {
             return Err(ImageGenError::LabelOutOfRange {
                 label: label.clone(),
                 index,
                 code_len,
+                location,
             });
         }
     }
@@ -541,7 +669,7 @@ fn check_labels(labels: &BTreeMap<SmolStr, usize>, code_len: usize) -> Result<()
 
 /// `docs/binfmt.md` §9.3 I6: `target = pc + 1 + off` must stay in `[0, code_len)`.
 /// The arithmetic comes from `jump_target`, the single shared function.
-fn check_jumps(code: &[Insn]) -> Result<(), ImageGenError> {
+fn check_jumps(code: &[Insn], locations: &[Location]) -> Result<(), ImageGenError> {
     for (pc, insn) in code.iter().enumerate() {
         if insn.op.imm_type() != ImmType::JumpOffset {
             continue;
@@ -554,6 +682,7 @@ fn check_jumps(code: &[Insn]) -> Result<(), ImageGenError> {
                     pc,
                     offset,
                     code_len: code.len(),
+                    location: locations[pc],
                 });
             }
         }
@@ -563,7 +692,11 @@ fn check_jumps(code: &[Insn]) -> Result<(), ImageGenError> {
 
 /// `docs/isa.md` §4.8 / §10.7: `WAIT` is a non-negative finite duration no
 /// greater than the header's `max_wait`.
-fn check_waits(code: &[Insn], max_wait: Seconds) -> Result<(), ImageGenError> {
+fn check_waits(
+    code: &[Insn],
+    locations: &[Location],
+    max_wait: Seconds,
+) -> Result<(), ImageGenError> {
     for (pc, insn) in code.iter().enumerate() {
         if insn.op != OpCode::Wait {
             continue;
@@ -571,7 +704,13 @@ fn check_waits(code: &[Insn], max_wait: Seconds) -> Result<(), ImageGenError> {
         let seconds = f32::from_bits(insn.imm);
         match Seconds::new(seconds) {
             Some(seconds) if seconds <= max_wait => {}
-            _ => return Err(ImageGenError::InvalidWait { pc, seconds }),
+            _ => {
+                return Err(ImageGenError::InvalidWait {
+                    pc,
+                    seconds,
+                    location: locations[pc],
+                });
+            }
         }
     }
     Ok(())
@@ -588,7 +727,7 @@ enum PendingState {
 /// `FLUSH` clears it, and a suspend point or `HALT` may only be reached clean.
 /// Branches join with **union** (pending on any incoming edge is pending), which
 /// is why a linear scan is not enough.
-fn check_pending(code: &[Insn]) -> Result<(), ImageGenError> {
+fn check_pending(code: &[Insn], locations: &[Location]) -> Result<(), ImageGenError> {
     let len = code.len();
     if len == 0 {
         return Ok(());
@@ -609,6 +748,7 @@ fn check_pending(code: &[Insn]) -> Result<(), ImageGenError> {
             return Err(ImageGenError::PendingNotFlushed {
                 excite_pc,
                 suspend_pc: pc,
+                location: locations[pc],
             });
         }
 

@@ -10,13 +10,15 @@ use smol_str::SmolStr;
 use winnow::{
     Parser,
     ascii::space0,
-    combinator::{opt, preceded, repeat, terminated},
+    combinator::{opt, terminated},
+    error::ErrMode,
 };
 
 use crate::assembler::{
     Line, comments,
     diagnostic::{
-        AsmParseErrors, PResult, ParseErrorKind, cut_at, into_syntax, snippet, token_snippet,
+        AsmParseErrors, Location, PResult, ParseErrorKind, cut_at, into_syntax, snippet,
+        token_snippet,
     },
     ident, is_reserved_name,
     text::insn::insn,
@@ -64,6 +66,18 @@ pub struct AsmInsn {
     pub operands: Vec<AsmOperand>,
 }
 
+/// One item of the instruction section, pinned to where it came from.
+///
+/// The line is filled in by [`text`] (the parser sees one line at a time); the
+/// column is already exact. This is what lets the generation stage report
+/// `path:line:col` for problems that are not parse errors: an out-of-range
+/// jump, an unknown name, a `FEXCITE` that was never flushed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Located<T> {
+    pub item: T,
+    pub location: Location,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TextItem {
     Label(SmolStr),
@@ -81,24 +95,55 @@ fn label(input: &mut Line<'_>) -> PResult<TextItem> {
     Ok(TextItem::Label(SmolStr::new(name)))
 }
 
-fn text_stmt(input: &mut Line<'_>) -> PResult<Vec<TextItem>> {
+/// The 1-based column of `input` within `line`, given that `input` is a suffix
+/// of it.
+fn column(line: &str, input: &str) -> usize {
+    let consumed = line.len() - input.len();
+    line[..consumed].chars().count() + 1
+}
+
+fn text_stmt(line: &str, input: &mut Line<'_>) -> PResult<Vec<Located<TextItem>>> {
+    let mut items = Vec::new();
+
     // A failed `label` backtracks, so `L_ok: FMOVI …` leaves the instruction for
-    // the `insn` branch below instead of treating the mnemonic as a label.
-    let labels: Vec<TextItem> = repeat(0.., preceded(space0, label)).parse_next(input)?;
+    // the `insn` branch below instead of treating the mnemonic as a label. The
+    // cursor is restored before each try, so the column is the item's own.
+    loop {
+        let before = *input;
+        space0.parse_next(input)?;
+        let at_label = *input;
+        match label.parse_next(input) {
+            Ok(label) => items.push(Located {
+                item: label,
+                location: Location::new(0, column(line, at_label)),
+            }),
+            // A reserved name is a hard error (`docs/asm.md` §1), not "this line
+            // has no label": backtracking here would report the same text as an
+            // unknown mnemonic instead.
+            Err(ErrMode::Cut(error)) => return Err(ErrMode::Cut(error)),
+            Err(_) => {
+                *input = before;
+                break;
+            }
+        }
+    }
 
     space0.parse_next(input)?;
 
+    let before = *input;
     let parsed_insn = opt(insn).parse_next(input)?;
     match parsed_insn {
         Some(insn) => {
             finish_text_line(input, true)?;
-            let mut items = labels;
-            items.push(TextItem::Insn(insn));
+            items.push(Located {
+                item: TextItem::Insn(insn),
+                location: Location::new(0, column(line, before)),
+            });
             Ok(items)
         }
         None => {
             finish_text_line(input, false)?;
-            Ok(labels)
+            Ok(items)
         }
     }
 }
@@ -138,15 +183,20 @@ fn directive_name(rest: &str) -> SmolStr {
     }
 }
 
-pub fn text(input: &mut &str) -> Result<Vec<TextItem>, AsmParseErrors> {
+pub fn text(input: &mut &str) -> Result<Vec<Located<TextItem>>, AsmParseErrors> {
     let src = *input;
     let mut text_items = Vec::new();
     let mut errors = Vec::new();
 
     for (index, line) in src.lines().enumerate() {
         let mut cursor = line;
-        match text_stmt(&mut cursor) {
-            Ok(line_items) => text_items.extend(line_items),
+        match text_stmt(line, &mut cursor) {
+            Ok(line_items) => {
+                for mut located in line_items {
+                    located.location.line = index + 1;
+                    text_items.push(located);
+                }
+            }
             Err(err) => errors.push(into_syntax(err).located(line, index + 1)),
         }
     }
