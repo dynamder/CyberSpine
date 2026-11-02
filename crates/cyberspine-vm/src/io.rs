@@ -1,6 +1,6 @@
 //! Reading a `.csp` image from disk.
 //!
-//! `cyberspine-core`'s [`Image::from_bytes`] is the only format entry point: it
+//! `cyberspine-binfmt`'s [`VerifiedImage::from_bytes`] is the only format entry point: it
 //! is `no_std` and therefore cannot name a path. This module is the thin host
 //! wrapper around it, and it exists for one reason that has nothing to do with
 //! parsing — **the size gate must run before the read**.

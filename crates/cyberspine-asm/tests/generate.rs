@@ -2,7 +2,7 @@
 //! `generate_image` (`docs/asm.md` §5 / §6, `docs/binfmt.md` §3 / §6).
 //!
 //! Every positive test that builds an `Image` also runs it through
-//! `Image::from_bytes`: an image the loader rejects is not a finished image.
+//! `VerifiedImage::from_bytes`: an image the loader rejects is not finished.
 //!
 //! `docs/asm.md` §3.2 makes the rig the only source of muscles and observables,
 //! so a test that names one has to hand in a `Rig` that contains it. The helpers

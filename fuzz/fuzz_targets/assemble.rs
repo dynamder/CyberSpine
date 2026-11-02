@@ -9,7 +9,7 @@
 //!   loader is the authority on "legal" (`docs/binfmt.md` §9);
 //! * a panic anywhere is a robustness failure, not a rejection.
 //!
-//! libFuzzer treats panics as crashes; the `Image::from_bytes` branch turns a
+//! libFuzzer treats panics as crashes; the `VerifiedImage::from_bytes` branch turns a
 //! false accept into a crash as well. "Legal code rejected" is not observable
 //! from arbitrary bytes, so it is covered by `tests/generate.rs` and the seed
 //! corpus instead.
