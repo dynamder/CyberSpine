@@ -19,7 +19,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Mirrors `rust-toolchain.toml`: a moving `stable` turns a Rust release
+      # into an unrelated red build.
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: rustfmt, clippy
           targets: thumbv7em-none-eabihf
@@ -52,13 +54,35 @@ jobs:
       - name: test (all platforms)
         run: cargo test --workspace --all-targets
 
+  # The `rust-version` every manifest declares, checked against a real compiler
+  # instead of trusted. The `+` overrides `rust-toolchain.toml`, which pins the
+  # build toolchain for every other job.
+  msrv:
+    name: msrv (1.89)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.89.0
+        with:
+          targets: thumbv7em-none-eabihf
+
+      - name: workspace
+        run: cargo +1.89.0 check --workspace --all-targets --locked
+
+      # `firmware/` is its own workspace with its own lockfile.
+      - name: firmware
+        working-directory: firmware
+        run: cargo +1.89.0 check --locked
+
   qemu:
     name: qemu (cortex-m4)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Mirrors `rust-toolchain.toml`.
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           targets: thumbv7em-none-eabihf
 
