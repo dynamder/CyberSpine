@@ -696,7 +696,7 @@ fn i7_wait_must_be_a_non_negative_finite_duration() {
 
 #[test]
 fn i7_wait_must_not_exceed_the_headers_max_wait() {
-    // WAIT is unbounded by fuel (isa.md §6.7), so the header bounds it instead.
+    // WAIT is unbounded by fuel (isa.md §6.4), so the header bounds it instead.
     let image = image_with(&[insn(OpCode::Wait, 0, 0, 601.0f32.to_bits()), insn(OpCode::Halt, 0, 0, 0)]);
     assert!(matches!(
         reject(&image.to_bytes()),

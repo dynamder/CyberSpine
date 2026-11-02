@@ -62,7 +62,7 @@ pub const DEFAULT_HZ: u32 = 60;
 /// `fuel` default (`docs/binfmt.md` §4): the per-resume instruction budget.
 pub const DEFAULT_FUEL: u32 = 4096;
 
-/// `max_wait` default (`docs/isa.md` §6.7): 600 virtual seconds.
+/// `max_wait` default (`docs/isa.md` §6.4): 600 virtual seconds.
 pub const DEFAULT_MAX_WAIT: f32 = 600.0;
 
 /// The scalar half of the fixed header (§4).

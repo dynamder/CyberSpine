@@ -246,7 +246,7 @@ fn operands_follow_signature_order() {
 // 3. 寄存器
 // ---------------------------------------------------------------------------
 
-/// `docs/asm.md` §6.2 原文就点了名：「`FADD f1,i2,f3` 汇编期报错」。
+/// `docs/asm.md` §6 第 3 条 原文就点了名：「`FADD f1,i2,f3` 汇编期报错」。
 #[test]
 fn register_file_mismatch_is_rejected() {
     rejected("FADD f1, i2, f3");
@@ -673,7 +673,7 @@ fn independent_instruction_errors_are_all_reported() {
 // 6. `Index` 保持符号形式
 // ---------------------------------------------------------------------------
 
-/// `text()` **不查表**。名字存在与否是第二遍（§3.3 表序 / §6.4）的事，
+/// `text()` **不查表**。名字存在与否是第二遍（§3.3 表序 / §6 第 4 条）的事，
 /// 所以一个从未声明的名字在这一层必须解析成功。
 #[test]
 fn index_operands_stay_symbolic_and_unresolved() {

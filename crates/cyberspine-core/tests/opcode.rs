@@ -1,17 +1,12 @@
 //! `OpCode` 的助记符表测试（`docs/isa.md` §4）。
 //!
-//! **契约。** 本文件按约定好的接口编写，实现尚未存在：
-//!
-//! ```ignore
-//! // crates/cyberspine-core/src/vm/op.rs，在 isa_table! 内部生成
-//! impl FromStr for OpCode { type Err = /* 待定 */; ... }   // 大小写不敏感
-//! ```
-//!
-//! 所以 `cargo test --test opcode` 在 `FromStr` 落地前不会编译。
+//! **契约。** `crates/cyberspine-core/src/isa.rs` 的 `isa_table!` 生成
+//! `OpCode::ALL`、`mnemonic()`、`signature()` 与 `FromStr`（大小写不敏感，
+//! `Err = MnemonicError`）。
 //!
 //! **为什么不绑定 `Err` 类型。** 下面所有逆向断言只写 `is_err()`，正向只取
-//! `Ok` 的值，`Err` 的变体名和载荷一律不碰——错误类型是另一个待定的设计决定，
-//! 不该让这份测试跟着它变。
+//! `Ok` 的值；本文件测的是"能不能解析"，不是错误载荷长什么样，不该让后者
+//! 变成这里的第二个契约。
 //!
 //! **这份测试在保护什么。** `isa_table!` 是助记符的**唯一**来源（`docs/asm.md`
 //! §9：asm 不得手抄任何清单）。唯一来源要成立，需要两个性质：
@@ -19,8 +14,8 @@
 //!      而且失败是静默的——先撞上的那条永远赢）；
 //!   2. 字节 ↔ 助记符 ↔ 变体三者**互相闭合**，不存在"能编码却查不到名字"
 //!      或"解码不回来"的洞。
-//! 这两条目前都没有被覆盖：`tests/handmade.rs` 只查了 golden 文件覆盖了每个
-//! *字节*，`mnemonic()` 从来没被验证过。
+//! `tests/handmade.rs` 的 golden 文件只证明每个*字节*都出现过；`mnemonic()`
+//! 与 `FromStr` 这两个方向由本文件补上。
 
 use std::str::FromStr;
 

@@ -481,7 +481,7 @@ fn reserved_names_are_rejected_in_the_tables_the_source_still_owns() {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Pending-write dataflow (`docs/asm.md` §4.3 / §6.6)
+// 7. Pending-write dataflow (`docs/asm.md` §4.3 / §6 第 6 条)
 // ---------------------------------------------------------------------------
 
 #[test]

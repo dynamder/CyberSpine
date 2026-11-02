@@ -15,6 +15,12 @@ Both targets assert the same contract: **accepted means the image must pass
 `Image::from_bytes` and re-serialize to the same bytes** (`docs/binfmt.md` §8/§9).
 "Legal code rejected" is covered by the seed corpus and `tests/generate.rs`.
 
+Muscles and observables live in the rig manifest, not in the source
+(`docs/asm.md` §3.2), so both targets derive a legal `Rig` from the input first
+(`fuzz_targets/rig_for.rs`): it collects every name the byte string mentions,
+drops the reserved ones, and keeps each name in one table. Without that, almost
+every input would stop at "unknown name" and never reach generation.
+
 ## Run
 
 ```bash

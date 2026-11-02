@@ -326,7 +326,7 @@ fn a_parse_error_produces_no_file() {
 #[test]
 fn a_generation_error_produces_no_file() {
     let dir = scratch("generation-error");
-    // `FEXCITE` still pending when `HALT` is reached (`docs/asm.md` §6.6).
+    // `FEXCITE` still pending when `HALT` is reached (`docs/asm.md` §6 第 6 条).
     let source = write_source(
         &dir,
         "pending.csa",

@@ -685,7 +685,7 @@ fn check_code(raw_code: &[u64], image: &Image) -> Result<Vec<Insn>, LoadError> {
             }
 
             // I7 — WAIT is unbounded by fuel, so the header bounds it instead
-            // (`docs/isa.md` §6.7). NaN fails `is_finite`; -0.0 is zero, not
+            // (`docs/isa.md` §6.4). NaN fails `is_finite`; -0.0 is zero, not
             // negative, and is accepted.
             OpCode::Wait => {
                 let seconds = insn.imm_f32();

@@ -136,9 +136,11 @@ impl Instance {
 
 ### 4.1 索引检查策略（v1）
 
-v1 **保留边界检查**：`code[pc]`、`regs[rd]`、`vars[m]`、`sensors.f[imm]` 一律用安全索引。
+**镜像派生的下标一律用安全索引**：`code[pc]`、`vars[m]`、`sensors.f[imm]`、`sensors.i[imm]`。
 
 理由：加载期已经保证这些下标合法，安全索引在这里的作用不是「防止程序越界」，而是**把「加载期的承诺被破坏」变成 panic 而不是 UB**。等实现稳定、测试矩阵齐备之后，换成 `unsafe { get_unchecked }` 是一处纯机械改动，不影响任何语义。
+
+**唯一的例外是寄存器**：`exec/registers.rs` 的四处访问用 `get_unchecked`。那里的下标不是镜像派生的，而是 `RegId`——一个只能由 `RegId::new`（拒绝 ≥ 64）产生的 newtype。安全性由类型不变量保证，不依赖加载期的承诺；四个 `unsafe` 块各自带着这条 SAFETY 注记。
 
 ---
 
@@ -202,7 +204,6 @@ pub fn jump_target(pc: usize, off: i32) -> Option<usize>;                // 加�
 ```
 
 算术用 `i128` 而不是 `i64`：`pc + 1` 在 `usize::MAX` 处会溢出，`i64` 在那里变成负数，于是「无检版本」与带检版本对同一条偏移给出不同答案。`i128` 对任何 `usize` 与任何 `i32` 都精确。
-```
 
 条件跳转统一成「不跳 `Flow::Next`，跳 `Flow::Jump`」：
 
@@ -322,7 +323,7 @@ pend_mask.clear_all();
 
 | 不做 | 替代 |
 |---|---|
-| `get_unchecked` 取消边界检查 | 安全索引（§4.1） |
+| `get_unchecked` 取消**镜像派生**下标的边界检查 | 安全索引（§4.1）；寄存器例外，安全性由 `RegId` 的类型不变量保证 |
 | 按位置位遍历 `FLUSH` | `0..muscle_count` 线性扫描 |
 | 单块 arena 分配 | 每实例 6 块 `Box<[T]>` |
 | 指令预解码缓存、批量位运算 | 一个大 `match` 放在一个 `exec` 函数里 |
@@ -336,7 +337,7 @@ pend_mask.clear_all();
 
 | 类别 | 内容 |
 |---|---|
-| 逐指令 | 49 条各一段手搓程序，断言寄存器 / 变量 / 掩码 |
+| 逐指令 | 49 条全部有语义用例，但按族组织而不是一条一段：`unary`/`binary`/`ternary`/`compare` 构造器 + 每组一个用例，`FNEG`/`FMIN`/`FMAX`/`FMADD`/`FLERP`/`FCLAMP`/`FTOI` 各自单独钉边界；断言寄存器 / 变量 / 掩码 |
 | 位级 | `FMIN`/`FMAX` 的 ±0/NaN 矩阵；`FNEG`/`FABS` 对 NaN；`FMADD` 的「融合了就会不同」的输入；`FTOI` 饱和表 |
 | `FFRAC` | `-1e-30 → next_down(1.0)`、`±0`、`±Inf → NaN`、`1.0 → 0.0` |
 | `FSIN`/`FCOS` | 定点输入表 → 固定位模式；网格测试对照 host libm 报最大 ULP |

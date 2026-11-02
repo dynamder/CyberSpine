@@ -22,7 +22,7 @@ use text::{AsmInsn, AsmOperand, TextItem, text as text_section};
 
 pub type Line<'i> = &'i str;
 
-/// `docs/asm.md` §1 / §6.8: `fN`/`iN` is the register shape and `dt`/`tick` are
+/// `docs/asm.md` §1 / §6 第 8 条: `fN`/`iN` is the register shape and `dt`/`tick` are
 /// built-in sensor names, so none of them can be a label or a declared name.
 pub(crate) fn is_reserved_name(name: &str) -> bool {
     if matches!(name, "dt" | "tick") {
@@ -278,7 +278,7 @@ impl Symbols {
             let index = index as u32;
             let name = SmolStr::new(&**name);
             muscles.insert(name.clone(), index);
-            // §6.2: every muscle is its own read-back float sensor, at the same index.
+            // binfmt.md §6.2: every muscle is its own read-back float sensor, at the same index.
             sensors_f.insert(name.clone(), index);
             image_muscles.push(Muscle {
                 name: name.as_str().into(),
@@ -618,7 +618,7 @@ enum PendingState {
     Set(usize),
 }
 
-/// `docs/asm.md` §6.6: a boolean dataflow over the CFG. `FEXCITE` sets pending,
+/// `docs/asm.md` §6 第 6 条: a boolean dataflow over the CFG. `FEXCITE` sets pending,
 /// `FLUSH` clears it, and a suspend point or `HALT` may only be reached clean.
 /// Branches join with **union** (pending on any incoming edge is pending), which
 /// is why a linear scan is not enough.
