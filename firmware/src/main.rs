@@ -217,6 +217,7 @@ fn check_fuel() {
         Insn::new(OpCode::Nop),
         Insn::new(OpCode::Nop),
         Insn::new(OpCode::Nop),
+        halt(),
     ]);
     image.header_mut().fuel = 2;
     let image = VerifiedImage::verify(image).expect("the fixture is a legal image");
