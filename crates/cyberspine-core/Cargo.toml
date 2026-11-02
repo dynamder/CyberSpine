@@ -3,6 +3,7 @@ name = "cyberspine-core"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
+license.workspace = true
 
 [dependencies]
 # `default-features = false` is what makes blake3 build without std: `std` is the
