@@ -75,9 +75,50 @@ fn errors(source: &str) -> Vec<ParseError> {
     }
 }
 
+type KindMatcher = fn(&ParseErrorKind) -> bool;
+
+fn register_file_mismatch(kind: &ParseErrorKind) -> bool {
+    matches!(kind, ParseErrorKind::RegisterFileMismatch { .. })
+}
+
+fn register_out_of_range(kind: &ParseErrorKind) -> bool {
+    matches!(kind, ParseErrorKind::RegisterOutOfRange { .. })
+}
+
+fn invalid_operand(kind: &ParseErrorKind) -> bool {
+    matches!(kind, ParseErrorKind::InvalidOperand { .. })
+}
+
+fn unknown_mnemonic(kind: &ParseErrorKind) -> bool {
+    matches!(kind, ParseErrorKind::UnknownMnemonic(_))
+}
+
+fn missing_operand(kind: &ParseErrorKind) -> bool {
+    matches!(kind, ParseErrorKind::MissingOperand { .. })
+}
+
+fn trailing_tokens(kind: &ParseErrorKind) -> bool {
+    matches!(kind, ParseErrorKind::TrailingTokens(_))
+}
+
+fn reserved_name(kind: &ParseErrorKind) -> bool {
+    matches!(kind, ParseErrorKind::ReservedName(_))
+}
+
+fn late_directive(kind: &ParseErrorKind) -> bool {
+    matches!(kind, ParseErrorKind::LateDirective(_))
+}
+
+/// Exactly one error, of the rule this fixture is about.
 #[track_caller]
-fn rejected(source: &str) {
-    let _ = errors(source);
+fn rejected(source: &str, expected: KindMatcher) {
+    let errors = errors(source);
+    assert_eq!(errors.len(), 1, "{source:?}: {errors:?}");
+    assert!(
+        expected(&errors[0].kind),
+        "{source:?}: unexpected kind {:?}",
+        errors[0].kind
+    );
 }
 
 #[track_caller]
@@ -260,15 +301,15 @@ fn operands_follow_signature_order() {
 /// `docs/asm.md` §6 第 3 条 原文就点了名：「`FADD f1,i2,f3` 汇编期报错」。
 #[test]
 fn register_file_mismatch_is_rejected() {
-    rejected("FADD f1, i2, f3");
-    rejected("IADD i1, f2, i3");
-    rejected("IMOV f1, i2");
-    rejected("FMOV f1, i2");
-    rejected("FEXCITE mouth_open, i1");
-    rejected("FVSET phase, i1");
-    rejected("IVGET f1, state");
-    rejected("ITOF i1, i2"); // ITOF 是 (rd F), (ra I)
-    rejected("FTOI f1, f2"); // FTOI 是 (rd I), (ra F)
+    rejected("FADD f1, i2, f3", register_file_mismatch);
+    rejected("IADD i1, f2, i3", register_file_mismatch);
+    rejected("IMOV f1, i2", register_file_mismatch);
+    rejected("FMOV f1, i2", register_file_mismatch);
+    rejected("FEXCITE mouth_open, i1", register_file_mismatch);
+    rejected("FVSET phase, i1", register_file_mismatch);
+    rejected("IVGET f1, state", register_file_mismatch);
+    rejected("ITOF i1, i2", register_file_mismatch); // ITOF 是 (rd F), (ra I)
+    rejected("FTOI f1, f2", register_file_mismatch); // FTOI 是 (rd I), (ra F)
 }
 
 /// 与上一条配对：ITOF / FTOI 本来就是跨寄存器文件的，必须能过。
@@ -286,11 +327,11 @@ fn cross_file_conversions_accept_their_real_types() {
 
 #[test]
 fn register_indices_are_bounded_by_the_file_size() {
-    rejected("FADD f1, f2, f64"); // f0..f63
-    rejected("FADD f1, f2, i64");
-    rejected("FADD f1, f2, f"); // 没有数字
-    rejected("FADD f1, f2, f1x"); // 尾巴不是数字
-    rejected("FADD f1, f2, 1"); // 缺文件字母
+    rejected("FADD f1, f2, f64", register_out_of_range); // f0..f63
+    rejected("FADD f1, f2, i64", register_out_of_range);
+    rejected("FADD f1, f2, f", invalid_operand); // 没有数字
+    rejected("FADD f1, f2, f1x", trailing_tokens); // 尾巴不是数字
+    rejected("FADD f1, f2, 1", invalid_operand); // 缺文件字母
 }
 
 #[test]
@@ -381,10 +422,10 @@ fn f32_immediate_accepts_a_raw_bit_pattern() {
 
 #[test]
 fn f32_immediate_rejects_non_literals() {
-    rejected("FMOVI f1, abc");
-    rejected("FMOVI f1, 0x");
-    rejected("FMOVI f1, 1.0.0");
-    rejected("WAIT abc");
+    rejected("FMOVI f1, abc", invalid_operand);
+    rejected("FMOVI f1, 0x", invalid_operand);
+    rejected("FMOVI f1, 1.0.0", invalid_operand);
+    rejected("WAIT abc", invalid_operand);
 }
 
 #[test]
@@ -417,20 +458,20 @@ fn non_decimal_integer_literals_are_bit_patterns() {
 
 #[test]
 fn i32_immediates_reject_out_of_range() {
-    rejected("IMOVI i1, 2147483648"); // i32::MAX + 1
-    rejected("IMOVI i1, -2147483649"); // i32::MIN - 1
-    rejected("IMOVI i1, 0x100000000"); // 33 位
-    rejected("IMOVI i1, 1abc"); // 尾巴是垃圾
+    rejected("IMOVI i1, 2147483648", invalid_operand); // i32::MAX + 1
+    rejected("IMOVI i1, -2147483649", invalid_operand); // i32::MIN - 1
+    rejected("IMOVI i1, 0x100000000", invalid_operand); // 33 位
+    rejected("IMOVI i1, 1abc", invalid_operand); // 尾巴是垃圾
 }
 
 /// `docs/asm.md` §4.1 表格最后一行：「`JumpOffset` ｜ **标签**，不接受数字」。
 #[test]
 fn jump_offset_operand_must_be_a_label_not_a_number() {
-    rejected("JMP 5");
-    rejected("JMP -1");
-    rejected("JMP 0");
-    rejected("IJNZ i1, 0");
-    rejected("FGE f1, f2, 3");
+    rejected("JMP 5", invalid_operand);
+    rejected("JMP -1", invalid_operand);
+    rejected("JMP 0", invalid_operand);
+    rejected("IJNZ i1, 0", invalid_operand);
+    rejected("FGE f1, f2, 3", invalid_operand);
 }
 
 // ---------------------------------------------------------------------------
@@ -512,45 +553,45 @@ fn commas_allow_optional_surrounding_space() {
 
 #[test]
 fn unknown_mnemonic_is_rejected() {
-    rejected("FADDD f1, f2, f3");
-    rejected("HLT");
-    rejected("MOV f1, f2");
-    rejected("fexcite2 mouth_open, f1");
+    rejected("FADDD f1, f2, f3", unknown_mnemonic);
+    rejected("HLT", unknown_mnemonic);
+    rejected("MOV f1, f2", unknown_mnemonic);
+    rejected("fexcite2 mouth_open, f1", unknown_mnemonic);
 }
 
 #[test]
 fn arity_must_match_the_signature() {
-    rejected("FADD f1, f2"); // 少一个
-    rejected("FADD f1, f2, f3, f4"); // 多一个
-    rejected("HALT f1"); // 零操作数
-    rejected("FLUSH f1");
-    rejected("YIELD 1.0");
-    rejected("JMP"); // 缺标签
-    rejected("FMOVI f1"); // 缺立即数
+    rejected("FADD f1, f2", missing_operand); // 少一个
+    rejected("FADD f1, f2, f3, f4", trailing_tokens); // 多一个
+    rejected("HALT f1", trailing_tokens); // 零操作数
+    rejected("FLUSH f1", trailing_tokens);
+    rejected("YIELD 1.0", trailing_tokens);
+    rejected("JMP", missing_operand); // 缺标签
+    rejected("FMOVI f1", missing_operand); // 缺立即数
 }
 
 #[test]
 fn trailing_garbage_on_a_line_is_rejected() {
-    rejected("HALT extra");
-    rejected("FMOVI f1, 1.0 1.0");
+    rejected("HALT extra", trailing_tokens);
+    rejected("FMOVI f1, 1.0 1.0", trailing_tokens);
 }
 
 /// §1：`fN`/`iN` 是保留形状；§6 第 8 条：`dt`/`tick` 不得用作标签。
 #[test]
 fn reserved_shapes_cannot_be_labels() {
-    rejected("f0:");
-    rejected("i63:");
-    rejected("f1: HALT");
-    rejected("dt:");
-    rejected("tick:");
-    rejected("dt: HALT");
+    rejected("f0:", reserved_name);
+    rejected("i63:", reserved_name);
+    rejected("f1: HALT", reserved_name);
+    rejected("dt:", reserved_name);
+    rejected("tick:", reserved_name);
+    rejected("dt: HALT", reserved_name);
 }
 
 /// `docs/asm.md` §2：声明型伪指令属于头段，指令段里出现必须是错误。
 #[test]
 fn header_directives_are_not_instructions() {
-    rejected(".layer 10");
-    rejected(".muscle brow_l");
+    rejected(".layer 10", late_directive);
+    rejected(".muscle brow_l", late_directive);
 }
 
 #[test]
@@ -713,10 +754,10 @@ fn index_operands_stay_symbolic_and_unresolved() {
 
 #[test]
 fn index_operand_must_be_an_identifier() {
-    rejected("FSENSE f5, 123");
-    rejected("FSENSE f5, 1.5");
-    rejected("FEXCITE 123, f1");
-    rejected("FSENSE f5, 1a"); // 数字开头
+    rejected("FSENSE f5, 123", invalid_operand);
+    rejected("FSENSE f5, 1.5", invalid_operand);
+    rejected("FEXCITE 123, f1", invalid_operand);
+    rejected("FSENSE f5, 1a", invalid_operand); // 数字开头
 }
 
 #[test]
