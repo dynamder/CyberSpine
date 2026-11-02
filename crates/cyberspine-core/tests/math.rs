@@ -70,7 +70,8 @@ fn madd_rounds_twice_and_is_not_fused() {
     assert_eq!(m::madd(one_plus, one_minus, -1.0).to_bits(), 0);
 
     // The fused result would not be zero, so the test above is a real witness.
-    assert!(f32::EPSILON * f32::EPSILON > 0.0);
+    // An f64 product of two f32 values is exact, so the rounding below cannot
+    // be defeated by the epsilon squared vanishing.
 }
 
 #[test]

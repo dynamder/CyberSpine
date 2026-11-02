@@ -225,9 +225,8 @@ pub fn sqrt(x: f32) -> f32 {
     let scaled = 4.0 * exact; // exact: power-of-two scale
     if scaled > twice {
         hi
-    } else if scaled < twice {
-        lo
-    } else if lo.to_bits() & 1 == 0 {
+    } else if scaled < twice || lo.to_bits() & 1 == 0 {
+        // Round down, and break an exact tie towards the even significand.
         lo
     } else {
         hi
@@ -253,7 +252,7 @@ const MAX_QUOTIENT: f64 = 9.2e18;
 /// fdlibm's `__kernel_sin` coefficients, evaluated in f64.
 fn sin_kernel(x: f64) -> f64 {
     const S1: f64 = -1.666_666_666_666_663_2e-01;
-    const S2: f64 = 8.333_333_333_322_489e-03;
+    const S2: f64 = 8.333_333_333_322_49e-03;
     const S3: f64 = -1.984_126_982_985_795e-04;
     const S4: f64 = 2.755_731_370_707_006_8e-06;
     const S5: f64 = -2.505_076_025_340_686_3e-08;
@@ -271,7 +270,7 @@ fn cos_kernel(x: f64) -> f64 {
     const C2: f64 = -1.388_888_888_887_411e-03;
     const C3: f64 = 2.480_158_728_947_673e-05;
     const C4: f64 = -2.755_731_435_139_066_4e-07;
-    const C5: f64 = 2.087_572_321_298_174_8e-09;
+    const C5: f64 = 2.087_572_321_298_175e-09;
     const C6: f64 = -1.135_964_755_778_819_4e-11;
 
     let z = x * x;
@@ -297,7 +296,12 @@ fn reduce(x: f64) -> Option<(f64, i64)> {
 }
 
 /// Clamp to `[-1, 1]`, leaving NaN alone.
+///
+/// Deliberately not `f32::clamp`: that returns NaN for the bounds check here and
+/// panics on a NaN bound, while this must pass a NaN result through untouched —
+/// the polynomial's answer for a reduced argument that landed on a NaN.
 #[inline]
+#[allow(clippy::manual_clamp)]
 fn unit(v: f64) -> f32 {
     let v = v as f32;
     if v > 1.0 {

@@ -24,13 +24,11 @@ jobs:
           components: rustfmt, clippy
           targets: thumbv7em-none-eabihf
 
-      # The assembler crate is rustfmt-clean; cyberspine-core is not yet, so the
-      # check is scoped. Widening it to `--all` is a separate cleanup commit.
-      - name: rustfmt (cyberspine-asm)
-        run: cargo fmt -p cyberspine-asm --check
+      - name: rustfmt
+        run: cargo fmt --all --check
 
-      - name: clippy (cyberspine-asm)
-        run: cargo clippy -p cyberspine-asm --all-targets --no-deps -- -D warnings
+      - name: clippy
+        run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
 
       # The reason the split exists: `cyberspine-core` must be usable on a
       # microcontroller. `cargo test` compiles it for the host, where a stray
