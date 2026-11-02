@@ -36,7 +36,9 @@ pub enum Status {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
     Yielded,
-    Waited { until: u64 },
+    Waited {
+        until: u64,
+    },
     Halted,
     Faulted(Fault),
     /// The instance had already terminated; nothing ran.
@@ -161,9 +163,7 @@ impl Instance {
     /// The published command for one muscle, or `None` if this instance has never
     /// flushed a value for it (`docs/isa.md` §8.2).
     pub fn published(&self, muscle: usize) -> Option<f32> {
-        self.publ_mask
-            .test(muscle)
-            .then(|| self.published[muscle])
+        self.publ_mask.test(muscle).then(|| self.published[muscle])
     }
 
     pub fn registers(&self) -> &Registers {

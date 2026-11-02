@@ -584,8 +584,8 @@ fn check_code(raw_code: &[u64], image: &Image) -> Result<Vec<Insn>, LoadError> {
 
     for (index, &word) in raw_code.iter().enumerate() {
         // I1 — a reserved opcode is refused outright.
-        let insn = Insn::decode(word)
-            .map_err(|source| LoadError::InvalidInstruction { index, source })?;
+        let insn =
+            Insn::decode(word).map_err(|source| LoadError::InvalidInstruction { index, source })?;
 
         // I2 — the canonical-form equation. Decoding zeroes the fields the
         // opcode does not use, so a word that re-encodes differently is exactly

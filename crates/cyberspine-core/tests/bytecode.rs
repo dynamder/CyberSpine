@@ -48,55 +48,55 @@ const B_RC: u8 = 8;
 /// consulting the generated `isa_table!`. This is the independent spec that
 /// makes the assertions below non-circular.
 const FIELDS: [(u8, u8, bool); 49] = [
-    (0x00, B_RD, true),           // FMOVI  rd, imm(f32 bits)
-    (0x01, B_RD, true),           // IMOVI  rd, imm(i32)
-    (0x02, B_RD | B_RA, false),   // FMOV   rd, ra
-    (0x03, B_RD | B_RA, false),   // IMOV   rd, ra
-    (0x10, B_RD | B_RA | B_RB, false), // FADD
-    (0x11, B_RD | B_RA | B_RB, false), // FSUB
-    (0x12, B_RD | B_RA | B_RB, false), // FMUL
-    (0x13, B_RD | B_RA | B_RB, false), // FDIV
-    (0x14, B_RD | B_RA | B_RB, false), // FMIN
-    (0x15, B_RD | B_RA | B_RB, false), // FMAX
-    (0x20, B_RD | B_RA, false),   // FNEG
-    (0x21, B_RD | B_RA, false),   // FABS
-    (0x22, B_RD | B_RA, false),   // FSQRT
-    (0x23, B_RD | B_RA, false),   // FSIN
-    (0x24, B_RD | B_RA, false),   // FCOS
-    (0x25, B_RD | B_RA, false),   // FFRAC
+    (0x00, B_RD, true),                       // FMOVI  rd, imm(f32 bits)
+    (0x01, B_RD, true),                       // IMOVI  rd, imm(i32)
+    (0x02, B_RD | B_RA, false),               // FMOV   rd, ra
+    (0x03, B_RD | B_RA, false),               // IMOV   rd, ra
+    (0x10, B_RD | B_RA | B_RB, false),        // FADD
+    (0x11, B_RD | B_RA | B_RB, false),        // FSUB
+    (0x12, B_RD | B_RA | B_RB, false),        // FMUL
+    (0x13, B_RD | B_RA | B_RB, false),        // FDIV
+    (0x14, B_RD | B_RA | B_RB, false),        // FMIN
+    (0x15, B_RD | B_RA | B_RB, false),        // FMAX
+    (0x20, B_RD | B_RA, false),               // FNEG
+    (0x21, B_RD | B_RA, false),               // FABS
+    (0x22, B_RD | B_RA, false),               // FSQRT
+    (0x23, B_RD | B_RA, false),               // FSIN
+    (0x24, B_RD | B_RA, false),               // FCOS
+    (0x25, B_RD | B_RA, false),               // FFRAC
     (0x30, B_RD | B_RA | B_RB | B_RC, false), // FMADD
     (0x31, B_RD | B_RA | B_RB | B_RC, false), // FLERP
     (0x32, B_RD | B_RA | B_RB | B_RC, false), // FCLAMP
-    (0x40, B_RD | B_RA | B_RB, false), // IADD
-    (0x41, B_RD | B_RA | B_RB, false), // ISUB
-    (0x42, B_RD | B_RA | B_RB, false), // IMUL
-    (0x43, B_RD | B_RA, false),   // ITOF
-    (0x44, B_RD | B_RA, false),   // FTOI
-    (0x50, 0, true),              // JMP   imm
-    (0x51, B_RA, true),           // IJZ   ra, imm
-    (0x52, B_RA, true),           // IJNZ  ra, imm
-    (0x53, B_RA | B_RB, true),    // FLT
-    (0x54, B_RA | B_RB, true),    // FLE
-    (0x55, B_RA | B_RB, true),    // FGT
-    (0x56, B_RA | B_RB, true),    // FGE
-    (0x57, B_RA | B_RB, true),    // ILT
-    (0x58, B_RA | B_RB, true),    // ILE
-    (0x59, B_RA | B_RB, true),    // IGT
-    (0x5A, B_RA | B_RB, true),    // IGE
-    (0x5B, B_RA | B_RB, true),    // IEQ
-    (0x5C, B_RA | B_RB, true),    // INE
-    (0x60, B_RD, true),           // FSENSE rd, imm(sensor id)
-    (0x61, B_RD, true),           // ISENSE rd, imm(sensor id)
-    (0x70, 0, false),             // YIELD
-    (0x71, 0, true),              // WAIT  imm(f32 bits)
-    (0x80, B_RA, true),           // FEXCITE imm(muscle id), ra
-    (0x90, B_RD, true),           // FVGET rd, imm(var id)
-    (0x91, B_RA, true),           // FVSET imm(var id), ra
-    (0x92, B_RD, true),           // IVGET rd, imm(var id)
-    (0x93, B_RA, true),           // IVSET imm(var id), ra
-    (0xA0, 0, false),             // HALT
-    (0xA1, 0, false),             // NOP
-    (0xA2, 0, false),             // FLUSH published <- pending
+    (0x40, B_RD | B_RA | B_RB, false),        // IADD
+    (0x41, B_RD | B_RA | B_RB, false),        // ISUB
+    (0x42, B_RD | B_RA | B_RB, false),        // IMUL
+    (0x43, B_RD | B_RA, false),               // ITOF
+    (0x44, B_RD | B_RA, false),               // FTOI
+    (0x50, 0, true),                          // JMP   imm
+    (0x51, B_RA, true),                       // IJZ   ra, imm
+    (0x52, B_RA, true),                       // IJNZ  ra, imm
+    (0x53, B_RA | B_RB, true),                // FLT
+    (0x54, B_RA | B_RB, true),                // FLE
+    (0x55, B_RA | B_RB, true),                // FGT
+    (0x56, B_RA | B_RB, true),                // FGE
+    (0x57, B_RA | B_RB, true),                // ILT
+    (0x58, B_RA | B_RB, true),                // ILE
+    (0x59, B_RA | B_RB, true),                // IGT
+    (0x5A, B_RA | B_RB, true),                // IGE
+    (0x5B, B_RA | B_RB, true),                // IEQ
+    (0x5C, B_RA | B_RB, true),                // INE
+    (0x60, B_RD, true),                       // FSENSE rd, imm(sensor id)
+    (0x61, B_RD, true),                       // ISENSE rd, imm(sensor id)
+    (0x70, 0, false),                         // YIELD
+    (0x71, 0, true),                          // WAIT  imm(f32 bits)
+    (0x80, B_RA, true),                       // FEXCITE imm(muscle id), ra
+    (0x90, B_RD, true),                       // FVGET rd, imm(var id)
+    (0x91, B_RA, true),                       // FVSET imm(var id), ra
+    (0x92, B_RD, true),                       // IVGET rd, imm(var id)
+    (0x93, B_RA, true),                       // IVSET imm(var id), ra
+    (0xA0, 0, false),                         // HALT
+    (0xA1, 0, false),                         // NOP
+    (0xA2, 0, false),                         // FLUSH published <- pending
 ];
 
 const JUMP_OPCODES: [u8; 13] = [
@@ -144,16 +144,32 @@ fn bit_fields_do_not_bleed_into_each_other() {
 
     // Each register field independently, on an opcode that uses all four.
     for (insn, expected) in [
-        (decode(0x30, REG_MASK, 0, 0, 0, 0), (REG_MASK as u8, 0, 0, 0)),
-        (decode(0x30, 0, REG_MASK, 0, 0, 0), (0, REG_MASK as u8, 0, 0)),
-        (decode(0x30, 0, 0, REG_MASK, 0, 0), (0, 0, REG_MASK as u8, 0)),
-        (decode(0x30, 0, 0, 0, REG_MASK, 0), (0, 0, 0, REG_MASK as u8)),
+        (
+            decode(0x30, REG_MASK, 0, 0, 0, 0),
+            (REG_MASK as u8, 0, 0, 0),
+        ),
+        (
+            decode(0x30, 0, REG_MASK, 0, 0, 0),
+            (0, REG_MASK as u8, 0, 0),
+        ),
+        (
+            decode(0x30, 0, 0, REG_MASK, 0, 0),
+            (0, 0, REG_MASK as u8, 0),
+        ),
+        (
+            decode(0x30, 0, 0, 0, REG_MASK, 0),
+            (0, 0, 0, REG_MASK as u8),
+        ),
     ] {
         assert_eq!(
             (insn.rd.get(), insn.ra.get(), insn.rb.get(), insn.rc.get()),
             expected
         );
-        assert_eq!(insn.op, OpCode::Fmadd, "register field overflowed into the opcode");
+        assert_eq!(
+            insn.op,
+            OpCode::Fmadd,
+            "register field overflowed into the opcode"
+        );
         assert_eq!(insn.imm, 0);
     }
 }
@@ -182,7 +198,11 @@ fn isa_defines_exactly_49_distinct_opcodes() {
     seen.sort_unstable();
     let total = seen.len();
     seen.dedup();
-    assert_eq!(seen.len(), total, "the opcode table contains a duplicate byte");
+    assert_eq!(
+        seen.len(),
+        total,
+        "the opcode table contains a duplicate byte"
+    );
 }
 
 #[test]
@@ -198,7 +218,11 @@ fn every_defined_opcode_decodes_to_its_expected_operands() {
             }
         };
 
-        assert_eq!(insn.op, OpCode::from_byte(byte).expect("defined opcode"), "opcode {byte:#04x}");
+        assert_eq!(
+            insn.op,
+            OpCode::from_byte(byte).expect("defined opcode"),
+            "opcode {byte:#04x}"
+        );
         assert_eq!(insn.rd, slot(B_RD, S_RD), "opcode {byte:#04x} rd");
         assert_eq!(insn.ra, slot(B_RA, S_RA), "opcode {byte:#04x} ra");
         assert_eq!(insn.rb, slot(B_RB, S_RB), "opcode {byte:#04x} rb");
@@ -273,7 +297,11 @@ fn fmovi_embeds_a_bit_pattern_not_a_number() {
         let insn = decode(0x00, S_RD, 0, 0, 0, bits);
         assert_eq!(insn.op, OpCode::Fmovi);
         assert_eq!(insn.rd.get() as u64, S_RD);
-        assert_eq!(insn.imm_f32().to_bits(), bits, "FMOVI must embed {bits:#010x} verbatim");
+        assert_eq!(
+            insn.imm_f32().to_bits(),
+            bits,
+            "FMOVI must embed {bits:#010x} verbatim"
+        );
         assert_eq!(insn.imm_f32(), expected);
     }
 }
@@ -284,10 +312,18 @@ fn fmovi_regression_numeric_cast_would_be_wrong() {
     // *integer* 0x3F80_0000 into 1.06535322e9 rather than 1.0, and turns 1 into
     // 1.0 rather than the smallest positive subnormal.
     let insn = decode(0x00, 0, 0, 0, 0, 0x3F80_0000);
-    assert_eq!(insn.imm_f32(), 1.0, "0x3F80_0000 is the bit pattern of 1.0f32");
+    assert_eq!(
+        insn.imm_f32(),
+        1.0,
+        "0x3F80_0000 is the bit pattern of 1.0f32"
+    );
 
     let insn = decode(0x00, 0, 0, 0, 0, 1);
-    assert_eq!(insn.imm_f32().to_bits(), 1, "imm = 1 must be a subnormal, not 1.0");
+    assert_eq!(
+        insn.imm_f32().to_bits(),
+        1,
+        "imm = 1 must be a subnormal, not 1.0"
+    );
     assert_ne!(insn.imm_f32(), 1.0);
     assert!(insn.imm_f32() > 0.0 && insn.imm_f32().is_subnormal());
 }
@@ -309,7 +345,11 @@ fn wait_imm_is_a_bit_exact_f32() {
     for bits in [0x3F80_0000u32, 0x0000_0000, 0x8000_0000, 0x7FC0_0001] {
         let insn = decode(0x71, 0, 0, 0, 0, bits);
         assert_eq!(insn.op, OpCode::Wait);
-        assert_eq!(insn.imm_f32().to_bits(), bits, "WAIT must embed {bits:#010x} verbatim");
+        assert_eq!(
+            insn.imm_f32().to_bits(),
+            bits,
+            "WAIT must embed {bits:#010x} verbatim"
+        );
     }
 }
 

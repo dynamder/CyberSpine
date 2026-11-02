@@ -169,11 +169,7 @@ pub fn floor(x: f32) -> f32 {
 #[inline]
 pub fn frac(x: f32) -> f32 {
     let result = x - floor(x);
-    if result == 1.0 {
-        ONE_MINUS_ULP
-    } else {
-        result
-    }
+    if result == 1.0 { ONE_MINUS_ULP } else { result }
 }
 
 // ---------------------------------------------------------------------------

@@ -116,7 +116,11 @@ fn halt_terminates_and_a_second_resume_is_dead() {
     assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Halted);
     assert_eq!(instance.status(), Status::Halted);
     assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Dead);
-    assert_eq!(instance.status(), Status::Halted, "Dead must not change the status");
+    assert_eq!(
+        instance.status(),
+        Status::Halted,
+        "Dead must not change the status"
+    );
 }
 
 #[test]
@@ -141,7 +145,11 @@ fn yield_suspends_at_the_next_instruction_and_keeps_state() {
 
     assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Yielded);
     assert_eq!(instance.status(), Status::Suspended);
-    assert_eq!(instance.pc(), 2, "the resume point is the instruction after YIELD");
+    assert_eq!(
+        instance.pc(),
+        2,
+        "the resume point is the instruction after YIELD"
+    );
     assert_eq!(instance.registers().get_i(reg(1)), 42);
 
     assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Halted);
@@ -349,7 +357,11 @@ fn madd_rounds_twice_and_is_never_fused() {
         0,
         "a*b rounds to 1.0 first, so the sum is zero"
     );
-    assert_ne!(fused.to_bits(), 0, "this input must distinguish fused from unfused");
+    assert_ne!(
+        fused.to_bits(),
+        0,
+        "this input must distinguish fused from unfused"
+    );
 }
 
 #[test]
@@ -663,7 +675,10 @@ fn excite_alone_publishes_nothing() {
     let mut instance = Instance::new(&program);
 
     let zeros = [0.0];
-    assert_eq!(instance.resume(&program, &Sensors::new(&zeros, &[]), 0), Step::Halted);
+    assert_eq!(
+        instance.resume(&program, &Sensors::new(&zeros, &[]), 0),
+        Step::Halted
+    );
     assert_eq!(instance.published(0), None);
     assert_eq!(instance.muscle_count(), 1);
 }
@@ -692,7 +707,10 @@ fn flush_publishes_only_what_was_pending_and_keeps_it_afterwards() {
     let mut instance = Instance::new(&program);
 
     let zeros = [0.0; 2];
-    assert_eq!(instance.resume(&program, &Sensors::new(&zeros, &[]), 0), Step::Halted);
+    assert_eq!(
+        instance.resume(&program, &Sensors::new(&zeros, &[]), 0),
+        Step::Halted
+    );
     assert_eq!(
         instance.published(0),
         Some(0.5),
@@ -733,7 +751,11 @@ fn a_published_value_stays_across_a_flush_of_another_muscle() {
     assert_eq!(instance.published(1), None);
 
     assert_eq!(instance.resume(&program, &sensors, 0), Step::Halted);
-    assert_eq!(instance.published(0), Some(0.5), "G10: a flushed value holds");
+    assert_eq!(
+        instance.published(0),
+        Some(0.5),
+        "G10: a flushed value holds"
+    );
     assert_eq!(instance.published(1), Some(0.25));
 }
 
@@ -782,12 +804,7 @@ fn a_self_jump_burns_fuel_at_the_same_pc() {
 #[test]
 fn every_executed_instruction_costs_one_including_jumps() {
     let image = fed(
-        vec![
-            imovi(2, 1),
-            binary(OpCode::Iadd, 1, 1, 2),
-            jump(-2),
-            halt(),
-        ],
+        vec![imovi(2, 1), binary(OpCode::Iadd, 1, 1, 2), jump(-2), halt()],
         6,
     );
     let program = Program::new(&image);
@@ -802,10 +819,7 @@ fn every_executed_instruction_costs_one_including_jumps() {
 
 #[test]
 fn fuel_is_refilled_on_every_resume() {
-    let image = fed(
-        vec![nop(), Insn::new(OpCode::Yield), nop(), halt()],
-        2,
-    );
+    let image = fed(vec![nop(), Insn::new(OpCode::Yield), nop(), halt()], 2);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -833,8 +847,16 @@ fn wait_rounds_ticks_up_never_down() {
     assert_eq!(waited_at(0.0, 60, 100), 100);
     assert_eq!(waited_at(1.0 / 64.0, 64, 100), 101, "exactly one tick");
     assert_eq!(waited_at(1.0, 60, 100), 160);
-    assert_eq!(waited_at(1e-9, 60, 100), 101, "any positive duration is one tick");
-    assert_eq!(waited_at(-1.0, 60, 100), 100, "a negative duration is zero ticks");
+    assert_eq!(
+        waited_at(1e-9, 60, 100),
+        101,
+        "any positive duration is one tick"
+    );
+    assert_eq!(
+        waited_at(-1.0, 60, 100),
+        100,
+        "a negative duration is zero ticks"
+    );
     assert_eq!(waited_at(f32::NAN, 60, 100), 100);
     assert_eq!(waited_at(0.5, 30, 0), 15);
 }
@@ -866,7 +888,11 @@ fn a_waited_instance_runs_again_when_the_host_decides() {
     assert_eq!(until, 25);
     assert_eq!(instance.wake_at(), 25);
     assert_eq!(instance.status(), Status::Suspended);
-    assert_eq!(instance.pc(), 1, "resume point is the instruction after WAIT");
+    assert_eq!(
+        instance.pc(),
+        1,
+        "resume point is the instruction after WAIT"
+    );
 
     assert_eq!(instance.resume(&program, &no_sensors(), 25), Step::Halted);
     assert_eq!(instance.registers().get_f(reg(1)), 1.0);
@@ -938,10 +964,12 @@ fn a_short_float_snapshot_is_a_host_violation() {
 #[should_panic(expected = "host contract")]
 fn a_short_integer_snapshot_is_a_host_violation() {
     let mut image = Image::new(vec![halt()]);
-    image.sensors_i.push(cyberspine_core::binfmt::image::Sensor {
-        name: "tick".into(),
-        source: cyberspine_core::binfmt::image::SensorSource::BuiltinTick,
-    });
+    image
+        .sensors_i
+        .push(cyberspine_core::binfmt::image::Sensor {
+            name: "tick".into(),
+            source: cyberspine_core::binfmt::image::SensorSource::BuiltinTick,
+        });
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 

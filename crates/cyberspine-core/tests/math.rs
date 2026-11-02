@@ -27,7 +27,10 @@ fn neg_flips_the_sign_bit_and_keeps_nan_payloads() {
 #[test]
 fn abs_clears_the_sign_bit() {
     assert_eq!(m::fabs(-1.5).to_bits(), 1.5f32.to_bits());
-    assert_eq!(m::fabs(f32::NEG_INFINITY).to_bits(), f32::INFINITY.to_bits());
+    assert_eq!(
+        m::fabs(f32::NEG_INFINITY).to_bits(),
+        f32::INFINITY.to_bits()
+    );
     assert_eq!(m::fabs(f32::from_bits(0xffc0_1234)).to_bits(), 0x7fc0_1234);
 }
 
@@ -84,7 +87,11 @@ fn clamp_is_the_composition_so_an_inverted_range_yields_hi() {
     assert_eq!(m::clamp(5.0, 0.0, 1.0), 1.0);
     assert_eq!(m::clamp(-5.0, 0.0, 1.0), 0.0);
     assert_eq!(m::clamp(0.5, 0.0, 1.0), 0.5);
-    assert_eq!(m::clamp(0.5, 1.0, 0.0), 0.0, "lo > hi collapses to fmin(x, hi)");
+    assert_eq!(
+        m::clamp(0.5, 1.0, 0.0),
+        0.0,
+        "lo > hi collapses to fmin(x, hi)"
+    );
     assert!(m::clamp(f32::NAN, 0.0, 1.0).is_nan());
 }
 
@@ -104,7 +111,7 @@ fn floor_is_exact_on_the_cases_that_break_naive_implementations() {
         (3.0, 3.0),
         (1e-30, 0.0),
         (-1e-30, -1.0),
-        (8_388_608.0, 8_388_608.0),   // 2^23, already integral
+        (8_388_608.0, 8_388_608.0), // 2^23, already integral
         (-8_388_608.0, -8_388_608.0),
         (1e30, 1e30),
         (f32::INFINITY, f32::INFINITY),
@@ -126,11 +133,7 @@ fn floor_is_exact_on_the_cases_that_break_naive_implementations() {
 fn floor_agrees_with_the_platform_on_a_grid() {
     for step in -20_000i32..=20_000 {
         let x = step as f32 * 0.037;
-        assert_eq!(
-            m::floor(x).to_bits(),
-            x.floor().to_bits(),
-            "floor({x})"
-        );
+        assert_eq!(m::floor(x).to_bits(), x.floor().to_bits(), "floor({x})");
     }
 }
 
@@ -176,9 +179,9 @@ fn sqrt_agrees_with_the_platform_on_special_and_extreme_values() {
         0.25,
         f32::MAX,
         f32::MIN_POSITIVE,
-        f32::from_bits(1),  // smallest subnormal
-        f32::from_bits(3),  // subnormal
-        1e-40,              // subnormal
+        f32::from_bits(1), // smallest subnormal
+        f32::from_bits(3), // subnormal
+        1e-40,             // subnormal
         1e30,
     ];
 

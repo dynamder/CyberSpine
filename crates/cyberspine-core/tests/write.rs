@@ -41,7 +41,11 @@ fn code(words: &[Insn]) -> Vec<Insn> {
 fn a_halt_only_image_is_the_minimum_136_bytes() {
     let bytes = Image::halt_only().to_bytes();
     assert_eq!(bytes.len(), MIN_FILE_LEN);
-    assert_eq!(bytes.len(), 136, "96-byte header + one 8-byte HALT + 32-byte hash");
+    assert_eq!(
+        bytes.len(),
+        136,
+        "96-byte header + one 8-byte HALT + 32-byte hash"
+    );
 
     // `docs/binfmt.md` §4, transcribed in table order. Every value is either a
     // spec constant or derivable from a one-instruction, metadata-free image.
@@ -110,10 +114,22 @@ fn the_header_is_exactly_96_bytes() {
 fn the_tables_are_gap_free_and_in_the_order_section_6_fixes() {
     let mut image = Image::new(code(&[with_ra(OpCode::Fexcite, 1), insn(OpCode::Halt)]));
     image.push_muscle("mouth");
-    image.sensors_f.push(Sensor { name: "dt".into(), source: SensorSource::BuiltinDt });
-    image.sensors_i.push(Sensor { name: "tick".into(), source: SensorSource::BuiltinTick });
-    image.vars_f.push(VarF { name: "gain".into(), init: 0.5 });
-    image.vars_i.push(VarI { name: "count".into(), init: -7 });
+    image.sensors_f.push(Sensor {
+        name: "dt".into(),
+        source: SensorSource::BuiltinDt,
+    });
+    image.sensors_i.push(Sensor {
+        name: "tick".into(),
+        source: SensorSource::BuiltinTick,
+    });
+    image.vars_f.push(VarF {
+        name: "gain".into(),
+        init: 0.5,
+    });
+    image.vars_i.push(VarI {
+        name: "count".into(),
+        init: -7,
+    });
 
     let bytes = image.to_bytes();
 
@@ -133,7 +149,11 @@ fn the_tables_are_gap_free_and_in_the_order_section_6_fixes() {
     expected.extend_from_slice(&(-7i32).to_le_bytes());
 
     let tables = &bytes[HEADER_LEN + 2 * INSN_LEN..bytes.len() - HASH_LEN];
-    assert_eq!(tables, &expected[..], "the five tables are not laid out as §6 requires");
+    assert_eq!(
+        tables,
+        &expected[..],
+        "the five tables are not laid out as §6 requires"
+    );
 
     // The counts describe exactly those tables.
     assert_eq!(u32_at(&bytes, 16), 2, "code_len");
@@ -163,8 +183,13 @@ fn a_sensor_is_a_name_then_one_source_byte() {
     .into_iter()
     .enumerate()
     {
-        image.muscles.push(Muscle { name: format!("m{i}").into() });
-        image.sensors_f.push(Sensor { name: format!("m{i}").into(), source });
+        image.muscles.push(Muscle {
+            name: format!("m{i}").into(),
+        });
+        image.sensors_f.push(Sensor {
+            name: format!("m{i}").into(),
+            source,
+        });
     }
 
     let bytes = image.to_bytes();
@@ -174,7 +199,11 @@ fn a_sensor_is_a_name_then_one_source_byte() {
     for i in 0..4 {
         let name = format!("m{i}");
         assert_eq!(&bytes[cursor..cursor + name.len()], name.as_bytes());
-        assert_eq!(bytes[cursor + name.len()], 0x00, "name must be NUL-terminated");
+        assert_eq!(
+            bytes[cursor + name.len()],
+            0x00,
+            "name must be NUL-terminated"
+        );
         cursor += name.len() + 1;
     }
 
@@ -182,12 +211,20 @@ fn a_sensor_is_a_name_then_one_source_byte() {
     for source in 0..4u8 {
         let name = format!("m{source}");
         assert_eq!(&bytes[cursor..cursor + name.len()], name.as_bytes());
-        assert_eq!(bytes[cursor + name.len()], 0x00, "name must be NUL-terminated");
+        assert_eq!(
+            bytes[cursor + name.len()],
+            0x00,
+            "name must be NUL-terminated"
+        );
         assert_eq!(bytes[cursor + name.len() + 1], source, "source byte");
         cursor += name.len() + 2;
     }
 
-    assert_eq!(cursor, bytes.len() - HASH_LEN, "the tables must end where the hash begins");
+    assert_eq!(
+        cursor,
+        bytes.len() - HASH_LEN,
+        "the tables must end where the hash begins"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -201,8 +238,16 @@ fn the_derived_length_fields_track_the_actual_contents() {
         ops.push(insn(OpCode::Halt));
         let bytes = Image::new(code(&ops)).to_bytes();
 
-        assert_eq!(u32_at(&bytes, 16) as usize, n, "code_len must be the instruction count");
-        assert_eq!(u32_at(&bytes, 12) as usize, bytes.len(), "file_len must be the actual length");
+        assert_eq!(
+            u32_at(&bytes, 16) as usize,
+            n,
+            "code_len must be the instruction count"
+        );
+        assert_eq!(
+            u32_at(&bytes, 12) as usize,
+            bytes.len(),
+            "file_len must be the actual length"
+        );
         assert_eq!(bytes.len(), HEADER_LEN + n * INSN_LEN + HASH_LEN);
     }
 }
@@ -221,7 +266,10 @@ fn the_hash_covers_the_whole_file_not_just_the_header() {
     code_changed.code[0] = insn(OpCode::Nop); // code, offset 96
     let code_changed = code_changed.to_bytes();
 
-    assert_ne!(base[..base.len() - HASH_LEN], fuel_changed[..fuel_changed.len() - HASH_LEN]);
+    assert_ne!(
+        base[..base.len() - HASH_LEN],
+        fuel_changed[..fuel_changed.len() - HASH_LEN]
+    );
     assert_ne!(
         hash_of(&base),
         hash_of(&fuel_changed),
@@ -241,7 +289,10 @@ fn writing_the_same_image_twice_gives_identical_bytes() {
     let build = || {
         let mut image = Image::new(code(&[insn(OpCode::Yield), insn(OpCode::Halt)]));
         image.push_muscle("jaw");
-        image.vars_f.push(VarF { name: "k".into(), init: f32::NAN });
+        image.vars_f.push(VarF {
+            name: "k".into(),
+            init: f32::NAN,
+        });
         image.to_bytes()
     };
     assert_eq!(build(), build());
@@ -262,12 +313,18 @@ fn push_muscle_keeps_the_readback_invariant() {
     assert_eq!(image.muscles.len(), 2);
     assert_eq!(image.sensors_f.len(), 2);
     for (muscle, sensor) in image.muscles.iter().zip(&image.sensors_f) {
-        assert_eq!(muscle.name, sensor.name, "the read-back sensor must reuse the name");
+        assert_eq!(
+            muscle.name, sensor.name,
+            "the read-back sensor must reuse the name"
+        );
         assert_eq!(sensor.source, SensorSource::Muscle);
     }
 
     let bytes = image.to_bytes();
-    assert!(u32_at(&bytes, 28) >= u32_at(&bytes, 24), "M3: sensor_f_count >= muscle_count");
+    assert!(
+        u32_at(&bytes, 28) >= u32_at(&bytes, 24),
+        "M3: sensor_f_count >= muscle_count"
+    );
 }
 
 #[test]
@@ -276,11 +333,17 @@ fn the_writer_emits_names_it_cannot_vouch_for() {
     // name, or `tests/load.rs` could not test that the loader rejects one.
     let mut image = Image::halt_only();
     image.muscles.push(Muscle { name: "".into() });
-    image.sensors_f.push(Sensor { name: "9bad".into(), source: SensorSource::Muscle });
+    image.sensors_f.push(Sensor {
+        name: "9bad".into(),
+        source: SensorSource::Muscle,
+    });
 
     let bytes = image.to_bytes();
     let tables = &bytes[HEADER_LEN + INSN_LEN..bytes.len() - HASH_LEN];
-    assert_eq!(tables, b"\x009bad\0\x00", "empty name is a bare NUL; source byte follows");
+    assert_eq!(
+        tables, b"\x009bad\0\x00",
+        "empty name is a bare NUL; source byte follows"
+    );
 }
 
 #[test]
@@ -290,7 +353,10 @@ fn the_writer_leaves_the_trailing_halt_to_the_binder() {
     // could never produce a file that fails I8.
     let bytes = Image::new(code(&[insn(OpCode::Nop)])).to_bytes();
     let last = &bytes[HEADER_LEN..HEADER_LEN + INSN_LEN];
-    assert_eq!(last[7], 0xA1, "the writer wrote the NOP it was given, not a HALT");
+    assert_eq!(
+        last[7], 0xA1,
+        "the writer wrote the NOP it was given, not a HALT"
+    );
 }
 
 #[test]
@@ -300,6 +366,8 @@ fn the_writer_refuses_a_name_the_format_cannot_represent() {
     // charset, this is not a file the format can express, so it is refused at the
     // only point where it could do damage.
     let mut image = Image::halt_only();
-    image.muscles.push(Muscle { name: "a\0b".into() });
+    image.muscles.push(Muscle {
+        name: "a\0b".into(),
+    });
     let _ = image.to_bytes();
 }

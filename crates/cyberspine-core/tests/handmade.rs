@@ -78,60 +78,60 @@ const CODE: [u64; CODE_LEN] = [
     w(0x02, 2, 1, 0, 0, 0),           //  2  FMOV   f2, f1
     w(0x03, 2, 1, 0, 0, 0),           //  3  IMOV   i2, i1
     // 0x10 float binary
-    w(0x10, 3, 1, 2, 0, 0),           //  4  FADD   f3, f1, f2
-    w(0x11, 4, 3, 1, 0, 0),           //  5  FSUB   f4, f3, f1
-    w(0x12, 5, 4, 2, 0, 0),           //  6  FMUL   f5, f4, f2
-    w(0x13, 6, 5, 3, 0, 0),           //  7  FDIV   f6, f5, f3
-    w(0x14, 7, 1, 2, 0, 0),           //  8  FMIN   f7, f1, f2
-    w(0x15, 8, 1, 2, 0, 0),           //  9  FMAX   f8, f1, f2
+    w(0x10, 3, 1, 2, 0, 0), //  4  FADD   f3, f1, f2
+    w(0x11, 4, 3, 1, 0, 0), //  5  FSUB   f4, f3, f1
+    w(0x12, 5, 4, 2, 0, 0), //  6  FMUL   f5, f4, f2
+    w(0x13, 6, 5, 3, 0, 0), //  7  FDIV   f6, f5, f3
+    w(0x14, 7, 1, 2, 0, 0), //  8  FMIN   f7, f1, f2
+    w(0x15, 8, 1, 2, 0, 0), //  9  FMAX   f8, f1, f2
     // 0x20 float unary
-    w(0x20, 9, 1, 0, 0, 0),           // 10  FNEG   f9, f1
-    w(0x21, 10, 9, 0, 0, 0),          // 11  FABS   f10, f9
-    w(0x22, 11, 10, 0, 0, 0),         // 12  FSQRT  f11, f10
-    w(0x23, 12, 1, 0, 0, 0),          // 13  FSIN   f12, f1
-    w(0x24, 13, 1, 0, 0, 0),          // 14  FCOS   f13, f1
-    w(0x25, 14, 1, 0, 0, 0),          // 15  FFRAC  f14, f1
+    w(0x20, 9, 1, 0, 0, 0),   // 10  FNEG   f9, f1
+    w(0x21, 10, 9, 0, 0, 0),  // 11  FABS   f10, f9
+    w(0x22, 11, 10, 0, 0, 0), // 12  FSQRT  f11, f10
+    w(0x23, 12, 1, 0, 0, 0),  // 13  FSIN   f12, f1
+    w(0x24, 13, 1, 0, 0, 0),  // 14  FCOS   f13, f1
+    w(0x25, 14, 1, 0, 0, 0),  // 15  FFRAC  f14, f1
     // 0x30 float ternary
-    w(0x30, 15, 1, 2, 3, 0),          // 16  FMADD  f15, f1, f2, f3
-    w(0x31, 16, 1, 2, 3, 0),          // 17  FLERP  f16, f1, f2, f3
-    w(0x32, 17, 1, 2, 3, 0),          // 18  FCLAMP f17, f1, f2, f3
+    w(0x30, 15, 1, 2, 3, 0), // 16  FMADD  f15, f1, f2, f3
+    w(0x31, 16, 1, 2, 3, 0), // 17  FLERP  f16, f1, f2, f3
+    w(0x32, 17, 1, 2, 3, 0), // 18  FCLAMP f17, f1, f2, f3
     // 0x40 integer and conversion
-    w(0x40, 3, 1, 2, 0, 0),           // 19  IADD   i3, i1, i2
-    w(0x41, 4, 3, 1, 0, 0),           // 20  ISUB   i4, i3, i1
-    w(0x42, 5, 4, 2, 0, 0),           // 21  IMUL   i5, i4, i2
-    w(0x43, 18, 1, 0, 0, 0),          // 22  ITOF   f18, i1   (rd f, ra i)
-    w(0x44, 6, 1, 0, 0, 0),           // 23  FTOI   i6, f1    (rd i, ra f)
+    w(0x40, 3, 1, 2, 0, 0),  // 19  IADD   i3, i1, i2
+    w(0x41, 4, 3, 1, 0, 0),  // 20  ISUB   i4, i3, i1
+    w(0x42, 5, 4, 2, 0, 0),  // 21  IMUL   i5, i4, i2
+    w(0x43, 18, 1, 0, 0, 0), // 22  ITOF   f18, i1   (rd f, ra i)
+    w(0x44, 6, 1, 0, 0, 0),  // 23  FTOI   i6, f1    (rd i, ra f)
     // 0x50 control flow
     w(0x50, 0, 0, 0, 0, (-25i32) as u32), // 24  JMP    back to pc 1
-    w(0x51, 0, 1, 0, 0, 0),           // 25  IJZ    i1, +0
-    w(0x52, 0, 1, 0, 0, 0),           // 26  IJNZ   i1, +0
-    w(0x53, 0, 1, 2, 0, 0),           // 27  FLT    f1, f2, +0
-    w(0x54, 0, 1, 2, 0, 0),           // 28  FLE    f1, f2, +0
-    w(0x55, 0, 1, 2, 0, 0),           // 29  FGT    f1, f2, +0
-    w(0x56, 0, 1, 2, 0, 0),           // 30  FGE    f1, f2, +0
-    w(0x57, 0, 1, 2, 0, 0),           // 31  ILT    i1, i2, +0
-    w(0x58, 0, 1, 2, 0, 0),           // 32  ILE    i1, i2, +0
-    w(0x59, 0, 1, 2, 0, 0),           // 33  IGT    i1, i2, +0
-    w(0x5A, 0, 1, 2, 0, 0),           // 34  IGE    i1, i2, +0
-    w(0x5B, 0, 1, 2, 0, 0),           // 35  IEQ    i1, i2, +0
-    w(0x5C, 0, 1, 2, 0, 0),           // 36  INE    i1, i2, +0
+    w(0x51, 0, 1, 0, 0, 0),               // 25  IJZ    i1, +0
+    w(0x52, 0, 1, 0, 0, 0),               // 26  IJNZ   i1, +0
+    w(0x53, 0, 1, 2, 0, 0),               // 27  FLT    f1, f2, +0
+    w(0x54, 0, 1, 2, 0, 0),               // 28  FLE    f1, f2, +0
+    w(0x55, 0, 1, 2, 0, 0),               // 29  FGT    f1, f2, +0
+    w(0x56, 0, 1, 2, 0, 0),               // 30  FGE    f1, f2, +0
+    w(0x57, 0, 1, 2, 0, 0),               // 31  ILT    i1, i2, +0
+    w(0x58, 0, 1, 2, 0, 0),               // 32  ILE    i1, i2, +0
+    w(0x59, 0, 1, 2, 0, 0),               // 33  IGT    i1, i2, +0
+    w(0x5A, 0, 1, 2, 0, 0),               // 34  IGE    i1, i2, +0
+    w(0x5B, 0, 1, 2, 0, 0),               // 35  IEQ    i1, i2, +0
+    w(0x5C, 0, 1, 2, 0, 0),               // 36  INE    i1, i2, +0
     // 0x60 input
-    w(0x60, 19, 0, 0, 0, 3),          // 37  FSENSE f19, sensor_f[3] = pressure
-    w(0x61, 7, 0, 0, 0, 1),           // 38  ISENSE i7, sensor_i[1] = errors
+    w(0x60, 19, 0, 0, 0, 3), // 37  FSENSE f19, sensor_f[3] = pressure
+    w(0x61, 7, 0, 0, 0, 1),  // 38  ISENSE i7, sensor_i[1] = errors
     // 0x70 suspend
     w(0x70, 0, 0, 0, 0, 0),           // 39  YIELD
     w(0x71, 0, 0, 0, 0, 0x3F00_0000), // 40  WAIT   0.5
     // 0x80 excite
-    w(0x80, 0, 20, 0, 0, 1),          // 41  FEXCITE brow (muscle 1), f20
+    w(0x80, 0, 20, 0, 0, 1), // 41  FEXCITE brow (muscle 1), f20
     // 0x90 task variables
-    w(0x90, 21, 0, 0, 0, 2),          // 42  FVGET  f21, var_f[2] = tmp
-    w(0x91, 0, 1, 0, 0, 1),           // 43  FVSET  var_f[1] = phase, f1
-    w(0x92, 8, 0, 0, 0, 1),           // 44  IVGET  i8, var_i[1] = state
-    w(0x93, 0, 1, 0, 0, 2),           // 45  IVSET  var_i[2] = limit, i1
+    w(0x90, 21, 0, 0, 0, 2), // 42  FVGET  f21, var_f[2] = tmp
+    w(0x91, 0, 1, 0, 0, 1),  // 43  FVSET  var_f[1] = phase, f1
+    w(0x92, 8, 0, 0, 0, 1),  // 44  IVGET  i8, var_i[1] = state
+    w(0x93, 0, 1, 0, 0, 2),  // 45  IVSET  var_i[2] = limit, i1
     // 0xA0 misc
-    w(0xA1, 0, 0, 0, 0, 0),           // 46  NOP
-    w(0xA2, 0, 0, 0, 0, 0),           // 47  FLUSH
-    w(0xA0, 0, 0, 0, 0, 0),           // 48  HALT
+    w(0xA1, 0, 0, 0, 0, 0), // 46  NOP
+    w(0xA2, 0, 0, 0, 0, 0), // 47  FLUSH
+    w(0xA0, 0, 0, 0, 0, 0), // 48  HALT
 ];
 
 /// Build the 96-byte fixed header at the exact offsets of `binfmt.md` §4.
@@ -226,7 +226,11 @@ fn handmade_valid() -> Vec<u8> {
     let digest = blake3::hash(&bytes);
     bytes.extend_from_slice(digest.as_bytes());
 
-    assert_eq!(bytes.len(), file_len, "the hand-written layout must be self-consistent");
+    assert_eq!(
+        bytes.len(),
+        file_len,
+        "the hand-written layout must be self-consistent"
+    );
     bytes
 }
 
@@ -299,7 +303,11 @@ fn regenerate_fixtures() {
 #[test]
 fn the_hand_assembled_bytes_match_the_offset_table() {
     let bytes = handmade_valid();
-    assert_eq!(bytes.len(), 636, "96 header + 392 code + 116 tables + 32 hash");
+    assert_eq!(
+        bytes.len(),
+        636,
+        "96 header + 392 code + 116 tables + 32 hash"
+    );
 
     // §4, field by field, read straight out of the byte string.
     assert_eq!(&bytes[0..4], b"CSPX");
@@ -325,12 +333,19 @@ fn the_hand_assembled_bytes_match_the_offset_table() {
         "reserved_b must be zero"
     );
     assert_eq!(u32::from_le_bytes(bytes[52..56].try_into().unwrap()), 8192);
-    assert_eq!(u32::from_le_bytes(bytes[56..60].try_into().unwrap()), 0x4148_0000); // 12.5f32
+    assert_eq!(
+        u32::from_le_bytes(bytes[56..60].try_into().unwrap()),
+        0x4148_0000
+    ); // 12.5f32
     assert_eq!(&bytes[64..96], &[0u8; 32], "reserved2 must be zero");
 
     // §5: little-endian words, top byte = opcode. pc 0 is FMOVI, the last is HALT.
     assert_eq!(bytes[code_word(0) + 7], 0x00, "pc 0 must be FMOVI");
-    assert_eq!(bytes[code_word(LAST) + 7], 0xA0, "the last word must be HALT");
+    assert_eq!(
+        bytes[code_word(LAST) + 7],
+        0xA0,
+        "the last word must be HALT"
+    );
 
     // §7: the hash is over everything before it.
     assert_eq!(
@@ -356,7 +371,8 @@ fn golden_valid_all_exercises_every_opcode() {
 
     assert_eq!(image.code.len(), CODE_LEN, "one instruction per opcode");
     assert_eq!(
-        seen, all,
+        seen,
+        all,
         "the valid golden must contain every one of the {} opcodes",
         OpCode::ALL.len()
     );
@@ -423,7 +439,11 @@ fn golden_valid_all_loads_and_decodes() {
     assert_eq!(image.vars_f.len(), 3);
     assert_eq!(image.vars_f[0].init, 0.5);
     assert_eq!(image.vars_f[1].init, 0.0);
-    assert_eq!(image.vars_f[2].init.to_bits(), 0x7FC0_0001, "NaN payload survives");
+    assert_eq!(
+        image.vars_f[2].init.to_bits(),
+        0x7FC0_0001,
+        "NaN payload survives"
+    );
 
     assert_eq!(image.vars_i.len(), 3);
     assert_eq!(image.vars_i[0].init, -7);
@@ -444,7 +464,11 @@ fn golden_valid_all_is_byte_exact() {
 
     // And the writer must reproduce a file it did not produce (§8).
     let image = Image::from_bytes(&fixture_bytes(VALID)).expect("the golden file is valid");
-    assert_eq!(image.to_bytes(), bytes, "the writer must reproduce the golden bytes");
+    assert_eq!(
+        image.to_bytes(),
+        bytes,
+        "the writer must reproduce the golden bytes"
+    );
 }
 
 // ===========================================================================
@@ -487,14 +511,20 @@ fn a_corrupt_stored_hash_is_refused() {
     let mut bytes = handmade_valid();
     let last = bytes.len() - 1;
     bytes[last] ^= 0xFF;
-    assert!(matches!(reject(&bytes), LoadError::ContentHashMismatch { .. }));
+    assert!(matches!(
+        reject(&bytes),
+        LoadError::ContentHashMismatch { .. }
+    ));
 }
 
 #[test]
 fn a_word_with_unused_bits_is_refused() {
     // NOP with imm = 1: the opcode is defined, but the word is not canonical.
     let nop_with_imm = (0xA1u64 << 56) | 1;
-    let bytes = rehash(&handmade_valid(), &[(code_word(0), &nop_with_imm.to_le_bytes())]);
+    let bytes = rehash(
+        &handmade_valid(),
+        &[(code_word(0), &nop_with_imm.to_le_bytes())],
+    );
     assert!(matches!(
         reject(&bytes),
         LoadError::NonCanonicalInstruction { index: 0, .. }
@@ -504,7 +534,10 @@ fn a_word_with_unused_bits_is_refused() {
 #[test]
 fn a_file_not_ending_in_halt_is_refused() {
     let yield_word = 0x70u64 << 56;
-    let bytes = rehash(&handmade_valid(), &[(code_word(LAST), &yield_word.to_le_bytes())]);
+    let bytes = rehash(
+        &handmade_valid(),
+        &[(code_word(LAST), &yield_word.to_le_bytes())],
+    );
     assert!(matches!(reject(&bytes), LoadError::MissingTrailingHalt));
 }
 
@@ -514,7 +547,11 @@ fn a_jump_past_the_end_is_refused() {
     let jmp = (0x50u64 << 56) | 100;
     let bytes = rehash(&handmade_valid(), &[(code_word(0), &jmp.to_le_bytes())]);
     match reject(&bytes) {
-        LoadError::JumpTargetOutOfRange { index: 0, offset: 100, code_len: 49 } => {}
+        LoadError::JumpTargetOutOfRange {
+            index: 0,
+            offset: 100,
+            code_len: 49,
+        } => {}
         other => panic!("a jump past the end was not refused by I6: {other}"),
     }
 }

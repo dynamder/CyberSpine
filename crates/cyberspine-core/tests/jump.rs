@@ -100,7 +100,11 @@ fn jump_target_inverts_jump_offset() {
             pc.saturating_add(1 << 20),
         ] {
             if let Some(off) = jump_offset(pc, target) {
-                assert_eq!(jump_target(pc, off), Some(target), "pc {pc}, target {target}");
+                assert_eq!(
+                    jump_target(pc, off),
+                    Some(target),
+                    "pc {pc}, target {target}"
+                );
             }
         }
     }
@@ -115,11 +119,23 @@ fn a_target_below_index_zero_is_unrepresentable() {
     // The boundary is `off <= -(pc + 2)`: one step past `pc + 1 + off == 0`.
     // `off = -(pc + 1)` is still legal and lands exactly on index 0, so the
     // self-jump case (pc 0, off -1) sits on the valid side of the line.
-    assert_eq!(jump_target(0, -1), Some(0), "off -1 from pc 0 is the self-jump, not an underflow");
-    assert_eq!(jump_target(0, -2), None, "pc 0 with off -2 would land on index -1");
+    assert_eq!(
+        jump_target(0, -1),
+        Some(0),
+        "off -1 from pc 0 is the self-jump, not an underflow"
+    );
+    assert_eq!(
+        jump_target(0, -2),
+        None,
+        "pc 0 with off -2 would land on index -1"
+    );
     assert_eq!(jump_target(0, i32::MIN), None);
 
-    assert_eq!(jump_target(5, -6), Some(0), "off -(pc + 1) lands exactly on index 0");
+    assert_eq!(
+        jump_target(5, -6),
+        Some(0),
+        "off -(pc + 1) lands exactly on index 0"
+    );
     assert_eq!(jump_target(5, -7), None);
     assert_eq!(jump_target(5, i32::MIN), None);
 
@@ -171,7 +187,11 @@ fn an_offset_survives_the_assembler_and_loader_paths() {
     // stored or recovered with the wrong width or signedness.
     for (pc, label_pc) in [(2usize, 0usize), (0, 5), (7, 7), (3, 4), (100, 0), (0, 0)] {
         let off = jump_offset(pc, label_pc).expect("this distance fits an i32");
-        let word = Insn { imm: off as u32, ..Insn::new(OpCode::Jmp) }.encode();
+        let word = Insn {
+            imm: off as u32,
+            ..Insn::new(OpCode::Jmp)
+        }
+        .encode();
 
         let decoded = Insn::decode(word).expect("a JMP word always decodes");
         assert_eq!(decoded.op, OpCode::Jmp, "JMP must decode back to JMP");

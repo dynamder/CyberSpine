@@ -116,12 +116,30 @@ fn a_populated_image_round_trips() {
         insn(OpCode::Halt, 0, 0, 0),
     ]);
     image.push_muscle("mouth_open");
-    image.sensors_f.push(Sensor { name: "dt".into(), source: SensorSource::BuiltinDt });
-    image.sensors_f.push(Sensor { name: "pressure".into(), source: SensorSource::Backend });
-    image.sensors_i.push(Sensor { name: "tick".into(), source: SensorSource::BuiltinTick });
-    image.sensors_i.push(Sensor { name: "errors".into(), source: SensorSource::Backend });
-    image.vars_f.push(VarF { name: "gain".into(), init: 0.5 });
-    image.vars_i.push(VarI { name: "count".into(), init: -7 });
+    image.sensors_f.push(Sensor {
+        name: "dt".into(),
+        source: SensorSource::BuiltinDt,
+    });
+    image.sensors_f.push(Sensor {
+        name: "pressure".into(),
+        source: SensorSource::Backend,
+    });
+    image.sensors_i.push(Sensor {
+        name: "tick".into(),
+        source: SensorSource::BuiltinTick,
+    });
+    image.sensors_i.push(Sensor {
+        name: "errors".into(),
+        source: SensorSource::Backend,
+    });
+    image.vars_f.push(VarF {
+        name: "gain".into(),
+        init: 0.5,
+    });
+    image.vars_i.push(VarI {
+        name: "count".into(),
+        init: -7,
+    });
     image.header.layer = 3;
     image.header.fuel = 1234;
 
@@ -134,7 +152,13 @@ fn float_var_initial_values_round_trip_bit_for_bit() {
     // §6.4: the initial value is stored as a bit pattern, so NaN payloads and
     // both signed zeros have to survive. `f32` equality cannot express that,
     // which is exactly why this compares bits.
-    let cases: [u32; 5] = [0x0000_0000, 0x8000_0000, 0x7FC0_0001, 0xFFC0_0001, 0x0000_0001];
+    let cases: [u32; 5] = [
+        0x0000_0000,
+        0x8000_0000,
+        0x7FC0_0001,
+        0xFFC0_0001,
+        0x0000_0001,
+    ];
 
     let mut image = Image::halt_only();
     for (i, bits) in cases.iter().enumerate() {
@@ -165,7 +189,10 @@ fn the_content_hash_matches_the_bytes_it_came_from() {
 
 #[test]
 fn c1_a_file_shorter_than_the_minimum_is_refused() {
-    assert!(matches!(reject(&[0u8; 100]), LoadError::TooShort { len: 100 }));
+    assert!(matches!(
+        reject(&[0u8; 100]),
+        LoadError::TooShort { len: 100 }
+    ));
     assert!(matches!(reject(&[]), LoadError::TooShort { len: 0 }));
 }
 
@@ -182,7 +209,10 @@ fn c1_a_declared_length_that_disagrees_with_the_file_is_refused() {
     let bytes = forge(&image, &[(OFF_FILE_LEN, &(136u32 + 1).to_le_bytes())]);
     assert!(matches!(
         reject(&bytes),
-        LoadError::FileLenMismatch { declared: 137, actual: 136 }
+        LoadError::FileLenMismatch {
+            declared: 137,
+            actual: 136
+        }
     ));
 }
 
@@ -306,7 +336,10 @@ fn c5_a_count_that_cannot_fit_the_file_is_refused_before_allocating() {
     let bytes = forge(&image, &[(OFF_CODE_LEN, &u32::MAX.to_le_bytes())]);
 
     match reject(&bytes) {
-        LoadError::CountsExceedFileLen { lower_bound, file_len } => {
+        LoadError::CountsExceedFileLen {
+            lower_bound,
+            file_len,
+        } => {
             assert_eq!(lower_bound, 96 + 8 * u32::MAX as u64 + 32);
             assert_eq!(file_len, 136);
         }
@@ -363,7 +396,10 @@ fn c7_bytes_between_the_tables_and_the_hash_are_refused() {
 
     assert!(matches!(
         reject(&bytes),
-        LoadError::TrailingBytes { consumed: 104, expected: 112 }
+        LoadError::TrailingBytes {
+            consumed: 104,
+            expected: 112
+        }
     ));
 }
 
@@ -378,10 +414,16 @@ fn c8_code_len_zero_is_refused() {
 fn c8_the_last_instruction_must_be_halt() {
     // Also I8, which is the same rule stated at instruction level.
     let image = image_with(&[insn(OpCode::Nop, 0, 0, 0)]);
-    assert!(matches!(reject(&image.to_bytes()), LoadError::MissingTrailingHalt));
+    assert!(matches!(
+        reject(&image.to_bytes()),
+        LoadError::MissingTrailingHalt
+    ));
 
     let image = image_with(&[insn(OpCode::Yield, 0, 0, 0)]);
-    assert!(matches!(reject(&image.to_bytes()), LoadError::MissingTrailingHalt));
+    assert!(matches!(
+        reject(&image.to_bytes()),
+        LoadError::MissingTrailingHalt
+    ));
 }
 
 // ===========================================================================
@@ -401,7 +443,10 @@ fn m1_an_empty_name_is_refused() {
 
     assert!(matches!(
         reject(&image.to_bytes()),
-        LoadError::EmptyName { table: Table::Muscles, index: 1 }
+        LoadError::EmptyName {
+            table: Table::Muscles,
+            index: 1
+        }
     ));
 }
 
@@ -423,7 +468,10 @@ fn m1_a_name_that_is_not_an_ascii_identifier_is_refused() {
     let mut image = Image::halt_only();
     image.push_muscle("_");
     image.push_muscle("_9x");
-    assert!(Image::from_bytes(&image.to_bytes()).is_ok(), "'_' and '_9x' are valid identifiers");
+    assert!(
+        Image::from_bytes(&image.to_bytes()).is_ok(),
+        "'_' and '_9x' are valid identifiers"
+    );
 }
 
 #[test]
@@ -434,7 +482,11 @@ fn m2_a_repeated_name_within_one_table_is_refused() {
     image.push_muscle("jaw");
 
     match reject(&image.to_bytes()) {
-        LoadError::DuplicateName { table, index: 1, name } => {
+        LoadError::DuplicateName {
+            table,
+            index: 1,
+            name,
+        } => {
             assert_eq!(table, Table::Muscles);
             assert_eq!(name, "jaw");
         }
@@ -448,9 +500,18 @@ fn m2_names_are_only_unique_within_a_table() {
     // appear in two of them — and does, in the read-back invariant.
     let mut image = Image::halt_only();
     image.push_muscle("shared");
-    image.sensors_i.push(Sensor { name: "shared".into(), source: SensorSource::Backend });
-    image.vars_f.push(VarF { name: "shared".into(), init: 0.0 });
-    image.vars_i.push(VarI { name: "shared".into(), init: 0 });
+    image.sensors_i.push(Sensor {
+        name: "shared".into(),
+        source: SensorSource::Backend,
+    });
+    image.vars_f.push(VarF {
+        name: "shared".into(),
+        init: 0.0,
+    });
+    image.vars_i.push(VarI {
+        name: "shared".into(),
+        init: 0,
+    });
     assert!(Image::from_bytes(&image.to_bytes()).is_ok());
 }
 
@@ -463,7 +524,10 @@ fn m3_sensor_f_count_must_cover_every_muscle() {
 
     assert!(matches!(
         reject(&image.to_bytes()),
-        LoadError::SensorFCountBelowMuscleCount { muscle_count: 1, sensor_f_count: 0 }
+        LoadError::SensorFCountBelowMuscleCount {
+            muscle_count: 1,
+            sensor_f_count: 0
+        }
     ));
 }
 
@@ -471,10 +535,17 @@ fn m3_sensor_f_count_must_cover_every_muscle() {
 fn m4_a_readback_sensor_must_carry_the_same_name() {
     let mut image = Image::halt_only();
     image.muscles.push(Muscle { name: "jaw".into() });
-    image.sensors_f.push(Sensor { name: "jaw_".into(), source: SensorSource::Muscle });
+    image.sensors_f.push(Sensor {
+        name: "jaw_".into(),
+        source: SensorSource::Muscle,
+    });
 
     match reject(&image.to_bytes()) {
-        LoadError::ReadbackNameMismatch { index: 0, muscle, sensor } => {
+        LoadError::ReadbackNameMismatch {
+            index: 0,
+            muscle,
+            sensor,
+        } => {
             assert_eq!(muscle, "jaw");
             assert_eq!(sensor, "jaw_");
         }
@@ -488,11 +559,17 @@ fn m4_a_readback_sensor_must_be_sourced_from_the_muscle() {
     // which integer means "jaw".
     let mut image = Image::halt_only();
     image.muscles.push(Muscle { name: "jaw".into() });
-    image.sensors_f.push(Sensor { name: "jaw".into(), source: SensorSource::Backend });
+    image.sensors_f.push(Sensor {
+        name: "jaw".into(),
+        source: SensorSource::Backend,
+    });
 
     assert!(matches!(
         reject(&image.to_bytes()),
-        LoadError::ReadbackSourceMismatch { index: 0, found: SensorSource::Backend }
+        LoadError::ReadbackSourceMismatch {
+            index: 0,
+            found: SensorSource::Backend
+        }
     ));
 }
 
@@ -510,7 +587,11 @@ fn m5_an_undefined_source_byte_is_refused() {
 
     assert!(matches!(
         reject(&bytes),
-        LoadError::UnknownSensorSource { table: Table::SensorsF, index: 0, src: 9 }
+        LoadError::UnknownSensorSource {
+            table: Table::SensorsF,
+            index: 0,
+            src: 9
+        }
     ));
 }
 
@@ -518,24 +599,44 @@ fn m5_an_undefined_source_byte_is_refused() {
 fn m5_builtin_dt_and_tick_are_single_and_table_specific() {
     // BUILTIN_TICK in sensors_f: the integer tick cannot be read as a float.
     let mut image = Image::halt_only();
-    image.sensors_f.push(Sensor { name: "t".into(), source: SensorSource::BuiltinTick });
+    image.sensors_f.push(Sensor {
+        name: "t".into(),
+        source: SensorSource::BuiltinTick,
+    });
     assert!(matches!(
         reject(&image.to_bytes()),
-        LoadError::SensorSourceNotAllowedHere { table: Table::SensorsF, index: 0, .. }
+        LoadError::SensorSourceNotAllowedHere {
+            table: Table::SensorsF,
+            index: 0,
+            ..
+        }
     ));
 
     // BUILTIN_DT in sensors_i: the same rule the other way.
     let mut image = Image::halt_only();
-    image.sensors_i.push(Sensor { name: "d".into(), source: SensorSource::BuiltinDt });
+    image.sensors_i.push(Sensor {
+        name: "d".into(),
+        source: SensorSource::BuiltinDt,
+    });
     assert!(matches!(
         reject(&image.to_bytes()),
-        LoadError::SensorSourceNotAllowedHere { table: Table::SensorsI, index: 0, .. }
+        LoadError::SensorSourceNotAllowedHere {
+            table: Table::SensorsI,
+            index: 0,
+            ..
+        }
     ));
 
     // A second dt.
     let mut image = Image::halt_only();
-    image.sensors_f.push(Sensor { name: "d1".into(), source: SensorSource::BuiltinDt });
-    image.sensors_f.push(Sensor { name: "d2".into(), source: SensorSource::BuiltinDt });
+    image.sensors_f.push(Sensor {
+        name: "d1".into(),
+        source: SensorSource::BuiltinDt,
+    });
+    image.sensors_f.push(Sensor {
+        name: "d2".into(),
+        source: SensorSource::BuiltinDt,
+    });
     assert!(matches!(
         reject(&image.to_bytes()),
         LoadError::DuplicateBuiltinDt { index: 1 }
@@ -543,8 +644,14 @@ fn m5_builtin_dt_and_tick_are_single_and_table_specific() {
 
     // A second tick.
     let mut image = Image::halt_only();
-    image.sensors_i.push(Sensor { name: "t1".into(), source: SensorSource::BuiltinTick });
-    image.sensors_i.push(Sensor { name: "t2".into(), source: SensorSource::BuiltinTick });
+    image.sensors_i.push(Sensor {
+        name: "t1".into(),
+        source: SensorSource::BuiltinTick,
+    });
+    image.sensors_i.push(Sensor {
+        name: "t2".into(),
+        source: SensorSource::BuiltinTick,
+    });
     assert!(matches!(
         reject(&image.to_bytes()),
         LoadError::DuplicateBuiltinTick { index: 1 }
@@ -556,11 +663,17 @@ fn m6_muscle_readback_is_only_legal_where_a_muscle_exists() {
     // One muscle but two MUSCLE sensors: the second has no muscle to read.
     let mut image = Image::halt_only();
     image.push_muscle("a");
-    image.sensors_f.push(Sensor { name: "b".into(), source: SensorSource::Muscle });
+    image.sensors_f.push(Sensor {
+        name: "b".into(),
+        source: SensorSource::Muscle,
+    });
 
     assert!(matches!(
         reject(&image.to_bytes()),
-        LoadError::MuscleSourceNotAllowedHere { table: Table::SensorsF, index: 1 }
+        LoadError::MuscleSourceNotAllowedHere {
+            table: Table::SensorsF,
+            index: 1
+        }
     ));
 }
 
@@ -611,13 +724,23 @@ fn i3_sensor_indices_must_be_in_range() {
     let image = image_with(&[insn(OpCode::Fsense, 0, 0, 0), insn(OpCode::Halt, 0, 0, 0)]);
     assert!(matches!(
         reject(&image.to_bytes()),
-        LoadError::SensorIndexOutOfRange { index: 0, table: Table::SensorsF, sensor_id: 0, count: 0 }
+        LoadError::SensorIndexOutOfRange {
+            index: 0,
+            table: Table::SensorsF,
+            sensor_id: 0,
+            count: 0
+        }
     ));
 
     let image = image_with(&[insn(OpCode::Isense, 0, 0, 3), insn(OpCode::Halt, 0, 0, 0)]);
     assert!(matches!(
         reject(&image.to_bytes()),
-        LoadError::SensorIndexOutOfRange { index: 0, table: Table::SensorsI, sensor_id: 3, count: 0 }
+        LoadError::SensorIndexOutOfRange {
+            index: 0,
+            table: Table::SensorsI,
+            sensor_id: 3,
+            count: 0
+        }
     ));
 }
 
@@ -626,13 +749,23 @@ fn i4_variable_indices_must_be_in_range() {
     let image = image_with(&[insn(OpCode::Fvget, 0, 0, 0), insn(OpCode::Halt, 0, 0, 0)]);
     assert!(matches!(
         reject(&image.to_bytes()),
-        LoadError::VarIndexOutOfRange { index: 0, table: Table::VarsF, var_id: 0, count: 0 }
+        LoadError::VarIndexOutOfRange {
+            index: 0,
+            table: Table::VarsF,
+            var_id: 0,
+            count: 0
+        }
     ));
 
     let image = image_with(&[insn(OpCode::Ivset, 0, 0, 2), insn(OpCode::Halt, 0, 0, 0)]);
     assert!(matches!(
         reject(&image.to_bytes()),
-        LoadError::VarIndexOutOfRange { index: 0, table: Table::VarsI, var_id: 2, count: 0 }
+        LoadError::VarIndexOutOfRange {
+            index: 0,
+            table: Table::VarsI,
+            var_id: 2,
+            count: 0
+        }
     ));
 }
 
@@ -641,7 +774,11 @@ fn i5_muscle_indices_must_be_in_range() {
     let image = image_with(&[insn(OpCode::Fexcite, 0, 0, 0), insn(OpCode::Halt, 0, 0, 0)]);
     assert!(matches!(
         reject(&image.to_bytes()),
-        LoadError::MuscleIndexOutOfRange { index: 0, muscle_id: 0, count: 0 }
+        LoadError::MuscleIndexOutOfRange {
+            index: 0,
+            muscle_id: 0,
+            count: 0
+        }
     ));
 }
 
@@ -649,7 +786,11 @@ fn i5_muscle_indices_must_be_in_range() {
 fn i6_a_jump_past_the_end_is_refused() {
     let image = image_with(&[insn(OpCode::Jmp, 0, 0, 100), insn(OpCode::Halt, 0, 0, 0)]);
     match reject(&image.to_bytes()) {
-        LoadError::JumpTargetOutOfRange { index: 0, offset: 100, code_len: 2 } => {}
+        LoadError::JumpTargetOutOfRange {
+            index: 0,
+            offset: 100,
+            code_len: 2,
+        } => {}
         other => panic!("a jump past the end was not refused by I6: {other}"),
     }
 }
@@ -658,9 +799,16 @@ fn i6_a_jump_past_the_end_is_refused() {
 fn i6_a_jump_before_the_start_is_refused() {
     // pc 0 with off -5 underflows index 0; `jump_target` returns None and I6
     // reports it with the same variant as a forward overshoot.
-    let image = image_with(&[insn(OpCode::Jmp, 0, 0, (-5i32) as u32), insn(OpCode::Halt, 0, 0, 0)]);
+    let image = image_with(&[
+        insn(OpCode::Jmp, 0, 0, (-5i32) as u32),
+        insn(OpCode::Halt, 0, 0, 0),
+    ]);
     match reject(&image.to_bytes()) {
-        LoadError::JumpTargetOutOfRange { index: 0, offset: -5, .. } => {}
+        LoadError::JumpTargetOutOfRange {
+            index: 0,
+            offset: -5,
+            ..
+        } => {}
         other => panic!("a jump before index 0 was not refused by I6: {other}"),
     }
 }
@@ -682,33 +830,51 @@ fn i6_a_jump_to_the_last_instruction_is_legal() {
 #[test]
 fn i7_wait_must_be_a_non_negative_finite_duration() {
     for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.5] {
-        let image = image_with(&[insn(OpCode::Wait, 0, 0, bad.to_bits()), insn(OpCode::Halt, 0, 0, 0)]);
+        let image = image_with(&[
+            insn(OpCode::Wait, 0, 0, bad.to_bits()),
+            insn(OpCode::Halt, 0, 0, 0),
+        ]);
         assert!(
-            matches!(reject(&image.to_bytes()), LoadError::WaitNotFiniteOrNegative { index: 0, .. }),
+            matches!(
+                reject(&image.to_bytes()),
+                LoadError::WaitNotFiniteOrNegative { index: 0, .. }
+            ),
             "WAIT {bad} was accepted"
         );
     }
 
     // -0.0 is zero, not a negative duration, and is legal.
-    let image = image_with(&[insn(OpCode::Wait, 0, 0, (-0.0f32).to_bits()), insn(OpCode::Halt, 0, 0, 0)]);
+    let image = image_with(&[
+        insn(OpCode::Wait, 0, 0, (-0.0f32).to_bits()),
+        insn(OpCode::Halt, 0, 0, 0),
+    ]);
     assert!(Image::from_bytes(&image.to_bytes()).is_ok());
 }
 
 #[test]
 fn i7_wait_must_not_exceed_the_headers_max_wait() {
     // WAIT is unbounded by fuel (isa.md §6.4), so the header bounds it instead.
-    let image = image_with(&[insn(OpCode::Wait, 0, 0, 601.0f32.to_bits()), insn(OpCode::Halt, 0, 0, 0)]);
+    let image = image_with(&[
+        insn(OpCode::Wait, 0, 0, 601.0f32.to_bits()),
+        insn(OpCode::Halt, 0, 0, 0),
+    ]);
     assert!(matches!(
         reject(&image.to_bytes()),
-        LoadError::WaitExceedsMaxWait { index: 0, seconds: 601.0, max: 600.0 }
+        LoadError::WaitExceedsMaxWait {
+            index: 0,
+            seconds: 601.0,
+            max: 600.0
+        }
     ));
 
     // Exactly the bound is legal.
-    let image = image_with(&[insn(OpCode::Wait, 0, 0, 600.0f32.to_bits()), insn(OpCode::Halt, 0, 0, 0)]);
+    let image = image_with(&[
+        insn(OpCode::Wait, 0, 0, 600.0f32.to_bits()),
+        insn(OpCode::Halt, 0, 0, 0),
+    ]);
     assert!(Image::from_bytes(&image.to_bytes()).is_ok());
 }
 
 // ===========================================================================
 // The disk entry point lives in `cyberspine-vm`; see its `tests/io.rs`.
 // ===========================================================================
-

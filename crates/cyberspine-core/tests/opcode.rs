@@ -51,7 +51,9 @@ fn mnemonics_are_unique_case_insensitively() {
     let mut seen: Vec<&'static str> = Vec::new();
     for op in OpCode::ALL {
         let mnemonic = op.mnemonic();
-        let clashes = seen.iter().any(|other| other.eq_ignore_ascii_case(mnemonic));
+        let clashes = seen
+            .iter()
+            .any(|other| other.eq_ignore_ascii_case(mnemonic));
         assert!(
             !clashes,
             "助记符 {mnemonic:?}（{op:?}）与表里已有的条目冲突（大小写不敏感），\
@@ -163,10 +165,7 @@ fn all_covers_exactly_the_decodable_bytes() {
     let mut all: Vec<u8> = OpCode::ALL.iter().map(|op| op.byte()).collect();
     decodable.sort_unstable();
     all.sort_unstable();
-    assert_eq!(
-        decodable, all,
-        "ALL 与 from_byte 的可解码集合不一致",
-    );
+    assert_eq!(decodable, all, "ALL 与 from_byte 的可解码集合不一致",);
 }
 
 /// `docs/binfmt.md` §9.3 I1：「保留 opcode 一律拒绝」。
