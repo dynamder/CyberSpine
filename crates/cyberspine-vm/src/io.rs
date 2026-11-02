@@ -40,7 +40,7 @@ pub enum LoadFileError {
     },
     /// The file is larger than [`MAX_FILE_LEN`], refused before reading.
     #[error("file is {len} bytes, above the {max}-byte limit this loader will read")]
-    FileTooLarge { len: usize, max: usize },
+    FileTooLarge { len: u64, max: usize },
     /// The bytes were read but are not a valid image (§9).
     #[error(transparent)]
     Image(#[from] LoadError),
@@ -65,19 +65,25 @@ pub fn read_image(path: impl AsRef<Path>) -> Result<VerifiedImage, LoadFileError
         })?
         .len();
 
-    // Gate on the length we are about to trust, before trusting it.
-    if (len as usize) > MAX_FILE_LEN {
+    // Gate on the length we are about to trust, before trusting it. The
+    // comparison is in `u64`: `usize` is 32 bits on wasm32 and on the
+    // microcontroller-class hosts, so narrowing first would let a 4 GiB file
+    // wrap to a small `usize` and pass the gate.
+    if len > MAX_FILE_LEN as u64 {
         return Err(LoadFileError::FileTooLarge {
-            len: len as usize,
+            len,
             max: MAX_FILE_LEN,
         });
     }
+    let len = len as usize;
 
     // Read one byte past the declared length: if the file grew between the
     // metadata call and now, the extra byte shows up and C1 rejects the mismatch
-    // instead of the loader silently reading a partial image.
-    let mut bytes = Vec::with_capacity(len as usize + 1);
-    file.take(len + 1)
+    // instead of the loader silently reading a partial image. The capacity is
+    // capped so a sparse file at the limit does not allocate the whole limit
+    // before a single byte is readable.
+    let mut bytes = Vec::with_capacity(len.min(1024 * 1024) + 1);
+    file.take(len as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|source| LoadFileError::Io {
             path: path.to_path_buf(),

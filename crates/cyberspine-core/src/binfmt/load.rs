@@ -312,9 +312,15 @@ impl Image {
     }
 
     /// Compute the content hash the way §7 defines it, for use as a cache key.
-    pub fn content_hash(bytes: &[u8]) -> Option<blake3::Hash> {
-        let prefix = bytes.len().checked_sub(HASH_LEN)?;
-        Some(blake3::hash(&bytes[..prefix]))
+    ///
+    /// Bytes shorter than the hash cannot carry one; that is an error about the
+    /// input, not a "no hash available" value, so it is reported as such.
+    pub fn content_hash(bytes: &[u8]) -> Result<blake3::Hash, LoadError> {
+        let prefix = bytes
+            .len()
+            .checked_sub(HASH_LEN)
+            .ok_or(LoadError::TooShort { len: bytes.len() })?;
+        Ok(blake3::hash(&bytes[..prefix]))
     }
 }
 

@@ -200,7 +200,11 @@ impl<B: Backend> Host<B> {
     pub fn load(&mut self, image: VerifiedImage) -> Result<InstanceId, LoadError> {
         self.check_rig(&image)?;
         let scale = Scale::of(&image);
-        self.fit_scale(scale)?;
+        let scale = self.fit_scale(scale)?;
+        // The whole host is sized by one scale, so every slot's muscle table is
+        // the host's. That is what lets `Instance::published` index without a
+        // bound check, and it is checked once, here, where the image is admitted.
+        debug_assert_eq!(image.muscles.len(), scale.muscles);
 
         let hz = image.header.hz;
         match self.hz {
@@ -390,14 +394,14 @@ impl<B: Backend> Host<B> {
     /// Later images only have to agree with it. With equal fingerprints they
     /// always do; this check is what an unbound image (which proves nothing
     /// about its shape) is measured against.
-    fn fit_scale(&mut self, scale: Scale) -> Result<(), LoadError> {
+    fn fit_scale(&mut self, scale: Scale) -> Result<Scale, LoadError> {
         match self.scale {
             None => {
                 self.rig_f = vec![0.0; scale.sensors_f];
                 self.rig_i = vec![0; scale.sensors_i];
                 self.rig_muscles = vec![0.0; scale.muscles];
                 self.scale = Some(scale);
-                Ok(())
+                Ok(scale)
             }
             Some(host) if scale.sensors_f != host.sensors_f => Err(LoadError::ShapeMismatch {
                 table: "sensors_f",
@@ -414,7 +418,7 @@ impl<B: Backend> Host<B> {
                 declared: scale.muscles,
                 host: host.muscles,
             }),
-            Some(_) => Ok(()),
+            Some(_) => Ok(scale),
         }
     }
 

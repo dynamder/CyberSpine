@@ -87,10 +87,10 @@ impl Insn {
             .ok_or(DecodeError::InvalidOpCode((word >> 56) as u8))?;
         let mut insn = Insn {
             op,
-            rd: RegId::from_6bit(((word >> 50) & 0x3F) as u8),
-            ra: RegId::from_6bit(((word >> 44) & 0x3F) as u8),
-            rb: RegId::from_6bit(((word >> 38) & 0x3F) as u8),
-            rc: RegId::from_6bit(((word >> 32) & 0x3F) as u8),
+            rd: RegId::from_6bit(((word >> 50) & RegId::FIELD_MASK) as u8),
+            ra: RegId::from_6bit(((word >> 44) & RegId::FIELD_MASK) as u8),
+            rb: RegId::from_6bit(((word >> 38) & RegId::FIELD_MASK) as u8),
+            rc: RegId::from_6bit(((word >> 32) & RegId::FIELD_MASK) as u8),
             imm: word as u32,
         };
 

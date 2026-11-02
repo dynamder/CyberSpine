@@ -188,9 +188,13 @@ fn the_content_hash_matches_the_bytes_it_came_from() {
     let image = Image::halt_only();
     let bytes = image.to_bytes();
     assert_eq!(
-        Image::content_hash(&bytes),
-        Some(blake3::hash(&bytes[..bytes.len() - HASH_LEN]))
+        Image::content_hash(&bytes).expect("a written image carries a hash"),
+        blake3::hash(&bytes[..bytes.len() - HASH_LEN])
     );
+    assert!(matches!(
+        Image::content_hash(&bytes[..HASH_LEN - 1]),
+        Err(LoadError::TooShort { .. })
+    ));
 }
 
 // ===========================================================================

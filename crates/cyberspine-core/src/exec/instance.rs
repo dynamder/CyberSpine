@@ -163,6 +163,16 @@ impl Instance {
 
     /// The published command for one muscle, or `None` if this instance has never
     /// flushed a value for it (`docs/isa.md` §8.2).
+    ///
+    /// `None` is semantics, not an error: "this instance has no opinion about
+    /// that muscle" is a state every merge step handles.
+    ///
+    /// # Panics
+    ///
+    /// `muscle >= self.muscle_count()`. That is a broken internal invariant, not
+    /// a caller error: a `VerifiedImage` cannot address a muscle outside its own
+    /// table (I5), and `Host::load` admits only images whose muscle table equals
+    /// the host's scale.
     pub fn published(&self, muscle: usize) -> Option<f32> {
         self.publ_mask.test(muscle).then(|| self.published[muscle])
     }
