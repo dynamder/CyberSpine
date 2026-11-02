@@ -27,10 +27,9 @@ const SOURCE: &str = "\
 
 .rig \"greet.rig.json\"
 
-.group brows = brow_l
+.group brows = brow_l, brow_r
 
 .text
-entry:
     FMOVI   f1, 1.0
     FEXCITE brows, f1
     FLUSH
@@ -40,7 +39,7 @@ entry:
 
 const MANIFEST: &str = r#"{
   "rig": { "name": "greet", "version": 1 },
-  "muscles": ["brow_l"],
+  "muscles": ["brow_l", "brow_r"],
   "sensors_f": ["smile"],
   "sensors_i": []
 }"#;
@@ -48,7 +47,7 @@ const MANIFEST: &str = r#"{
 /// The same names, one identity version later: a different rig, same shape.
 const MANIFEST_OTHER: &str = r#"{
   "rig": { "name": "greet", "version": 2 },
-  "muscles": ["brow_l"],
+  "muscles": ["brow_l", "brow_r"],
   "sensors_f": ["smile"],
   "sensors_i": []
 }"#;
@@ -397,6 +396,43 @@ fn a_generation_error_is_rendered_at_its_line() {
         "the error must carry path:line:col, got: {message}"
     );
     assert!(!dir.join("jump.csp").exists(), "nothing is written");
+}
+
+/// Warnings are reported but do not fail the build unless asked to.
+#[test]
+fn warnings_are_reported_and_denied_on_request() {
+    let dir = scratch("warnings");
+    let source = write_source(
+        &dir,
+        "warn.csa",
+        "\
+.layer 10
+.clock hz = 60
+.fuel 4096
+.max_wait 600.0
+.rig \"greet.rig.json\"
+.text
+never_used:
+    HALT
+",
+    );
+    write_manifest(&dir, "greet.rig.json", MANIFEST);
+
+    let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stderr(&output).contains("never a jump target"),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(dir.join("warn.csp").exists(), "a warning still assembles");
+
+    let output = run(vec![
+        OsStr::new("-a"),
+        source.as_os_str(),
+        OsStr::new("--deny-warnings"),
+    ]);
+    assert_eq!(output.status.code(), Some(1));
 }
 
 #[test]

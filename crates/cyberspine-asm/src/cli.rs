@@ -22,4 +22,8 @@ pub struct CliArgs {
     /// A relative path is resolved against the `.csa`'s own directory.
     #[arg(short, long)]
     pub rig: Option<PathBuf>,
+
+    /// Treat readability warnings as errors.
+    #[arg(long)]
+    pub deny_warnings: bool,
 }

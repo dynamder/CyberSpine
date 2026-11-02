@@ -35,6 +35,25 @@ fn run(cli_args: &CliArgs) -> Result<(), String> {
     let asm =
         assembler::parse(&asm_str).map_err(|errors| errors.render(&cli_args.asm_file, &asm_str))?;
 
+    let warnings = assembler::lint(&asm);
+    for warning in &warnings {
+        eprint!(
+            "{}",
+            diagnostic::render_warning(
+                &warning.kind.to_string(),
+                warning.location,
+                &cli_args.asm_file,
+                &asm_str,
+            )
+        );
+    }
+    if cli_args.deny_warnings && !warnings.is_empty() {
+        return Err(format!(
+            "error: {} warning(s) treated as errors\n",
+            warnings.len()
+        ));
+    }
+
     let rig = load_rig(cli_args, &asm)?;
 
     let image = assembler::generate_image(&asm, &rig).map_err(|error| {

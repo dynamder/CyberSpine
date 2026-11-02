@@ -258,6 +258,79 @@ pub fn generate_image(asm: &Asm, rig: &Rig) -> Result<Image, ImageGenError> {
     })
 }
 
+/// A readability problem the source can fix but that is not an error.
+///
+/// Same shape as a [`ParseError`]: a stable kind for tools, a [`Location`] for a
+/// human. They are reported by the CLI at warning level and never stop an
+/// assembly unless `--deny-warnings` asks for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Warning {
+    pub location: Location,
+    pub kind: WarningKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum WarningKind {
+    #[error("label `{0}` is never a jump target")]
+    UnusedLabel(SmolStr),
+    #[error("group `{0}` has a single member; name the muscle directly")]
+    SingleMemberGroup(SmolStr),
+}
+
+/// Readability diagnostics over a parsed source: no codegen, no rig.
+///
+/// Scope is deliberately narrow — only what can be decided from the instruction
+/// section's own text, and therefore located exactly.
+pub fn lint(asm: &Asm) -> Vec<Warning> {
+    let mut labels: Vec<(&SmolStr, Location)> = Vec::new();
+    let mut targeted: Vec<&str> = Vec::new();
+    let mut groups: Vec<(&str, usize)> = asm
+        .header
+        .muscle_groups
+        .iter()
+        .map(|group| (group.name.as_str(), group.members.len()))
+        .collect();
+    let mut warnings = Vec::new();
+
+    for located in &asm.text {
+        match &located.item {
+            TextItem::Label(name) => labels.push((name, located.location)),
+            TextItem::Insn(insn) => {
+                for operand in &insn.operands {
+                    match operand {
+                        AsmOperand::Target(name) => targeted.push(name.as_str()),
+                        AsmOperand::Index(name) if insn.op == OpCode::Fexcite => {
+                            if let Some((_, members)) =
+                                groups.iter().find(|(group, _)| *group == name.as_str())
+                                && *members == 1
+                            {
+                                warnings.push(Warning {
+                                    location: located.location,
+                                    kind: WarningKind::SingleMemberGroup(name.clone()),
+                                });
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    for (name, location) in labels {
+        if !targeted.iter().any(|target| *target == name.as_str()) {
+            warnings.push(Warning {
+                location,
+                kind: WarningKind::UnusedLabel(name.clone()),
+            });
+        }
+    }
+
+    groups.clear();
+    warnings.sort_by_key(|warning| (warning.location.line, warning.location.column));
+    warnings
+}
+
 /// The clock rate the header declares, as the type every consumer divides by.
 fn clock_hz(header: &AsmHeader) -> Result<Hz, ImageGenError> {
     Hz::new(header.fixed.clock_hz).ok_or(ImageGenError::ZeroHz)
