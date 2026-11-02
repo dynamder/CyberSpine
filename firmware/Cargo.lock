@@ -144,8 +144,18 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "cyberspine-binfmt",
+ "cyberspine-exec",
  "cyberspine-isa",
  "cyberspine-rig",
+ "thiserror",
+]
+
+[[package]]
+name = "cyberspine-exec"
+version = "0.1.0"
+dependencies = [
+ "cyberspine-binfmt",
+ "cyberspine-isa",
  "thiserror",
 ]
 

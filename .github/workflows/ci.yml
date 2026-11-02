@@ -42,6 +42,9 @@ jobs:
       - name: no_std (cyberspine-binfmt, thumbv7em)
         run: cargo check -p cyberspine-binfmt --target thumbv7em-none-eabihf
 
+      - name: no_std (cyberspine-exec, thumbv7em)
+        run: cargo check -p cyberspine-exec --target thumbv7em-none-eabihf
+
       - name: no_std (cyberspine-core, thumbv7em)
         run: cargo check -p cyberspine-core --target thumbv7em-none-eabihf
 

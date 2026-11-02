@@ -4,13 +4,13 @@
 use alloc::boxed::Box;
 use alloc::vec;
 
-use crate::exec::program::Program;
-use crate::exec::registers::Registers;
-use crate::isa::clock::{Hz, Seconds};
-use crate::isa::jump::jump_target_unchecked;
-use crate::isa::math;
-use crate::isa::register::RegId;
-use crate::isa::{Insn, OpCode};
+use crate::program::Program;
+use crate::registers::Registers;
+use cyberspine_isa::clock::{Hz, Seconds};
+use cyberspine_isa::jump::jump_target_unchecked;
+use cyberspine_isa::math;
+use cyberspine_isa::register::RegId;
+use cyberspine_isa::{Insn, OpCode};
 
 /// The per-tick sensor snapshot, frozen for every instance in the tick
 /// (`docs/isa.md` §G7).

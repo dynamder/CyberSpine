@@ -1,9 +1,9 @@
 //! The executor's read-only view of a loaded image (`docs/exec.md` §2).
 
-use crate::binfmt::image::{VarF, VarI};
-use crate::binfmt::load::VerifiedImage;
-use crate::isa::Insn;
-use crate::isa::clock::Hz;
+use cyberspine_binfmt::image::{VarF, VarI};
+use cyberspine_binfmt::load::VerifiedImage;
+use cyberspine_isa::Insn;
+use cyberspine_isa::clock::Hz;
 
 /// A loaded action with the names stripped: exactly what execution reads.
 ///

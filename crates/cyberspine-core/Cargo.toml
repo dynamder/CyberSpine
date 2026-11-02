@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 cyberspine-binfmt = { path = "../cyberspine-binfmt" }
+cyberspine-exec = { path = "../cyberspine-exec" }
 cyberspine-isa = { path = "../cyberspine-isa" }
 cyberspine-rig = { path = "../cyberspine-rig" }
 # `default-features = false` is what makes blake3 build without std: `std` is the

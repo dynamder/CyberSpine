@@ -1,6 +1,6 @@
 //! The two register files (`docs/isa.md` §2.1, `docs/exec.md` §2.1).
 
-use crate::isa::register::RegId;
+use cyberspine_isa::register::RegId;
 
 /// `f0..f63` and `i0..i63`: cleared when an instance is loaded, kept across
 /// every `YIELD` / `WAIT`, destroyed with the instance (`docs/isa.md` §2.3).

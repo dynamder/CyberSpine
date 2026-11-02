@@ -30,11 +30,10 @@
 
 extern crate alloc;
 
-pub mod exec;
-
-// The format, the instruction set and the rig are their own crates. Re-exported
-// here so every existing `cyberspine_core::binfmt::…` / `::isa::…` / `::rig::…`
-// path keeps working (and so the fuzz targets and firmware keep compiling).
+// Every layer is its own crate now; this one is the facade that keeps the
+// existing `cyberspine_core::…` paths (and the firmware and fuzz targets that
+// use them) compiling. New code should name the specific crate.
 pub use cyberspine_binfmt as binfmt;
+pub use cyberspine_exec as exec;
 pub use cyberspine_isa as isa;
 pub use cyberspine_rig as rig;

@@ -1,0 +1,11 @@
+[package]
+name = "cyberspine-exec"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license.workspace = true
+
+[dependencies]
+cyberspine-binfmt = { path = "../cyberspine-binfmt" }
+cyberspine-isa = { path = "../cyberspine-isa" }
+thiserror = { version = "2.0.21", default-features = false }
