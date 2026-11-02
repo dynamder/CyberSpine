@@ -16,7 +16,6 @@
 //! the same bits everywhere. Accuracy is a separate, weaker promise, stated per
 //! function.
 
-use core::f32;
 /// `FNEG` — flips the sign bit. Exact for NaN and both zeros (`isa.md` §4.3).
 #[inline]
 pub fn fneg(x: f32) -> f32 {
