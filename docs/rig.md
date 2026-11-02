@@ -3,7 +3,7 @@
 状态：v1
 依赖：[`isa.md`](isa.md) §13（rig、装配期绑定、指纹）、[`binfmt.md`](binfmt.md) §4（头段字段）、[`asm.md`](asm.md) §3.2（`.rig`）
 
-> **实现状态（2026-11）**：`core::rig`（类型 + 指纹）与 `cyberspine-rig`（JSON 解析）已落地；`.rig` 伪指令已可解析。**尚未落地**：汇编器仍接受旧的 `.muscle`/`.sensor_f`/`.sensor_i` 声明并按旧方式生成表；宿主的 `Backend::fingerprint()` 与加载期比对还没接上。本文件描述的是目标契约。
+> **实现状态（2026-11）**：全部落地。`core::rig`（类型 + 指纹）、`cyberspine-rig`（JSON 解析）、汇编器按 manifest 生成表并把指纹写进头段、`cyinea --rig`、宿主的 `Backend::fingerprint()` 与加载期比对（含 `Host::allow_unbound`）。本文件描述的就是现状。
 
 ---
 
@@ -77,7 +77,7 @@ le32(count) || (le32(len) || sensor_i_name)*
 ```
 
 - 后端实现 `Backend::fingerprint()`，结果应在构造时算好并缓存。
-- 未绑定镜像（头段指纹全 0，即装配时没有 rig）**默认拒绝**；只有测试、固件这类不经过宿主的路径可以显式放行。
+- 未绑定镜像（头段指纹全 0，即装配时没有 rig）**默认拒绝**；只有测试、固件这类不经过宿主的路径可以显式放行，宿主侧是 `Host::allow_unbound`。
 
 ## 5. 信任模型
 
