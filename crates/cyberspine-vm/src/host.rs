@@ -9,7 +9,7 @@
 //! assembly time.
 
 use cyberspine_core::binfmt::image::{Image, Sensor, SensorSource};
-use cyberspine_core::exec::{Instance, Program, Sensors, Status};
+use cyberspine_core::exec::{Fault, Instance, Program, Sensors, Status};
 use cyberspine_core::rig::Fingerprint;
 
 use crate::backend::{Backend, SensorValues};
@@ -17,6 +17,23 @@ use crate::backend::{Backend, SensorValues};
 /// A stable handle on a loaded instance. Ids are never reused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InstanceId(u64);
+
+impl core::fmt::Display for InstanceId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Why an instance is gone (`docs/isa.md` §G12).
+///
+/// Removal is silent by nature — the slot disappears — so the reason has to
+/// outlive it. A fault is a bug signal, never a normal ending: it has to reach
+/// the caller instead of dying with the bookkeeping that drops the instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FaultRecord {
+    pub instance: InstanceId,
+    pub fault: Fault,
+}
 
 /// One tick's merged command vector, kept when tracing is on.
 #[derive(Debug, Clone, PartialEq)]
@@ -121,6 +138,7 @@ pub struct Host<B: Backend> {
     scale: Option<Scale>,
     slots: Vec<Slot>,
     merge_order: Vec<usize>,
+    faults: Vec<FaultRecord>,
     rig_f: Vec<f32>,
     rig_i: Vec<i32>,
     allow_unbound: bool,
@@ -142,6 +160,7 @@ impl<B: Backend> Host<B> {
             scale: None,
             slots: Vec::new(),
             merge_order: Vec::new(),
+            faults: Vec::new(),
             rig_f: Vec::new(),
             rig_i: Vec::new(),
             allow_unbound: false,
@@ -310,6 +329,19 @@ impl<B: Backend> Host<B> {
         &self.trace
     }
 
+    /// Every fault since the last [`Host::take_faults`], oldest first.
+    pub fn faults(&self) -> &[FaultRecord] {
+        &self.faults
+    }
+
+    /// Drain the fault log: the records the caller has not been told about yet.
+    ///
+    /// Drained rather than capped — a fault is rare, and dropping the oldest
+    /// record would be exactly the silence this log exists to rule out.
+    pub fn take_faults(&mut self) -> Vec<FaultRecord> {
+        core::mem::take(&mut self.faults)
+    }
+
     pub fn set_max_ticks_per_frame(&mut self, ticks: u32) {
         self.max_ticks_per_frame = ticks.max(1);
     }
@@ -403,6 +435,10 @@ impl<B: Backend> Host<B> {
         let mut merged = vec![None; muscles];
         for &index in &self.merge_order {
             let instance = &self.slots[index].instance;
+            // G12: a fault takes its contributions with it, in the same tick.
+            if instance.status() == Status::Faulted {
+                continue;
+            }
             for (muscle, slot) in merged.iter_mut().enumerate() {
                 if let Some(value) = instance.published(muscle) {
                     *slot = Some(value);
@@ -412,10 +448,27 @@ impl<B: Backend> Host<B> {
         merged
     }
 
+    /// Drop the instances that ended this tick, keeping their reasons.
+    ///
+    /// `Halted` is a normal ending. `Faulted` is a bug signal, and this is the
+    /// last moment its reason exists — the slot is about to disappear
+    /// (`docs/isa.md` §G12).
     fn remove_terminated(&mut self) {
         let before = self.slots.len();
-        self.slots
-            .retain(|slot| slot.instance.status() == Status::Suspended);
+        let mut faults = Vec::new();
+        self.slots.retain(|slot| {
+            if slot.instance.status() == Status::Suspended {
+                return true;
+            }
+            if let Some(fault) = slot.instance.fault() {
+                faults.push(FaultRecord {
+                    instance: slot.id,
+                    fault,
+                });
+            }
+            false
+        });
+        self.faults.append(&mut faults);
         if self.slots.len() != before {
             self.rebuild_merge_order();
         }

@@ -8,10 +8,11 @@
 //! the same rig, so the fixtures stay legal images, not just acceptable ones.
 
 use cyberspine_core::binfmt::image::{Image, Sensor, SensorSource, VarF};
+use cyberspine_core::exec::Fault;
 use cyberspine_core::isa::register::RegId;
 use cyberspine_core::isa::{Insn, OpCode};
 use cyberspine_core::rig::{Fingerprint, Rig};
-use cyberspine_vm::{Call, DummyBackend, Host, LoadError};
+use cyberspine_vm::{Call, DummyBackend, FaultRecord, Host, LoadError};
 
 fn reg(id: u8) -> RegId {
     RegId::new(id).expect("id < RegId::COUNT")
@@ -223,6 +224,7 @@ fn a_terminated_instance_contributes_on_its_last_tick_only() {
         "the halt happens after the command was published"
     );
     assert_eq!(host.instances(), 0, "removed after the step");
+    assert!(host.faults().is_empty(), "a halt is not a fault");
 
     host.tick();
     assert_eq!(
@@ -230,6 +232,66 @@ fn a_terminated_instance_contributes_on_its_last_tick_only() {
         &[None],
         "nothing is left to contribute"
     );
+}
+
+#[test]
+fn a_fault_is_recorded_and_outlives_the_instance() {
+    let rig = rig(0);
+    let mut host = Host::new(backend(&rig));
+
+    let mut faulty = action(vec![nop(), nop(), yield_()], &rig);
+    faulty.header.fuel = 1;
+    let id = host.load(faulty).expect("faulty");
+
+    host.tick();
+
+    assert!(host.instance(id).is_none(), "a fault removes the instance");
+    assert_eq!(
+        host.faults(),
+        &[FaultRecord {
+            instance: id,
+            fault: Fault::FuelExhausted { pc: 1 }
+        }],
+        "the reason survives the slot that held it"
+    );
+
+    assert_eq!(host.take_faults().len(), 1);
+    assert!(host.faults().is_empty(), "draining empties the log");
+}
+
+/// G12: a fault's contributions vanish in the same tick. A `HALT` on the last
+/// tick is different — that command was legitimately published
+/// (`docs/isa.md` §8.4 step 3).
+#[test]
+fn a_faulted_instance_contributes_nothing_that_tick() {
+    let rig = rig(1);
+    let mut host = Host::new(backend(&rig));
+
+    let mut faulty = action(
+        vec![fmovi(1, 0.5), excite(0, 1), flush(), nop(), halt()],
+        &rig,
+    );
+    // Three instructions of fuel: `FLUSH` publishes, then the fuel runs out
+    // before `NOP` can run.
+    faulty.header.fuel = 3;
+    let id = host.load(faulty).expect("faulty");
+
+    host.tick();
+
+    assert_eq!(
+        host.backend().committed(),
+        &[None],
+        "the excitation died with the instance"
+    );
+    assert_eq!(
+        host.faults(),
+        &[FaultRecord {
+            instance: id,
+            fault: Fault::FuelExhausted { pc: 3 }
+        }],
+        "and it was reported, not swallowed"
+    );
+    assert!(host.instance(id).is_none());
 }
 
 #[test]

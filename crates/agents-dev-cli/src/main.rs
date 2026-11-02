@@ -90,7 +90,19 @@ fn run_image(path: &Path, rig_path: &Path, ticks: u32) -> Result<(), String> {
         println!("tick {:>4}: {:?}", tick.now, tick.commands);
     }
     println!("{} instance(s) left", host.instances());
-    Ok(())
+
+    let faults = host.take_faults();
+    if faults.is_empty() {
+        return Ok(());
+    }
+    let mut message = String::from("the image faulted:\n");
+    for record in faults {
+        message.push_str(&format!(
+            "  instance {}: {}\n",
+            record.instance, record.fault
+        ));
+    }
+    Err(message)
 }
 
 fn doc_digest(doc: DigestedDoc) {

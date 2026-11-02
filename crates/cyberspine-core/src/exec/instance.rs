@@ -44,8 +44,9 @@ pub enum Step {
 }
 
 /// `docs/isa.md` §G12: v1 has exactly one way to fault.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum Fault {
+    #[error("fuel exhausted at instruction {pc}")]
     FuelExhausted { pc: usize },
 }
 

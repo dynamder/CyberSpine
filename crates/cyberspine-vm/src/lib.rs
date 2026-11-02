@@ -23,4 +23,4 @@ pub mod io;
 
 pub use backend::{Backend, SensorValues};
 pub use dummy::{Call, DummyBackend};
-pub use host::{Host, InstanceId, LoadError, Tick};
+pub use host::{FaultRecord, Host, InstanceId, LoadError, Tick};

@@ -728,7 +728,9 @@ fn tick(instances: &mut [Instance], sensors: &Sensors, backend: &mut dyn Backend
     backend.step(dt);                    // 跨肌肉可行性 + 推进
 
     *now += 1;
-    // 5. 移除 Halted / Faulted 的实例（它们本 tick 的贡献已经合并过）
+    // 5. 移除 Halted / Faulted 的实例（它们本 tick 的贡献已经合并过）；
+    //    fault 连同 (实例, pc, 原因) 记入宿主的 fault 日志 —— 实例消失了，
+    //    原因不能跟着消失
 }
 ```
 
