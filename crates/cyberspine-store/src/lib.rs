@@ -1,9 +1,10 @@
 //! Putting an `.csp` on disk: atomic replace, with the platform quirks handled.
 //!
-//! This lives in the assembler rather than in `cyberspine-core` on purpose. The
-//! core crate is the *format* — encode, decode, validate, pure computation — and
-//! only a producer ever writes an image. Reading one from a path lives in
-//! `cyberspine-vm::io` (a running VM must open a file); nothing writes.
+//! Nothing here is assembler-specific: the only thing it knows about an image is
+//! that it has to pass the loader before it is written. It is not in
+//! `cyberspine-core` because the core crate is the *format* — encode, decode,
+//! validate, pure computation — and it is not in `cyberspine-vm` either, because
+//! a running VM only reads.
 //!
 //! Nothing below depends on the assembler, so the whole module can move to its
 //! own crate unchanged if a second producer ever appears.

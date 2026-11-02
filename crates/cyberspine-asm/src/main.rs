@@ -8,9 +8,9 @@ use clap::Parser;
 use cyberspine_asm::{
     assembler::{self, Asm, ImageGenError, diagnostic},
     cli::CliArgs,
-    store::{self, WriteError},
 };
 use cyberspine_core::rig::Rig;
+use cyberspine_store::{self as store, WriteError};
 
 fn main() -> ExitCode {
     let cli_args = CliArgs::parse();

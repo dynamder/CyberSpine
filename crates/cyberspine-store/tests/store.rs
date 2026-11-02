@@ -7,10 +7,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use cyberspine_asm::store::{WriteError, write_atomic, write_image};
 use cyberspine_core::binfmt::image::Image;
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::isa::{Insn, OpCode};
+use cyberspine_store::{WriteError, write_atomic, write_image};
 
 /// A scratch directory owned by one test. `CARGO_TARGET_TMPDIR` is the crate's
 /// target directory, so nothing is ever written outside the build tree.
