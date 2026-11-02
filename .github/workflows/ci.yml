@@ -30,9 +30,12 @@ jobs:
       - name: clippy
         run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
 
-      # The reason the split exists: `cyberspine-core` must be usable on a
-      # microcontroller. `cargo test` compiles it for the host, where a stray
+      # The reason the split exists: the portable crates must be usable on a
+      # microcontroller. `cargo test` compiles them for the host, where a stray
       # `std` call would still build, so this is the only check that notices.
+      - name: no_std (cyberspine-isa, thumbv7em)
+        run: cargo check -p cyberspine-isa --target thumbv7em-none-eabihf
+
       - name: no_std (cyberspine-core, thumbv7em)
         run: cargo check -p cyberspine-core --target thumbv7em-none-eabihf
 

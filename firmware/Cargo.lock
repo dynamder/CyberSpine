@@ -133,6 +133,7 @@ name = "cyberspine-core"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "cyberspine-isa",
  "thiserror",
 ]
 
@@ -143,6 +144,13 @@ dependencies = [
  "cortex-m-rt",
  "cortex-m-semihosting",
  "cyberspine-core",
+]
+
+[[package]]
+name = "cyberspine-isa"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
 ]
 
 [[package]]

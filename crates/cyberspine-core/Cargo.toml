@@ -6,6 +6,7 @@ rust-version = "1.85"
 license.workspace = true
 
 [dependencies]
+cyberspine-isa = { path = "../cyberspine-isa" }
 # `default-features = false` is what makes blake3 build without std: `std` is the
 # crate's only default feature, and hash verification (binfmt §9.1 C6) has to run
 # on a bare-metal target. This crate is `#![no_std]` unconditionally — it has no

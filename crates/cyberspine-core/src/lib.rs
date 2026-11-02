@@ -7,6 +7,9 @@
 //!
 //! The normative documents live in `docs/`:
 //!
+//! The instruction set itself lives in `cyberspine-isa`, re-exported here as
+//! [`isa`].
+//!
 //! * [`docs/isa.md`](../../../docs/isa.md) — instruction encoding and semantics,
 //!   registers, the clock, the instance model.
 //! * [`docs/binfmt.md`](../../../docs/binfmt.md) — the `.csp` executable-image
@@ -29,5 +32,9 @@ extern crate alloc;
 
 pub mod binfmt;
 pub mod exec;
-pub mod isa;
 pub mod rig;
+
+// The instruction set is its own crate so that a consumer which only needs the
+// encoding does not pull in the image format. Re-exported here so every existing
+// `cyberspine_core::isa::…` path keeps working.
+pub use cyberspine_isa as isa;

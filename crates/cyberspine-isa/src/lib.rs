@@ -1,8 +1,13 @@
 //! The instruction set: the table, the encoding, the jump-offset convention and
 //! the floating-point kernel (`docs/isa.md`).
 //!
-//! This is the bottom layer of the crate. `binfmt` and `cyberspine-asm` both
-//! depend on it; nothing here knows about images or execution.
+//! This is the bottom layer: `binfmt`, `exec` and `cyberspine-asm` all depend on
+//! it, and nothing here knows about images, execution or a platform. It is
+//! `#![no_std]` with only `alloc`, so the same table runs on a microcontroller.
+
+#![no_std]
+
+extern crate alloc;
 
 pub mod clock;
 pub mod jump;
@@ -15,7 +20,7 @@ use core::str::FromStr;
 
 use thiserror::Error;
 
-use crate::isa::register::{RegId, RegType};
+use crate::register::{RegId, RegType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegName {

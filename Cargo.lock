@@ -212,6 +212,7 @@ name = "cyberspine-core"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "cyberspine-isa",
  "cyberspine-testkit",
  "thiserror",
 ]
@@ -224,6 +225,13 @@ dependencies = [
  "cyberspine-core",
  "cyberspine-rig",
  "cyberspine-vm",
+ "thiserror",
+]
+
+[[package]]
+name = "cyberspine-isa"
+version = "0.1.0"
+dependencies = [
  "thiserror",
 ]
 
