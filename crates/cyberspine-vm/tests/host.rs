@@ -12,7 +12,7 @@ use cyberspine_core::exec::Fault;
 use cyberspine_core::isa::register::RegId;
 use cyberspine_core::isa::{Insn, OpCode};
 use cyberspine_core::rig::{Fingerprint, Rig};
-use cyberspine_vm::{Call, DummyBackend, FaultRecord, Host, LoadError};
+use cyberspine_vm::{Backend, Call, DummyBackend, FaultRecord, Host, LoadError, Snapshot};
 
 fn reg(id: u8) -> RegId {
     RegId::new(id).expect("id < RegId::COUNT")
@@ -204,6 +204,38 @@ fn a_tick_is_sample_commit_step_in_that_order() {
     assert_eq!(
         host.backend().calls(),
         &[Call::Sample, Call::Commit, Call::Step]
+    );
+}
+
+/// The trait's contract, and the template for holding any backend to it:
+/// `sample` reports the body, it does not advance it.
+#[test]
+fn sampling_twice_reports_the_same_body_state() {
+    let rig = rig(2);
+    let mut backend = backend(&rig);
+    backend.set_muscle(0, 0.5);
+
+    let mut no_f: [f32; 0] = [];
+    let mut no_i: [i32; 0] = [];
+    let mut first = [0.0; 2];
+    let mut second = [0.0; 2];
+
+    backend.sample(&mut Snapshot {
+        f: &mut no_f,
+        i: &mut no_i,
+        muscles: &mut first,
+    });
+    backend.sample(&mut Snapshot {
+        f: &mut no_f,
+        i: &mut no_i,
+        muscles: &mut second,
+    });
+
+    assert_eq!(first, second, "sampling is a read, not a step");
+    assert_eq!(
+        first,
+        [0.5, 0.0],
+        "the read-back is the body's state, not the last command"
     );
 }
 
@@ -666,6 +698,38 @@ fn an_unbound_image_still_has_to_fit_the_hosts_shape() {
             LoadError::MuscleCount {
                 declared: 2,
                 rig: 1
+            }
+        ),
+        "unexpected error: {error}"
+    );
+}
+
+/// A hand-built image can skip the loader's M4 read-back check, so the host
+/// still has to refuse one whose read-back slots outnumber its muscles: the
+/// snapshot only carries one value per muscle.
+#[test]
+fn an_image_with_more_readbacks_than_muscles_is_refused() {
+    let rig = rig(1);
+    let mut host = Host::new(backend(&rig));
+    host.allow_unbound();
+
+    let mut image = action(vec![yield_(), jump(-2)], &rig);
+    image.header.rig = Fingerprint::UNBOUND;
+    image.sensors_f.push(Sensor {
+        name: "extra".into(),
+        source: SensorSource::Muscle,
+    });
+
+    let error = host
+        .load(image)
+        .expect_err("two read-back slots, one muscle");
+
+    assert!(
+        matches!(
+            error,
+            LoadError::ReadbacksExceedMuscles {
+                readbacks: 2,
+                muscles: 1
             }
         ),
         "unexpected error: {error}"

@@ -757,17 +757,19 @@ VM 里没有：调度器、实例树、`spawn`、`await`、fork/join、优先级
 ### 9.2 后端 trait
 
 ```rust
+pub struct Snapshot<'s> {
+    pub f: &'s mut [f32],        // SensorSource::Backend 条目，按后端声明顺序
+    pub i: &'s mut [i32],
+    pub muscles: &'s mut [f32],  // 每个肌肉一个，物理下标
+}
+
 pub trait Backend {
     /// 这份后端所实现的 rig。加载时与镜像头段的指纹比对，不等则拒绝运行。
     fn fingerprint(&self) -> Fingerprint;
 
-    /// 每个 tick 调用一次，**先于任何实例运行**：填充本 tick 的快照。
-    /// 缓冲区按镜像里 `SensorSource::Backend` 的条目数分配，后端按自己的
-    /// 声明顺序写满。
-    fn sample(&mut self, out: &mut SensorValues<'_>);
-
-    /// `SensorSource::Muscle` 的回读：身体**当前**值，不是上一条命令。
-    fn muscle(&self, index: usize) -> f32;
+    /// 每个 tick 调用一次，**先于任何实例运行**：一次报齐本 tick 的全部可观测量
+    /// 与肌肉读回。契约：只读——不得推进身体、不得推进时间。
+    fn sample(&mut self, out: &mut Snapshot<'_>);
 
     /// 每个 tick 调用一次：本 tick 合并后的命令向量，可含 `None`（该肌肉无命令）。
     /// 契约：整块原子、不得步进、不得推进时间。
@@ -778,7 +780,15 @@ pub trait Backend {
 }
 ```
 
-**规模不声明**：指纹已经把 rig 的形状（名字、顺序、可观测量、身份版本）哈希进去，再声明一遍就是第二份真相。宿主从镜像推导合并向量与采样缓冲的长度。
+**读回与可观测量一起报。** `SensorSource::Muscle` 是特殊的 sensor，但它仍是 sensor：
+随 `sample` 的同一份快照返回。因此**每个 tick 只有一个后端瞬间**——若宿主逐个查询
+读回，一个每次调用都去轮询设备的后端会在同一 tick 里报出两个不同时刻的位置。
+
+`sample` 取 `&mut self` 与"会不会推进"无关：产出快照可能要独占后端（轮询设备、
+刷新缓存），就像 `std::io::Read::read` 一样。**推不推进是契约，不是签名**；
+`commit` 同样是 `&mut self`，而它的契约恰恰是"不得推进"。
+
+**规模不声明**：指纹已经把 rig 的形状（名字、顺序、可观测量、身份版本）哈希进去，再声明一遍就是第二份真相。宿主从镜像推导合并向量、两类可观测量缓冲与肌肉表的长度。
 
 后端的职责是**物理可行性**（跨肌肉约束，如"关节超最大速度"），**不是**优先级合并：合并已在宿主完成（§8.4）。`Contribution{value, layer, task}` 整个退役——后端不拿任何来源信息。
 

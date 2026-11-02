@@ -6,7 +6,7 @@
 
 use cyberspine_core::rig::{Fingerprint, Rig};
 
-use crate::backend::{Backend, SensorValues};
+use crate::backend::{Backend, Snapshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Call {
@@ -67,14 +67,11 @@ impl Backend for DummyBackend {
         self.fingerprint
     }
 
-    fn sample(&mut self, out: &mut SensorValues<'_>) {
+    fn sample(&mut self, out: &mut Snapshot<'_>) {
         out.f.copy_from_slice(&self.sensors_f);
         out.i.copy_from_slice(&self.sensors_i);
+        out.muscles.copy_from_slice(&self.muscles);
         self.calls.push(Call::Sample);
-    }
-
-    fn muscle(&self, index: usize) -> f32 {
-        self.muscles[index]
     }
 
     fn commit(&mut self, commands: &[Option<f32>], _dt: f32) {

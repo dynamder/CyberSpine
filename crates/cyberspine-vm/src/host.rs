@@ -12,7 +12,7 @@ use cyberspine_core::binfmt::image::{Image, Sensor, SensorSource};
 use cyberspine_core::exec::{Fault, Instance, Program, Sensors, Status};
 use cyberspine_core::rig::Fingerprint;
 
-use crate::backend::{Backend, SensorValues};
+use crate::backend::{Backend, Snapshot};
 
 /// A stable handle on a loaded instance. Ids are never reused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -57,12 +57,14 @@ pub enum LoadError {
     SensorICount { declared: usize, rig: usize },
     #[error("image declares {declared} muscles, the rig provides {rig}")]
     MuscleCount { declared: usize, rig: usize },
+    #[error("image declares {readbacks} muscle read-backs but only has {muscles} muscles")]
+    ReadbacksExceedMuscles { readbacks: usize, muscles: usize },
     #[error("image declares {declared} Hz, the host is already ticking at {host} Hz")]
     Hz { declared: u32, host: u32 },
 }
 
-/// How big the loaded image is, in the three numbers the host needs: the merge
-/// vector, and the two buffers a backend fills.
+/// How big the loaded image is, in the numbers the host needs: the merge
+/// vector, the two observable buffers, and the muscle table a backend fills.
 ///
 /// A backend does not declare these (`docs/isa.md` §9.2) — the image does, and
 /// every image loaded here shares one fingerprint, so it declares the same
@@ -75,13 +77,24 @@ struct Scale {
 }
 
 impl Scale {
-    fn of(image: &Image) -> Self {
+    fn of(image: &Image) -> Result<Self, LoadError> {
         let backend = |sensor: &&Sensor| sensor.source == SensorSource::Backend;
-        Self {
+        let readbacks = image
+            .sensors_f
+            .iter()
+            .filter(|sensor| sensor.source == SensorSource::Muscle)
+            .count();
+        if readbacks > image.muscles.len() {
+            return Err(LoadError::ReadbacksExceedMuscles {
+                readbacks,
+                muscles: image.muscles.len(),
+            });
+        }
+        Ok(Self {
             muscles: image.muscles.len(),
             sensors_f: image.sensors_f.iter().filter(backend).count(),
             sensors_i: image.sensors_i.iter().filter(backend).count(),
-        }
+        })
     }
 }
 
@@ -114,11 +127,11 @@ struct Slot {
 }
 
 impl Slot {
-    fn fill<B: Backend>(&mut self, backend: &B, rig_f: &[f32], rig_i: &[i32], now: u64, dt: f32) {
+    fn fill(&mut self, rig_f: &[f32], rig_i: &[i32], rig_muscles: &[f32], now: u64, dt: f32) {
         for (index, source) in self.plan_f.iter().enumerate() {
             self.sensors_f[index] = match *source {
                 SourceF::Backend(observable) => rig_f[observable],
-                SourceF::Muscle(muscle) => backend.muscle(muscle),
+                SourceF::Muscle(muscle) => rig_muscles[muscle],
                 SourceF::Dt => dt,
                 SourceF::Tick => now as i32 as f32,
             };
@@ -141,6 +154,7 @@ pub struct Host<B: Backend> {
     faults: Vec<FaultRecord>,
     rig_f: Vec<f32>,
     rig_i: Vec<i32>,
+    rig_muscles: Vec<f32>,
     allow_unbound: bool,
     now: u64,
     hz: Option<u32>,
@@ -163,6 +177,7 @@ impl<B: Backend> Host<B> {
             faults: Vec::new(),
             rig_f: Vec::new(),
             rig_i: Vec::new(),
+            rig_muscles: Vec::new(),
             allow_unbound: false,
             now: 0,
             hz: None,
@@ -373,11 +388,12 @@ impl<B: Backend> Host<B> {
     /// always do; this check is what an unbound image (which proves nothing
     /// about its shape) is measured against.
     fn fit_scale(&mut self, image: &Image) -> Result<(), LoadError> {
-        let scale = Scale::of(image);
+        let scale = Scale::of(image)?;
         match self.scale {
             None => {
                 self.rig_f = vec![0.0; scale.sensors_f];
                 self.rig_i = vec![0; scale.sensors_i];
+                self.rig_muscles = vec![0.0; scale.muscles];
                 self.scale = Some(scale);
                 Ok(())
             }
@@ -398,25 +414,26 @@ impl<B: Backend> Host<B> {
     }
 
     fn sample(&mut self) {
-        let mut values = SensorValues {
+        let mut snapshot = Snapshot {
             f: &mut self.rig_f,
             i: &mut self.rig_i,
+            muscles: &mut self.rig_muscles,
         };
-        self.backend.sample(&mut values);
+        self.backend.sample(&mut snapshot);
     }
 
     fn resume_due(&mut self) {
         let now = self.now;
         let dt = self.dt;
-        let backend = &self.backend;
         let rig_f = &self.rig_f;
         let rig_i = &self.rig_i;
+        let rig_muscles = &self.rig_muscles;
 
         for slot in &mut self.slots {
             if slot.instance.wake_at() > now {
                 continue;
             }
-            slot.fill(backend, rig_f, rig_i, now, dt);
+            slot.fill(rig_f, rig_i, rig_muscles, now, dt);
 
             let Slot {
                 image,
