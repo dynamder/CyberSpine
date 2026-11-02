@@ -1,0 +1,81 @@
+# maze.csa — the action program for the maze body.
+#
+# Reading guide:
+#   FSENSE fN, name   read sensor `name` into float register fN
+#   FGT    fA, fB, L  if fA > fB, jump to label L (f0 is always 0.0)
+#   FEXCITE name, fN  write fN to muscle `name`
+#   FLUSH             publish this tick's writes to the body
+#   YIELD             end this tick; resume on the next one
+#
+# The runner has no map. It reacts to the floor:
+#   red marker -> turn left
+#   blue marker -> turn right
+#   no marker  -> keep going straight
+#   goal       -> stop
+#
+# The only names this program knows are the ones in maze.rig.
+
+.rig      "maze.rig"      # the body this action is assembled for
+
+# hz is the control-loop rate: one tick is 1/4 s, which is also what the
+# viewer uses to pace the animation.
+.layer    0
+.clock    hz = 4
+.fuel     4096
+.max_wait 600.0
+
+.text
+entry:
+    FMOVI   f1, 1.0       # the value that presses a muscle
+
+# One pass is one decision. Sensors are snapshotted at the start of the
+# tick, so this pass sees the cell the runner entered on the previous tick.
+step:
+    FSENSE  f2, at_goal
+    FGT     f2, f0, L_done
+
+    FSENSE  f2, marker_red
+    FGT     f2, f0, L_left
+
+    FSENSE  f2, marker_blue
+    FGT     f2, f0, L_right
+
+    # No colour here: go straight. wall_ahead is a safety net, so a missed
+    # turn stops the run instead of grinding into a wall forever.
+    FSENSE  f2, wall_ahead
+    FGT     f2, f0, L_stuck
+    JMP     L_forward
+
+# Turn for one tick, then move off the marker cell. Leaving the cell matters:
+# the next pass would otherwise read the same colour and turn again.
+L_left:
+    FEXCITE turn_left, f1
+    FLUSH
+    YIELD
+    FEXCITE turn_left, f0 # release the muscle
+    FLUSH
+    JMP     L_forward
+
+L_right:
+    FEXCITE turn_right, f1
+    FLUSH
+    YIELD
+    FEXCITE turn_right, f0
+    FLUSH
+    JMP     L_forward
+
+# A muscle holds its value until it is changed again, so every press is
+# followed by a release on the next pass. A move is one tick.
+L_forward:
+    FEXCITE forward, f1
+    FLUSH
+    YIELD
+    FEXCITE forward, f0
+    FLUSH
+    JMP     step
+
+L_stuck:
+    HALT
+
+L_done:
+    HALT

@@ -1,0 +1,118 @@
+//! A guided walk through a 2D maze: the action is a `.csa` program, the body is
+//! a plain Rust `Backend`. Nothing here is VM-specific — the shim is the four
+//! methods in [`cyberspine_vm::Backend`].
+
+pub mod backend;
+pub mod grid;
+pub mod render;
+
+use cyberspine_asm::assembler::{self, AsmParseErrors, ImageGenError};
+use cyberspine_core::binfmt::image::Image;
+use cyberspine_core::rig::Rig;
+use cyberspine_vm::{FaultRecord, Host, LoadError};
+
+pub use backend::{MazeBackend, Muscle, RIG_NAME, RIG_VERSION, SensorF, SensorI, rig};
+pub use grid::{Cell, DEFAULT_LAYOUT, Grid, GridError, Heading};
+
+pub const SOURCE: &str = include_str!("../maze.csa");
+pub const MANIFEST: &str = include_str!("../maze.rig");
+pub const MAX_TICKS: u64 = 600;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("the rig manifest is invalid: {0}")]
+    Manifest(#[from] cyberspine_rig::ManifestError),
+    #[error("the program does not parse:\n{0}")]
+    Parse(#[from] AsmParseErrors),
+    #[error("the program does not assemble: {0}")]
+    Assemble(#[from] ImageGenError),
+    #[error("the image does not load: {0}")]
+    Load(#[from] LoadError),
+}
+
+/// Compile a `.csa` source against a rig, ready for `Host::load`.
+pub fn assemble(source: &str, rig: &Rig) -> Result<Image, Error> {
+    let asm = assembler::parse(source)?;
+    Ok(assembler::generate_image(&asm, rig)?)
+}
+
+/// One assembled action, its body, and the host ticking them together.
+pub struct Session {
+    host: Host<MazeBackend>,
+    ticks: u64,
+}
+
+impl Session {
+    pub fn embedded() -> Result<Self, Error> {
+        Self::open(SOURCE, MANIFEST)
+    }
+
+    /// Assemble `source` against `manifest`, then load the image into a fresh
+    /// body. The fingerprints must agree or `Host::load` refuses the image.
+    pub fn open(source: &str, manifest: &str) -> Result<Self, Error> {
+        let rig = cyberspine_rig::from_json(manifest)?;
+        let image = assemble(source, &rig)?;
+
+        let mut host = Host::new(MazeBackend::new());
+        host.set_tracing(true);
+        host.load(image)?;
+        Ok(Self { host, ticks: 0 })
+    }
+
+    pub fn tick(&mut self) {
+        self.host.tick();
+        self.ticks += 1;
+    }
+
+    pub fn ticks(&self) -> u64 {
+        self.ticks
+    }
+
+    /// One virtual tick in seconds, i.e. `1 / hz` from the image header.
+    pub fn dt(&self) -> f32 {
+        self.host.dt()
+    }
+
+    pub fn running(&self) -> bool {
+        self.host.instances() > 0
+    }
+
+    pub fn backend(&self) -> &MazeBackend {
+        self.host.backend()
+    }
+
+    pub fn host(&self) -> &Host<MazeBackend> {
+        &self.host
+    }
+
+    pub fn outcome(&self) -> Outcome {
+        let backend = self.host.backend();
+        Outcome {
+            ticks: self.ticks,
+            moves: backend.moves(),
+            turns: backend.turns(),
+            bumps: backend.bumps(),
+            at_goal: backend.at_goal(),
+            running: self.running(),
+            faults: self.host.faults().to_vec(),
+        }
+    }
+}
+
+/// What one run did, in the numbers the demo prints.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Outcome {
+    pub ticks: u64,
+    pub moves: u32,
+    pub turns: u32,
+    pub bumps: u32,
+    pub at_goal: bool,
+    pub running: bool,
+    pub faults: Vec<FaultRecord>,
+}
+
+impl Outcome {
+    pub fn solved(&self) -> bool {
+        self.at_goal && !self.running && self.faults.is_empty()
+    }
+}
