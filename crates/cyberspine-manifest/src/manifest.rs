@@ -3,7 +3,7 @@
 //! The grammar of a name is [`Name`]'s job, the declaration rules are
 //! [`Rig::validate`]'s, and this module only maps JSON onto them.
 
-use cyberspine_core::rig::{Name, Rig, RigError, RigTable};
+use cyberspine_rig::{Name, Rig, RigError, RigTable};
 use serde::Deserialize;
 use thiserror::Error;
 

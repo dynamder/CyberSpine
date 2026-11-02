@@ -36,6 +36,9 @@ jobs:
       - name: no_std (cyberspine-isa, thumbv7em)
         run: cargo check -p cyberspine-isa --target thumbv7em-none-eabihf
 
+      - name: no_std (cyberspine-rig, thumbv7em)
+        run: cargo check -p cyberspine-rig --target thumbv7em-none-eabihf
+
       - name: no_std (cyberspine-core, thumbv7em)
         run: cargo check -p cyberspine-core --target thumbv7em-none-eabihf
 

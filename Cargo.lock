@@ -213,6 +213,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "cyberspine-isa",
+ "cyberspine-rig",
  "cyberspine-testkit",
  "thiserror",
 ]
@@ -239,9 +240,17 @@ dependencies = [
 name = "cyberspine-manifest"
 version = "0.1.0"
 dependencies = [
- "cyberspine-core",
+ "cyberspine-rig",
  "serde",
  "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "cyberspine-rig"
+version = "0.1.0"
+dependencies = [
+ "blake3",
  "thiserror",
 ]
 

@@ -196,7 +196,7 @@ dependencies = [
  "annotate-snippets",
  "clap",
  "cyberspine-core",
- "cyberspine-rig",
+ "cyberspine-manifest",
  "cyberspine-store",
  "smol_str",
  "thiserror",
@@ -218,6 +218,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "cyberspine-isa",
+ "cyberspine-rig",
  "thiserror",
 ]
 
@@ -229,12 +230,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cyberspine-manifest"
+version = "0.1.0"
+dependencies = [
+ "cyberspine-rig",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "cyberspine-rig"
 version = "0.1.0"
 dependencies = [
- "cyberspine-core",
- "serde",
- "serde_json",
+ "blake3",
  "thiserror",
 ]
 

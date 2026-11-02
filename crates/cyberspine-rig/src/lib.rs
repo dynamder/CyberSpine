@@ -1,10 +1,19 @@
 //! The rig: the names a body provides, and the fingerprint an image carries
 //! (`docs/isa.md` §13).
 //!
+//! This is the identity layer: a `Rig`, its validated [`Name`]s, and the
+//! [`Fingerprint`] both the assembler and the host compute from it. It is
+//! `#![no_std]` with only `alloc`, because the same hash has to be computable on
+//! a device and read back from an image.
+//!
 //! The assembler and the backend build a [`Rig`] from their own inputs and hash
 //! it with the same function. The image stores the assembler's answer; the host
 //! compares it with the backend's before anything runs, so an action can never
 //! be executed against a body it was not assembled for.
+
+#![no_std]
+
+extern crate alloc;
 
 pub mod name;
 

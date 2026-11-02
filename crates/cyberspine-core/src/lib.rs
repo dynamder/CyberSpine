@@ -32,9 +32,10 @@ extern crate alloc;
 
 pub mod binfmt;
 pub mod exec;
-pub mod rig;
 
-// The instruction set is its own crate so that a consumer which only needs the
-// encoding does not pull in the image format. Re-exported here so every existing
-// `cyberspine_core::isa::…` path keeps working.
+// The instruction set and the rig are their own crates so that a consumer which
+// only needs one of them does not pull in the image format. Re-exported here so
+// every existing `cyberspine_core::isa::…` / `cyberspine_core::rig::…` path
+// keeps working.
 pub use cyberspine_isa as isa;
+pub use cyberspine_rig as rig;
