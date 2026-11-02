@@ -25,12 +25,12 @@ pub struct Program<'p> {
 impl<'p> Program<'p> {
     pub fn new(image: &'p VerifiedImage) -> Self {
         Self {
-            code: &image.code,
-            vars_f: &image.vars_f,
-            vars_i: &image.vars_i,
-            sensor_f_count: image.sensors_f.len(),
-            sensor_i_count: image.sensors_i.len(),
-            muscle_count: image.muscles.len(),
+            code: image.code(),
+            vars_f: image.vars_f(),
+            vars_i: image.vars_i(),
+            sensor_f_count: image.sensors_f().len(),
+            sensor_i_count: image.sensors_i().len(),
+            muscle_count: image.muscles().len(),
             hz: image.header.hz,
             fuel: image.header.fuel,
         }

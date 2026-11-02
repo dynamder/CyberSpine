@@ -96,9 +96,9 @@ fn a_minimal_program_gets_the_implicit_halt_and_the_header() {
         rig.fingerprint(),
         "the image is bound to the rig it was assembled for"
     );
-    assert_eq!(image.code.len(), 2);
-    assert_eq!(image.code[0].op, OpCode::Nop);
-    assert_eq!(image.code[1].op, OpCode::Halt);
+    assert_eq!(image.code().len(), 2);
+    assert_eq!(image.code()[0].op, OpCode::Nop);
+    assert_eq!(image.code()[1].op, OpCode::Halt);
 
     let reloaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("the loader must accept it");
     assert_eq!(reloaded.image(), &image);
@@ -107,7 +107,7 @@ fn a_minimal_program_gets_the_implicit_halt_and_the_header() {
 #[test]
 fn an_empty_instruction_section_is_exactly_one_halt() {
     let image = assemble(".text\n");
-    assert_eq!(image.code, vec![Insn::new(OpCode::Halt)]);
+    assert_eq!(image.code(), vec![Insn::new(OpCode::Halt)]);
 }
 
 /// `docs/asm.md` §3.4：`.description` 是纯元数据，不能改变镜像的任何字节。
@@ -155,31 +155,31 @@ HALT
         &rig,
     );
 
-    assert_eq!(image.muscles.len(), 2);
-    assert_eq!(&*image.muscles[0].name, "brow_l");
-    assert_eq!(&*image.muscles[1].name, "brow_r");
+    assert_eq!(image.muscles().len(), 2);
+    assert_eq!(&*image.muscles()[0].name, "brow_l");
+    assert_eq!(&*image.muscles()[1].name, "brow_r");
 
-    assert_eq!(image.sensors_f.len(), 4);
-    assert_eq!(&*image.sensors_f[0].name, "brow_l");
-    assert_eq!(image.sensors_f[0].source, SensorSource::Muscle);
-    assert_eq!(&*image.sensors_f[1].name, "brow_r");
-    assert_eq!(&*image.sensors_f[2].name, "smile");
-    assert_eq!(image.sensors_f[2].source, SensorSource::Backend);
-    assert_eq!(&*image.sensors_f[3].name, "dt");
-    assert_eq!(image.sensors_f[3].source, SensorSource::BuiltinDt);
+    assert_eq!(image.sensors_f().len(), 4);
+    assert_eq!(&*image.sensors_f()[0].name, "brow_l");
+    assert_eq!(image.sensors_f()[0].source, SensorSource::Muscle);
+    assert_eq!(&*image.sensors_f()[1].name, "brow_r");
+    assert_eq!(&*image.sensors_f()[2].name, "smile");
+    assert_eq!(image.sensors_f()[2].source, SensorSource::Backend);
+    assert_eq!(&*image.sensors_f()[3].name, "dt");
+    assert_eq!(image.sensors_f()[3].source, SensorSource::BuiltinDt);
 
-    assert_eq!(image.sensors_i.len(), 2);
-    assert_eq!(&*image.sensors_i[0].name, "gaze_lock");
-    assert_eq!(&*image.sensors_i[1].name, "tick");
-    assert_eq!(image.sensors_i[1].source, SensorSource::BuiltinTick);
+    assert_eq!(image.sensors_i().len(), 2);
+    assert_eq!(&*image.sensors_i()[0].name, "gaze_lock");
+    assert_eq!(&*image.sensors_i()[1].name, "tick");
+    assert_eq!(image.sensors_i()[1].source, SensorSource::BuiltinTick);
 
-    assert_eq!(image.vars_f.len(), 1);
-    assert_eq!(image.vars_f[0].init, 0.5);
-    assert_eq!(image.vars_i.len(), 1);
-    assert_eq!(image.vars_i[0].init, -2);
+    assert_eq!(image.vars_f().len(), 1);
+    assert_eq!(image.vars_f()[0].init, 0.5);
+    assert_eq!(image.vars_i().len(), 1);
+    assert_eq!(image.vars_i()[0].init, -2);
 
     // The `imm` of each instruction is the physical index, in the order above.
-    let imm: Vec<u32> = image.code.iter().map(|insn| insn.imm).collect();
+    let imm: Vec<u32> = image.code().iter().map(|insn| insn.imm).collect();
     assert_eq!(imm, vec![0, 2, 3, 0, 1, 0, 0, 1, 0, 1, 0, 0]);
 
     let reloaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("the loader must accept it");
@@ -196,10 +196,10 @@ fn the_rig_order_decides_the_indices() {
         &rig,
     );
 
-    assert_eq!(&*image.muscles[0].name, "b_second");
-    assert_eq!(&*image.muscles[1].name, "a_first");
-    assert_eq!(image.code[0].imm, 0);
-    assert_eq!(image.code[2].imm, 1);
+    assert_eq!(&*image.muscles()[0].name, "b_second");
+    assert_eq!(&*image.muscles()[1].name, "a_first");
+    assert_eq!(image.code()[0].imm, 0);
+    assert_eq!(image.code()[2].imm, 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -220,15 +220,15 @@ HALT
         &rig,
     );
 
-    assert_eq!(image.code.len(), 4);
-    assert_eq!(image.code[0].op, OpCode::Fexcite);
-    assert_eq!(image.code[0].imm, 0);
-    assert_eq!(image.code[0].ra.get(), 1);
-    assert_eq!(image.code[1].op, OpCode::Fexcite);
-    assert_eq!(image.code[1].imm, 1);
-    assert_eq!(image.code[1].ra.get(), 1);
-    assert_eq!(image.code[2].op, OpCode::Flush);
-    assert_eq!(image.code[3].op, OpCode::Halt);
+    assert_eq!(image.code().len(), 4);
+    assert_eq!(image.code()[0].op, OpCode::Fexcite);
+    assert_eq!(image.code()[0].imm, 0);
+    assert_eq!(image.code()[0].ra.get(), 1);
+    assert_eq!(image.code()[1].op, OpCode::Fexcite);
+    assert_eq!(image.code()[1].imm, 1);
+    assert_eq!(image.code()[1].ra.get(), 1);
+    assert_eq!(image.code()[2].op, OpCode::Flush);
+    assert_eq!(image.code()[3].op, OpCode::Halt);
 }
 
 // ---------------------------------------------------------------------------
@@ -248,11 +248,11 @@ end:
 ",
     );
 
-    assert_eq!(image.code.len(), 3);
-    assert_eq!(jump_target(0, image.code[0].imm as i32), Some(2));
-    assert_eq!(image.code[0].imm as i32, 1);
-    assert_eq!(image.code[1].op, OpCode::Nop);
-    assert_eq!(image.code[2].op, OpCode::Halt);
+    assert_eq!(image.code().len(), 3);
+    assert_eq!(jump_target(0, image.code()[0].imm as i32), Some(2));
+    assert_eq!(image.code()[0].imm as i32, 1);
+    assert_eq!(image.code()[1].op, OpCode::Nop);
+    assert_eq!(image.code()[2].op, OpCode::Halt);
 }
 
 #[test]
@@ -266,10 +266,10 @@ end:
 ",
     );
 
-    assert_eq!(image.code.len(), 2);
-    assert_eq!(image.code[0].imm as i32, 0);
+    assert_eq!(image.code().len(), 2);
+    assert_eq!(image.code()[0].imm as i32, 0);
     assert_eq!(jump_target(0, 0), Some(1));
-    assert_eq!(image.code[1].op, OpCode::Halt);
+    assert_eq!(image.code()[1].op, OpCode::Halt);
 }
 
 #[test]
@@ -345,18 +345,18 @@ L_done:
     let asm = parse(src).expect("the documented example parses");
     let image = generate_image(&asm, &rig).expect("the documented example assembles");
 
-    assert_eq!(image.code.len(), 28);
-    assert_eq!(image.muscles.len(), 4);
-    assert_eq!(image.sensors_f.len(), 7);
-    assert_eq!(image.sensors_i.len(), 2);
+    assert_eq!(image.code().len(), 28);
+    assert_eq!(image.muscles().len(), 4);
+    assert_eq!(image.sensors_f().len(), 7);
+    assert_eq!(image.sensors_i().len(), 2);
     assert_eq!(image.header().rig, rig.fingerprint());
-    assert_eq!(image.code.last().expect("non-empty").op, OpCode::Halt);
+    assert_eq!(image.code().last().expect("non-empty").op, OpCode::Halt);
 
-    assert_eq!(jump_target(1, image.code[1].imm as i32), Some(27));
-    assert_eq!(jump_target(10, image.code[10].imm as i32), Some(13));
-    assert_eq!(jump_target(12, image.code[12].imm as i32), Some(9));
-    assert_eq!(jump_target(17, image.code[17].imm as i32), Some(20));
-    assert_eq!(jump_target(19, image.code[19].imm as i32), Some(16));
+    assert_eq!(jump_target(1, image.code()[1].imm as i32), Some(27));
+    assert_eq!(jump_target(10, image.code()[10].imm as i32), Some(13));
+    assert_eq!(jump_target(12, image.code()[12].imm as i32), Some(9));
+    assert_eq!(jump_target(17, image.code()[17].imm as i32), Some(20));
+    assert_eq!(jump_target(19, image.code()[19].imm as i32), Some(16));
 
     let reloaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("the loader must accept it");
     assert_eq!(reloaded.image(), &image);
@@ -581,7 +581,7 @@ HALT
 ",
         &rig,
     );
-    assert_eq!(image.code.last().expect("non-empty").op, OpCode::Halt);
+    assert_eq!(image.code().last().expect("non-empty").op, OpCode::Halt);
 }
 
 // ---------------------------------------------------------------------------
@@ -591,7 +591,7 @@ HALT
 #[test]
 fn wait_must_be_non_negative_finite_and_within_max_wait() {
     assert_eq!(
-        assemble(".text\nWAIT 600.0\nHALT\n").code[0].op,
+        assemble(".text\nWAIT 600.0\nHALT\n").code()[0].op,
         OpCode::Wait
     );
 
@@ -652,10 +652,10 @@ top:
     HALT
 ",
     );
-    for (pc, insn) in image.code.iter().enumerate() {
+    for (pc, insn) in image.code().iter().enumerate() {
         if insn.op.imm_type() == ImmType::JumpOffset {
             let target = jump_target(pc, insn.imm as i32).expect("target must exist");
-            assert!(target < image.code.len(), "jump at {pc} -> {target}");
+            assert!(target < image.code().len(), "jump at {pc} -> {target}");
         }
     }
 }

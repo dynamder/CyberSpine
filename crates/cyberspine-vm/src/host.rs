@@ -88,9 +88,9 @@ impl Scale {
     fn of(image: &VerifiedImage) -> Self {
         let backend = |sensor: &&Sensor| sensor.source == SensorSource::Backend;
         Self {
-            muscles: image.muscles.len(),
-            sensors_f: image.sensors_f.iter().filter(backend).count(),
-            sensors_i: image.sensors_i.iter().filter(backend).count(),
+            muscles: image.muscles().len(),
+            sensors_f: image.sensors_f().iter().filter(backend).count(),
+            sensors_i: image.sensors_i().iter().filter(backend).count(),
         }
     }
 }
@@ -204,7 +204,7 @@ impl<B: Backend> Host<B> {
         // The whole host is sized by one scale, so every slot's muscle table is
         // the host's. That is what lets `Instance::published` index without a
         // bound check, and it is checked once, here, where the image is admitted.
-        debug_assert_eq!(image.muscles.len(), scale.muscles);
+        debug_assert_eq!(image.muscles().len(), scale.muscles);
 
         let hz = image.header().hz;
         match self.hz {
@@ -221,8 +221,8 @@ impl<B: Backend> Host<B> {
             Some(_) => {}
         }
 
-        let plan_f = float_plan(&image.sensors_f);
-        let plan_i = int_plan(&image.sensors_i);
+        let plan_f = float_plan(image.sensors_f());
+        let plan_i = int_plan(image.sensors_i());
 
         let instance = {
             let program = Program::new(&image);
@@ -234,8 +234,8 @@ impl<B: Backend> Host<B> {
         self.slots.push(Slot {
             id,
             layer: image.header().layer,
-            sensors_f: vec![0.0; image.sensors_f.len()],
-            sensors_i: vec![0; image.sensors_i.len()],
+            sensors_f: vec![0.0; image.sensors_f().len()],
+            sensors_i: vec![0; image.sensors_i().len()],
             image,
             instance,
             plan_f,

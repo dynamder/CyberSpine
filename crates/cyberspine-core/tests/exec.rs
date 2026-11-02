@@ -566,11 +566,11 @@ fn variables_take_their_initial_value_from_the_image() {
         },
         halt(),
     ]);
-    image.vars_f.push(VarF {
+    image.push_var_f(VarF {
         name: n("height"),
         init: 2.5,
     });
-    image.vars_i.push(VarI {
+    image.push_var_i(VarI {
         name: n("count"),
         init: -4,
     });
@@ -602,7 +602,7 @@ fn variables_survive_a_suspend() {
         },
         halt(),
     ]);
-    image.vars_f.push(VarF {
+    image.push_var_f(VarF {
         name: n("state"),
         init: 0.0,
     });
@@ -927,12 +927,10 @@ fn a_short_float_snapshot_is_a_host_violation() {
 #[should_panic(expected = "host contract")]
 fn a_short_integer_snapshot_is_a_host_violation() {
     let mut image = Image::new(vec![halt()]);
-    image
-        .sensors_i
-        .push(cyberspine_core::binfmt::image::Sensor {
-            name: n("tick"),
-            source: cyberspine_core::binfmt::image::SensorSource::BuiltinTick,
-        });
+    image.push_sensor_i(cyberspine_core::binfmt::image::Sensor {
+        name: n("tick"),
+        source: cyberspine_core::binfmt::image::SensorSource::BuiltinTick,
+    });
     let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);

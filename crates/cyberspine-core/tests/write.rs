@@ -123,19 +123,19 @@ fn the_header_is_exactly_96_bytes() {
 fn the_tables_are_gap_free_and_in_the_order_section_6_fixes() {
     let mut image = Image::new(code(&[with_ra(OpCode::Fexcite, 1), insn(OpCode::Halt)]));
     image.push_muscle(n("mouth"));
-    image.sensors_f.push(Sensor {
+    image.push_sensor_f(Sensor {
         name: n("dt"),
         source: SensorSource::BuiltinDt,
     });
-    image.sensors_i.push(Sensor {
+    image.push_sensor_i(Sensor {
         name: n("tick"),
         source: SensorSource::BuiltinTick,
     });
-    image.vars_f.push(VarF {
+    image.push_var_f(VarF {
         name: n("gain"),
         init: 0.5,
     });
-    image.vars_i.push(VarI {
+    image.push_var_i(VarI {
         name: n("count"),
         init: -7,
     });
@@ -192,10 +192,10 @@ fn a_sensor_is_a_name_then_one_source_byte() {
     .into_iter()
     .enumerate()
     {
-        image.muscles.push(Muscle {
+        image.push_muscle_only(Muscle {
             name: n(&format!("m{i}")),
         });
-        image.sensors_f.push(Sensor {
+        image.push_sensor_f(Sensor {
             name: n(&format!("m{i}")),
             source,
         });
@@ -272,7 +272,7 @@ fn the_hash_covers_the_whole_file_not_just_the_header() {
     let fuel_changed = fuel_changed.to_bytes();
 
     let mut code_changed = Image::halt_only();
-    code_changed.code[0] = insn(OpCode::Nop); // code, offset 96
+    code_changed.code_mut()[0] = insn(OpCode::Nop); // code, offset 96
     let code_changed = code_changed.to_bytes();
 
     assert_ne!(
@@ -298,7 +298,7 @@ fn writing_the_same_image_twice_gives_identical_bytes() {
     let build = || {
         let mut image = Image::new(code(&[insn(OpCode::Yield), insn(OpCode::Halt)]));
         image.push_muscle(n("jaw"));
-        image.vars_f.push(VarF {
+        image.push_var_f(VarF {
             name: n("k"),
             init: f32::NAN,
         });
@@ -319,9 +319,9 @@ fn push_muscle_keeps_the_readback_invariant() {
     image.push_muscle(n("a"));
     image.push_muscle(n("b"));
 
-    assert_eq!(image.muscles.len(), 2);
-    assert_eq!(image.sensors_f.len(), 2);
-    for (muscle, sensor) in image.muscles.iter().zip(&image.sensors_f) {
+    assert_eq!(image.muscles().len(), 2);
+    assert_eq!(image.sensors_f().len(), 2);
+    for (muscle, sensor) in image.muscles().iter().zip(image.sensors_f()) {
         assert_eq!(
             muscle.name, sensor.name,
             "the read-back sensor must reuse the name"
@@ -341,8 +341,8 @@ fn the_writer_emits_names_it_cannot_vouch_for() {
     // §9.2 M1 is the loader's rule. The writer has to be able to produce a bad
     // name, or `tests/load.rs` could not test that the loader rejects one.
     let mut image = Image::halt_only();
-    image.muscles.push(Muscle { name: raw_name("") });
-    image.sensors_f.push(Sensor {
+    image.push_muscle_only(Muscle { name: raw_name("") });
+    image.push_sensor_f(Sensor {
         name: raw_name("9bad"),
         source: SensorSource::Muscle,
     });

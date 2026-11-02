@@ -425,7 +425,7 @@ fn an_excitation_is_invisible_to_the_tick_that_made_it() {
     .expect("writer");
 
     let mut reader = action(vec![sense(1, 0), var_set(0, 1), yield_(), jump(-4)], &rig);
-    reader.vars_f.push(VarF {
+    reader.push_var_f(VarF {
         name: n("seen"),
         init: 0.0,
     });

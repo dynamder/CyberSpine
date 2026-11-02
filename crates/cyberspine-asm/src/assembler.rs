@@ -250,19 +250,19 @@ pub fn generate_image(asm: &Asm, rig: &Rig) -> Result<Image, ImageGenError> {
         rig: rig.fingerprint(),
     };
     for muscle in symbols.image_muscles {
-        image.muscles.push(muscle);
+        image.push_muscle_only(muscle);
     }
     for sensor in symbols.image_sensors_f {
-        image.sensors_f.push(sensor);
+        image.push_sensor_f(sensor);
     }
     for sensor in symbols.image_sensors_i {
-        image.sensors_i.push(sensor);
+        image.push_sensor_i(sensor);
     }
     for var in symbols.image_vars_f {
-        image.vars_f.push(var);
+        image.push_var_f(var);
     }
     for var in symbols.image_vars_i {
-        image.vars_i.push(var);
+        image.push_var_i(var);
     }
     Ok(image)
 }

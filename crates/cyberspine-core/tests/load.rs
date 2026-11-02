@@ -100,7 +100,7 @@ fn reject(bytes: &[u8]) -> LoadError {
     match VerifiedImage::from_bytes(bytes) {
         Ok(image) => panic!(
             "expected rejection, but the loader accepted a {} instruction image",
-            image.code.len()
+            image.code().len()
         ),
         Err(err) => err,
     }
@@ -126,27 +126,27 @@ fn a_populated_image_round_trips() {
         insn(OpCode::Halt, 0, 0, 0),
     ]);
     image.push_muscle(n("mouth_open"));
-    image.sensors_f.push(Sensor {
+    image.push_sensor_f(Sensor {
         name: n("dt"),
         source: SensorSource::BuiltinDt,
     });
-    image.sensors_f.push(Sensor {
+    image.push_sensor_f(Sensor {
         name: n("pressure"),
         source: SensorSource::Backend,
     });
-    image.sensors_i.push(Sensor {
+    image.push_sensor_i(Sensor {
         name: n("tick"),
         source: SensorSource::BuiltinTick,
     });
-    image.sensors_i.push(Sensor {
+    image.push_sensor_i(Sensor {
         name: n("errors"),
         source: SensorSource::Backend,
     });
-    image.vars_f.push(VarF {
+    image.push_var_f(VarF {
         name: n("gain"),
         init: 0.5,
     });
-    image.vars_i.push(VarI {
+    image.push_var_i(VarI {
         name: n("count"),
         init: -7,
     });
@@ -172,14 +172,14 @@ fn float_var_initial_values_round_trip_bit_for_bit() {
 
     let mut image = Image::halt_only();
     for (i, bits) in cases.iter().enumerate() {
-        image.vars_f.push(VarF {
+        image.push_var_f(VarF {
             name: n(&format!("v{i}")),
             init: f32::from_bits(*bits),
         });
     }
 
     let loaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("a well-formed image");
-    let bits: Vec<u32> = loaded.vars_f.iter().map(|v| v.init.to_bits()).collect();
+    let bits: Vec<u32> = loaded.vars_f().iter().map(|v| v.init.to_bits()).collect();
     assert_eq!(bits, cases.to_vec());
 }
 
@@ -470,7 +470,7 @@ fn m1_a_name_that_is_not_an_ascii_identifier_is_refused() {
     // that can look identical while differing is a hazard worth excluding.
     for bad in ["9lives", "with-dash", "with space", "café", "a.b"] {
         let mut image = Image::halt_only();
-        image.muscles.push(Muscle {
+        image.push_muscle_only(Muscle {
             name: raw_name(bad),
         });
         match reject(&image.to_bytes()) {
@@ -516,15 +516,15 @@ fn m2_names_are_only_unique_within_a_table() {
     // appear in two of them — and does, in the read-back invariant.
     let mut image = Image::halt_only();
     image.push_muscle(n("shared"));
-    image.sensors_i.push(Sensor {
+    image.push_sensor_i(Sensor {
         name: n("shared"),
         source: SensorSource::Backend,
     });
-    image.vars_f.push(VarF {
+    image.push_var_f(VarF {
         name: n("shared"),
         init: 0.0,
     });
-    image.vars_i.push(VarI {
+    image.push_var_i(VarI {
         name: n("shared"),
         init: 0,
     });
@@ -536,7 +536,7 @@ fn m3_sensor_f_count_must_cover_every_muscle() {
     // One muscle, no read-back sensor: the invariant in §6.2 has nothing to
     // point at.
     let mut image = Image::halt_only();
-    image.muscles.push(Muscle { name: n("jaw") });
+    image.push_muscle_only(Muscle { name: n("jaw") });
 
     assert!(matches!(
         reject(&image.to_bytes()),
@@ -550,8 +550,8 @@ fn m3_sensor_f_count_must_cover_every_muscle() {
 #[test]
 fn m4_a_readback_sensor_must_carry_the_same_name() {
     let mut image = Image::halt_only();
-    image.muscles.push(Muscle { name: n("jaw") });
-    image.sensors_f.push(Sensor {
+    image.push_muscle_only(Muscle { name: n("jaw") });
+    image.push_sensor_f(Sensor {
         name: n("jaw_"),
         source: SensorSource::Muscle,
     });
@@ -574,8 +574,8 @@ fn m4_a_readback_sensor_must_be_sourced_from_the_muscle() {
     // Same name, wrong channel: FSENSE and FEXCITE would then disagree about
     // which integer means "jaw".
     let mut image = Image::halt_only();
-    image.muscles.push(Muscle { name: n("jaw") });
-    image.sensors_f.push(Sensor {
+    image.push_muscle_only(Muscle { name: n("jaw") });
+    image.push_sensor_f(Sensor {
         name: n("jaw"),
         source: SensorSource::Backend,
     });
@@ -615,7 +615,7 @@ fn m5_an_undefined_source_byte_is_refused() {
 fn m5_builtin_dt_and_tick_are_single_and_table_specific() {
     // BUILTIN_TICK in sensors_f: the integer tick cannot be read as a float.
     let mut image = Image::halt_only();
-    image.sensors_f.push(Sensor {
+    image.push_sensor_f(Sensor {
         name: n("t"),
         source: SensorSource::BuiltinTick,
     });
@@ -630,7 +630,7 @@ fn m5_builtin_dt_and_tick_are_single_and_table_specific() {
 
     // BUILTIN_DT in sensors_i: the same rule the other way.
     let mut image = Image::halt_only();
-    image.sensors_i.push(Sensor {
+    image.push_sensor_i(Sensor {
         name: n("d"),
         source: SensorSource::BuiltinDt,
     });
@@ -645,11 +645,11 @@ fn m5_builtin_dt_and_tick_are_single_and_table_specific() {
 
     // A second dt.
     let mut image = Image::halt_only();
-    image.sensors_f.push(Sensor {
+    image.push_sensor_f(Sensor {
         name: n("d1"),
         source: SensorSource::BuiltinDt,
     });
-    image.sensors_f.push(Sensor {
+    image.push_sensor_f(Sensor {
         name: n("d2"),
         source: SensorSource::BuiltinDt,
     });
@@ -660,11 +660,11 @@ fn m5_builtin_dt_and_tick_are_single_and_table_specific() {
 
     // A second tick.
     let mut image = Image::halt_only();
-    image.sensors_i.push(Sensor {
+    image.push_sensor_i(Sensor {
         name: n("t1"),
         source: SensorSource::BuiltinTick,
     });
-    image.sensors_i.push(Sensor {
+    image.push_sensor_i(Sensor {
         name: n("t2"),
         source: SensorSource::BuiltinTick,
     });
@@ -679,7 +679,7 @@ fn m6_muscle_readback_is_only_legal_where_a_muscle_exists() {
     // One muscle but two MUSCLE sensors: the second has no muscle to read.
     let mut image = Image::halt_only();
     image.push_muscle(n("a"));
-    image.sensors_f.push(Sensor {
+    image.push_sensor_f(Sensor {
         name: n("b"),
         source: SensorSource::Muscle,
     });

@@ -108,7 +108,7 @@ fn halt() -> Insn {
 fn check_loader() {
     let bytes = include_bytes!("../../crates/cyberspine-core/tests/fixtures/valid_all.csp");
     let image = VerifiedImage::from_bytes(bytes).expect("the golden fixture must load");
-    assert!(!image.code.is_empty());
+    assert!(!image.code().is_empty());
 }
 
 fn check_arithmetic() {

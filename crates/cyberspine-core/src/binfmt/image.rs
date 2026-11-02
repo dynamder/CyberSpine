@@ -176,12 +176,12 @@ pub struct VarI {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Image {
     pub(crate) header: FixedHeader,
-    pub code: Vec<Insn>,
-    pub muscles: Vec<Muscle>,
-    pub sensors_f: Vec<Sensor>,
-    pub sensors_i: Vec<Sensor>,
-    pub vars_f: Vec<VarF>,
-    pub vars_i: Vec<VarI>,
+    pub(crate) code: Vec<Insn>,
+    pub(crate) muscles: Vec<Muscle>,
+    pub(crate) sensors_f: Vec<Sensor>,
+    pub(crate) sensors_i: Vec<Sensor>,
+    pub(crate) vars_f: Vec<VarF>,
+    pub(crate) vars_i: Vec<VarI>,
 }
 
 impl Image {
@@ -207,6 +207,50 @@ impl Image {
             vars_f: Vec::new(),
             vars_i: Vec::new(),
         }
+    }
+
+    /// The instructions, in execution order.
+    pub fn code(&self) -> &[Insn] {
+        &self.code
+    }
+
+    /// The instructions, for a builder that has to patch one.
+    ///
+    /// A loaded action cannot reach this: `VerifiedImage` only ever hands out
+    /// `&Image`, and the writer refuses an image whose code is no longer
+    /// canonical.
+    pub fn code_mut(&mut self) -> &mut Vec<Insn> {
+        &mut self.code
+    }
+
+    /// The five metadata tables, in the order §3 fixes for the file.
+    pub fn muscles(&self) -> &[Muscle] {
+        &self.muscles
+    }
+
+    pub fn sensors_f(&self) -> &[Sensor] {
+        &self.sensors_f
+    }
+
+    pub fn sensors_i(&self) -> &[Sensor] {
+        &self.sensors_i
+    }
+
+    pub fn vars_f(&self) -> &[VarF] {
+        &self.vars_f
+    }
+
+    pub fn vars_i(&self) -> &[VarI] {
+        &self.vars_i
+    }
+
+    /// Append a muscle on its own.
+    ///
+    /// This is the M4-violating half of [`Image::push_muscle`]: a test that needs
+    /// a file no legal producer can write pushes the muscle here and the read-back
+    /// (or not) separately.
+    pub fn push_muscle_only(&mut self, muscle: Muscle) {
+        self.muscles.push(muscle);
     }
 
     /// Append a muscle together with the read-back sensor the format requires of

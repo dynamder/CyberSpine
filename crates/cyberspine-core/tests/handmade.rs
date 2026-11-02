@@ -252,7 +252,7 @@ fn reject(bytes: &[u8]) -> LoadError {
     match VerifiedImage::from_bytes(bytes) {
         Ok(image) => panic!(
             "expected rejection, but the loader accepted a {} instruction image",
-            image.code.len()
+            image.code().len()
         ),
         Err(err) => err,
     }
@@ -363,14 +363,14 @@ fn the_hand_assembled_bytes_match_the_offset_table() {
 fn golden_valid_all_exercises_every_opcode() {
     let image = VerifiedImage::from_bytes(&fixture_bytes(VALID)).expect("the golden file is valid");
 
-    let mut seen: Vec<u8> = image.code.iter().map(|insn| insn.op.byte()).collect();
+    let mut seen: Vec<u8> = image.code().iter().map(|insn| insn.op.byte()).collect();
     seen.sort_unstable();
     seen.dedup();
 
     let mut all: Vec<u8> = OpCode::ALL.iter().map(|op| op.byte()).collect();
     all.sort_unstable();
 
-    assert_eq!(image.code.len(), CODE_LEN, "one instruction per opcode");
+    assert_eq!(image.code().len(), CODE_LEN, "one instruction per opcode");
     assert_eq!(
         seen,
         all,
@@ -391,64 +391,64 @@ fn golden_valid_all_loads_and_decodes() {
     assert_eq!(image.header().max_wait.get(), 12.5);
 
     // Code, spot-checked at the points where an operand reading could go wrong.
-    assert_eq!(image.code.len(), CODE_LEN);
-    assert_eq!(image.code[0].op, OpCode::Fmovi);
-    assert_eq!(image.code[0].rd.get(), 1);
-    assert_eq!(image.code[0].imm_f32(), 1.0);
-    assert_eq!(image.code[22].op, OpCode::Itof); // mixed register files
-    assert_eq!(image.code[23].op, OpCode::Ftoi);
-    assert_eq!(image.code[24].op, OpCode::Jmp);
-    assert_eq!(image.code[24].imm_i32(), -25, "a backward jump");
-    assert_eq!(image.code[37].op, OpCode::Fsense);
-    assert_eq!(image.code[37].rd.get(), 19);
-    assert_eq!(image.code[37].imm_index(), 3);
-    assert_eq!(image.code[40].op, OpCode::Wait);
-    assert_eq!(image.code[40].imm_f32(), 0.5);
-    assert_eq!(image.code[41].op, OpCode::Fexcite);
-    assert_eq!(image.code[41].ra.get(), 20);
-    assert_eq!(image.code[41].imm_index(), 1);
+    assert_eq!(image.code().len(), CODE_LEN);
+    assert_eq!(image.code()[0].op, OpCode::Fmovi);
+    assert_eq!(image.code()[0].rd.get(), 1);
+    assert_eq!(image.code()[0].imm_f32(), 1.0);
+    assert_eq!(image.code()[22].op, OpCode::Itof); // mixed register files
+    assert_eq!(image.code()[23].op, OpCode::Ftoi);
+    assert_eq!(image.code()[24].op, OpCode::Jmp);
+    assert_eq!(image.code()[24].imm_i32(), -25, "a backward jump");
+    assert_eq!(image.code()[37].op, OpCode::Fsense);
+    assert_eq!(image.code()[37].rd.get(), 19);
+    assert_eq!(image.code()[37].imm_index(), 3);
+    assert_eq!(image.code()[40].op, OpCode::Wait);
+    assert_eq!(image.code()[40].imm_f32(), 0.5);
+    assert_eq!(image.code()[41].op, OpCode::Fexcite);
+    assert_eq!(image.code()[41].ra.get(), 20);
+    assert_eq!(image.code()[41].imm_index(), 1);
     // `FLUSH` sits between `NOP` and the trailing `HALT`, and its canonical form
     // is the bare opcode: every other field zero (§9.3 I2).
-    assert_eq!(image.code[47].op, OpCode::Flush);
+    assert_eq!(image.code()[47].op, OpCode::Flush);
     assert_eq!(
-        image.code[47].encode(),
+        image.code()[47].encode(),
         0xA2u64 << 56,
         "FLUSH must be a zero-operand word"
     );
-    assert_eq!(image.code[LAST].op, OpCode::Halt);
+    assert_eq!(image.code()[LAST].op, OpCode::Halt);
 
     // Metadata: every table populated, read-back invariant (M4) intact.
-    assert_eq!(image.muscles.len(), 2);
-    assert_eq!(&*image.muscles[0].name, "mouth");
-    assert_eq!(&*image.muscles[1].name, "brow");
+    assert_eq!(image.muscles().len(), 2);
+    assert_eq!(&*image.muscles()[0].name, "mouth");
+    assert_eq!(&*image.muscles()[1].name, "brow");
 
-    assert_eq!(image.sensors_f.len(), 4);
-    assert_eq!(&*image.sensors_f[0].name, "mouth");
-    assert_eq!(image.sensors_f[0].source, SensorSource::Muscle);
-    assert_eq!(&*image.sensors_f[1].name, "brow");
-    assert_eq!(image.sensors_f[1].source, SensorSource::Muscle);
-    assert_eq!(&*image.sensors_f[2].name, "dt");
-    assert_eq!(image.sensors_f[2].source, SensorSource::BuiltinDt);
-    assert_eq!(&*image.sensors_f[3].name, "pressure");
-    assert_eq!(image.sensors_f[3].source, SensorSource::Backend);
+    assert_eq!(image.sensors_f().len(), 4);
+    assert_eq!(&*image.sensors_f()[0].name, "mouth");
+    assert_eq!(image.sensors_f()[0].source, SensorSource::Muscle);
+    assert_eq!(&*image.sensors_f()[1].name, "brow");
+    assert_eq!(image.sensors_f()[1].source, SensorSource::Muscle);
+    assert_eq!(&*image.sensors_f()[2].name, "dt");
+    assert_eq!(image.sensors_f()[2].source, SensorSource::BuiltinDt);
+    assert_eq!(&*image.sensors_f()[3].name, "pressure");
+    assert_eq!(image.sensors_f()[3].source, SensorSource::Backend);
 
-    assert_eq!(image.sensors_i.len(), 3);
-    assert_eq!(&*image.sensors_i[0].name, "tick");
-    assert_eq!(image.sensors_i[0].source, SensorSource::BuiltinTick);
-    assert_eq!(image.sensors_i[1].source, SensorSource::Backend);
+    assert_eq!(image.sensors_i().len(), 3);
+    assert_eq!(&*image.sensors_i()[0].name, "tick");
+    assert_eq!(image.sensors_i()[0].source, SensorSource::BuiltinTick);
+    assert_eq!(image.sensors_i()[1].source, SensorSource::Backend);
 
-    assert_eq!(image.vars_f.len(), 3);
-    assert_eq!(image.vars_f[0].init, 0.5);
-    assert_eq!(image.vars_f[1].init, 0.0);
+    assert_eq!(image.vars_f().len(), 3);
+    assert_eq!(image.vars_f()[0].init, 0.5);
+    assert_eq!(image.vars_f()[1].init, 0.0);
     assert_eq!(
-        image.vars_f[2].init.to_bits(),
+        image.vars_f()[2].init.to_bits(),
         0x7FC0_0001,
         "NaN payload survives"
     );
 
-    assert_eq!(image.vars_i.len(), 3);
-    assert_eq!(image.vars_i[0].init, -7);
-    assert_eq!(image.vars_i[2].init, 100);
+    assert_eq!(image.vars_i().len(), 3);
+    assert_eq!(image.vars_i()[0].init, -7);
+    assert_eq!(image.vars_i()[2].init, 100);
 }
 
 #[test]
