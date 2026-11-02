@@ -9,6 +9,7 @@ dependencies = [
  "clap",
  "cyberspine-rig",
  "cyberspine-vm",
+ "thiserror",
 ]
 
 [[package]]

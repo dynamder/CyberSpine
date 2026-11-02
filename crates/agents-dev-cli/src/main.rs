@@ -1,17 +1,21 @@
 use std::path::{Path, PathBuf};
+use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use cyberspine_vm::io::read_image;
-use cyberspine_vm::{DummyBackend, Host};
+use cyberspine_vm::io::{LoadFileError, read_image};
+use cyberspine_vm::{DummyBackend, Host, LoadError};
+use thiserror::Error;
 
 #[derive(Parser)]
+#[command(arg_required_else_help = true)]
 struct Args {
     #[command(subcommand)]
-    commands: Option<CliCommands>,
+    commands: CliCommands,
 }
 
 #[derive(Subcommand)]
 enum CliCommands {
+    /// Print a one-line digest of a normative document.
     DocDigest {
         #[arg(long)]
         doc: DigestedDoc,
@@ -45,28 +49,58 @@ enum DigestedDoc {
     Binfmt,
 }
 
-fn main() {
+/// Everything `csp-dev run` can fail at, with the path it failed on.
+///
+/// Same shape as `cyinea`: an error names the file it came from, `main` returns
+/// an `ExitCode`, and nothing calls `process::exit`.
+#[derive(Debug, Error)]
+enum Error {
+    #[error("cannot read `{path}`: {source}")]
+    Read {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("{path}: {source}")]
+    Manifest {
+        path: PathBuf,
+        source: cyberspine_rig::ManifestError,
+    },
+    #[error("{path}: {source}")]
+    Image {
+        path: PathBuf,
+        source: LoadFileError,
+    },
+    #[error("{path}: {source}")]
+    Load { path: PathBuf, source: LoadError },
+    #[error("the image faulted:\n{0}")]
+    Faulted(String),
+}
+
+fn main() -> ExitCode {
     match Args::parse().commands {
-        Some(CliCommands::DocDigest { doc }) => doc_digest(doc),
-        Some(CliCommands::Run { image, rig, ticks }) => {
-            if let Err(message) = run_image(&image, &rig, ticks) {
-                eprintln!("error: {message}");
-                std::process::exit(1);
-            }
+        CliCommands::DocDigest { doc } => {
+            doc_digest(doc);
+            ExitCode::SUCCESS
         }
-        None => empty_command_tip(),
+        CliCommands::Run { image, rig, ticks } => match run_image(&image, &rig, ticks) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("error: {error}");
+                ExitCode::FAILURE
+            }
+        },
     }
 }
 
-fn empty_command_tip() {
-    println!("use `csp-dev --help` for usage guide.");
-}
-
-fn run_image(path: &Path, rig_path: &Path, ticks: u32) -> Result<(), String> {
-    let manifest = std::fs::read_to_string(rig_path)
-        .map_err(|error| format!("cannot read `{}`: {error}", rig_path.display()))?;
-    let rig = cyberspine_rig::from_json(&manifest)
-        .map_err(|error| format!("{}: {error}", rig_path.display()))?;
+fn run_image(path: &Path, rig_path: &Path, ticks: u32) -> Result<(), Error> {
+    let manifest = std::fs::read_to_string(rig_path).map_err(|source| Error::Read {
+        path: rig_path.to_path_buf(),
+        source,
+    })?;
+    let rig = cyberspine_rig::from_json(&manifest).map_err(|source| Error::Manifest {
+        path: rig_path.to_path_buf(),
+        source,
+    })?;
 
     println!(
         "dev rig: {} — {} muscle(s), {} float sensor(s), {} integer sensor(s), all zero",
@@ -76,11 +110,17 @@ fn run_image(path: &Path, rig_path: &Path, ticks: u32) -> Result<(), String> {
         rig.sensors_i.len()
     );
 
-    let image = read_image(path).map_err(|error| error.to_string())?;
+    let image = read_image(path).map_err(|source| Error::Image {
+        path: path.to_path_buf(),
+        source,
+    })?;
 
     let mut host = Host::new(DummyBackend::new(rig));
     host.set_tracing(true);
-    host.load(image).map_err(|error| error.to_string())?;
+    host.load(image).map_err(|source| Error::Load {
+        path: path.to_path_buf(),
+        source,
+    })?;
 
     for _ in 0..ticks {
         host.tick();
@@ -95,14 +135,14 @@ fn run_image(path: &Path, rig_path: &Path, ticks: u32) -> Result<(), String> {
     if faults.is_empty() {
         return Ok(());
     }
-    let mut message = String::from("the image faulted:\n");
+    let mut message = String::new();
     for record in faults {
         message.push_str(&format!(
             "  instance {}: {}\n",
             record.instance, record.fault
         ));
     }
-    Err(message)
+    Err(Error::Faulted(message))
 }
 
 fn doc_digest(doc: DigestedDoc) {

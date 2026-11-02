@@ -8,6 +8,7 @@ license.workspace = true
 clap = { version = "4.6.7", features = ["derive"] }
 cyberspine-rig = { path = "../cyberspine-rig" }
 cyberspine-vm = { path = "../cyberspine-vm" }
+thiserror = "2.0.21"
 
 [[bin]]
 name = "csp-dev"
