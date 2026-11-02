@@ -23,6 +23,8 @@ use cyberspine_asm::assembler::{generate_image, parse};
 use cyberspine_core::binfmt::image::Image;
 use libfuzzer_sys::fuzz_target;
 
+mod rig_for;
+
 static INSTALL_HOOK: Once = Once::new();
 static PANIC_SITES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
@@ -51,7 +53,7 @@ fuzz_target!(|data: &[u8]| {
     // Panics are the strict target's job. Here they mean "rejected".
     let produced = catch_unwind(AssertUnwindSafe(|| {
         let asm = parse(source).ok()?;
-        generate_image(&asm).ok()
+        generate_image(&asm, &rig_for::rig_for(&asm)).ok()
     }));
 
     let Some(image) = produced.ok().flatten() else {

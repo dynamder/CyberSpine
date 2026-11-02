@@ -18,6 +18,8 @@ use cyberspine_asm::assembler::{generate_image, parse};
 use cyberspine_core::binfmt::image::Image;
 use libfuzzer_sys::fuzz_target;
 
+mod rig_for;
+
 fuzz_target!(|data: &[u8]| {
     let Ok(source) = std::str::from_utf8(data) else {
         return;
@@ -26,7 +28,7 @@ fuzz_target!(|data: &[u8]| {
     let Ok(asm) = parse(source) else {
         return;
     };
-    let Ok(image) = generate_image(&asm) else {
+    let Ok(image) = generate_image(&asm, &rig_for::rig_for(&asm)) else {
         return;
     };
 

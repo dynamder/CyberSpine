@@ -4,6 +4,10 @@
 //! The binary is exercised as a process (`CARGO_BIN_EXE_cyinea`) because that is
 //! the only way to pin what a user actually gets: the exit code, the message on
 //! stderr, and whether a file survived a failed run.
+//!
+//! `docs/asm.md` §3.2: a source is assembled *for a rig*, named either by its
+//! `.rig` directive or by `--rig`, and either path is resolved against the
+//! directory the `.csa` lives in.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -12,6 +16,7 @@ use std::process::{Command, Output};
 
 use cyberspine_asm::assembler::{generate_image, parse};
 use cyberspine_core::binfmt::image::Image;
+use cyberspine_core::rig::Rig;
 
 const SOURCE: &str = "\
 .layer 10
@@ -19,9 +24,9 @@ const SOURCE: &str = "\
 .fuel 4096
 .max_wait 600.0
 
-.muscle brow_l
+.rig \"greet.rig\"
+
 .group brows = brow_l
-.sensor_f smile
 
 .text
 entry:
@@ -31,6 +36,21 @@ entry:
     FSENSE  f2, smile
     HALT
 ";
+
+const MANIFEST: &str = r#"{
+  "rig": { "name": "greet", "version": 1 },
+  "muscles": ["brow_l"],
+  "sensors_f": ["smile"],
+  "sensors_i": []
+}"#;
+
+/// The same names, one identity version later: a different rig, same shape.
+const MANIFEST_OTHER: &str = r#"{
+  "rig": { "name": "greet", "version": 2 },
+  "muscles": ["brow_l"],
+  "sensors_f": ["smile"],
+  "sensors_i": []
+}"#;
 
 fn scratch(name: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
@@ -62,6 +82,12 @@ fn write_source(dir: &Path, name: &str, source: &str) -> PathBuf {
     path
 }
 
+fn write_manifest(dir: &Path, name: &str, text: &str) -> PathBuf {
+    let path = dir.join(name);
+    fs::write(&path, text).expect("write the manifest");
+    path
+}
+
 fn run(args: Vec<&OsStr>) -> Output {
     Command::new(env!("CARGO_BIN_EXE_cyinea"))
         .args(args)
@@ -73,16 +99,21 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+fn rig_of(text: &str) -> Rig {
+    cyberspine_rig::from_json(text).expect("the test manifest is valid")
+}
+
 /// The image the source is supposed to produce, straight from the library.
-fn expected_image() -> Image {
+fn expected_image(manifest: &str) -> Image {
     let asm = parse(SOURCE).expect("the test source parses");
-    generate_image(&asm).expect("the test source generates an image")
+    generate_image(&asm, &rig_of(manifest)).expect("the test source generates an image")
 }
 
 #[test]
 fn a_source_is_assembled_into_the_requested_file() {
     let dir = scratch("output");
     let source = write_source(&dir, "greet.csa", SOURCE);
+    write_manifest(&dir, "greet.rig", MANIFEST);
     let target = dir.join("greet.csp");
 
     let output = run(vec![
@@ -96,7 +127,7 @@ fn a_source_is_assembled_into_the_requested_file() {
     assert!(output.stdout.is_empty(), "success is silent");
     assert!(output.stderr.is_empty(), "success is silent");
 
-    let expected = expected_image();
+    let expected = expected_image(MANIFEST);
     let written = fs::read(&target).expect("read the file");
     assert_eq!(
         Image::from_bytes(&written).expect("the loader accepts the file"),
@@ -109,7 +140,7 @@ fn a_source_is_assembled_into_the_requested_file() {
     );
     assert_eq!(
         entries(&dir),
-        vec!["greet.csa", "greet.csp"],
+        vec!["greet.csa", "greet.csp", "greet.rig"],
         "no temporary file is left"
     );
 }
@@ -118,18 +149,20 @@ fn a_source_is_assembled_into_the_requested_file() {
 fn the_default_output_replaces_the_extension() {
     let dir = scratch("default-output");
     let source = write_source(&dir, "greet.csa", SOURCE);
+    write_manifest(&dir, "greet.rig", MANIFEST);
 
     let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(dir.join("greet.csp").exists());
-    assert_eq!(entries(&dir), vec!["greet.csa", "greet.csp"]);
+    assert_eq!(entries(&dir), vec!["greet.csa", "greet.csp", "greet.rig"]);
 }
 
 #[test]
 fn a_bare_output_name_lands_in_the_working_directory() {
     let dir = scratch("relative-output");
     let source = write_source(&dir, "greet.csa", SOURCE);
+    write_manifest(&dir, "greet.rig", MANIFEST);
 
     // `-o out.csp` has no parent directory at all, which is the one path where
     // the temporary file's parent has to default to `.`.
@@ -146,8 +179,131 @@ fn a_bare_output_name_lands_in_the_working_directory() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(dir.join("out.csp").exists());
-    assert_eq!(entries(&dir), vec!["greet.csa", "out.csp"]);
+    assert_eq!(entries(&dir), vec!["greet.csa", "greet.rig", "out.csp"]);
 }
+
+// ---------------------------------------------------------------------------
+// Where the rig comes from
+// ---------------------------------------------------------------------------
+
+/// A relative `.rig` belongs to the source, not to whoever runs the assembler.
+#[test]
+fn a_relative_manifest_is_resolved_against_the_source_not_the_cwd() {
+    let dir = scratch("relative-manifest");
+    let source = write_source(&dir, "greet.csa", SOURCE);
+    write_manifest(&dir, "greet.rig", MANIFEST);
+    let elsewhere = scratch("relative-manifest-cwd");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_cyinea"))
+        .current_dir(&elsewhere)
+        .args([OsStr::new("-a"), source.as_os_str()])
+        .output()
+        .expect("the cyinea binary should run");
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(dir.join("greet.csp").exists(), "next to the `.csa`");
+    assert_eq!(entries(&elsewhere), Vec::<String>::new());
+}
+
+#[test]
+fn the_rig_flag_overrides_the_directive() {
+    let dir = scratch("rig-override");
+    let source = write_source(&dir, "greet.csa", SOURCE);
+    write_manifest(&dir, "greet.rig", MANIFEST);
+    let other = write_manifest(&dir, "other.rig", MANIFEST_OTHER);
+    let target = dir.join("greet.csp");
+
+    let output = run(vec![
+        OsStr::new("-a"),
+        source.as_os_str(),
+        OsStr::new("-o"),
+        target.as_os_str(),
+        OsStr::new("--rig"),
+        other.as_os_str(),
+    ]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    let written = Image::from_bytes(&fs::read(&target).expect("read the file"))
+        .expect("the loader accepts the file");
+    assert_eq!(
+        written.header.rig,
+        rig_of(MANIFEST_OTHER).fingerprint(),
+        "`--rig` wins over the source's `.rig`"
+    );
+    assert_ne!(
+        written.header.rig,
+        expected_image(MANIFEST).header.rig,
+        "the directive was not used"
+    );
+}
+
+#[test]
+fn a_source_without_a_manifest_is_reported() {
+    let dir = scratch("no-manifest");
+    let source = write_source(
+        &dir,
+        "bare.csa",
+        "\
+.layer 10
+.clock hz = 60
+.fuel 4096
+.max_wait 600.0
+.text
+    HALT
+",
+    );
+
+    let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("no rig manifest"),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(!dir.join("bare.csp").exists(), "nothing is written");
+    assert_eq!(entries(&dir), vec!["bare.csa"]);
+}
+
+#[test]
+fn a_missing_manifest_file_is_reported() {
+    let dir = scratch("missing-manifest");
+    let source = write_source(&dir, "greet.csa", SOURCE);
+
+    let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("cannot read the rig manifest"),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(!dir.join("greet.csp").exists(), "nothing is written");
+    assert_eq!(entries(&dir), vec!["greet.csa"]);
+}
+
+#[test]
+fn a_broken_manifest_is_reported_against_its_own_path() {
+    let dir = scratch("broken-manifest");
+    let source = write_source(&dir, "greet.csa", SOURCE);
+    write_manifest(&dir, "greet.rig", "{\"rig\": {\"name\": \"g\"}}");
+
+    let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("greet.rig"),
+        "the manifest path is named, not the source: {}",
+        stderr(&output)
+    );
+    assert!(!dir.join("greet.csp").exists(), "nothing is written");
+    assert_eq!(entries(&dir), vec!["greet.csa", "greet.rig"]);
+}
+
+// ---------------------------------------------------------------------------
+// Failures leave nothing behind
+// ---------------------------------------------------------------------------
 
 #[test]
 fn a_parse_error_produces_no_file() {
@@ -179,13 +335,14 @@ fn a_generation_error_produces_no_file() {
 .clock hz = 60
 .fuel 4096
 .max_wait 600.0
-.muscle brow_l
+.rig \"greet.rig\"
 .text
     FMOVI   f1, 1.0
     FEXCITE brow_l, f1
     HALT
 ",
     );
+    write_manifest(&dir, "greet.rig", MANIFEST);
 
     let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
 
@@ -196,13 +353,14 @@ fn a_generation_error_produces_no_file() {
         stderr(&output)
     );
     assert!(!dir.join("pending.csp").exists(), "nothing is written");
-    assert_eq!(entries(&dir), vec!["pending.csa"]);
+    assert_eq!(entries(&dir), vec!["greet.rig", "pending.csa"]);
 }
 
 #[test]
 fn an_unwritable_destination_is_reported() {
     let dir = scratch("unwritable");
     let source = write_source(&dir, "greet.csa", SOURCE);
+    write_manifest(&dir, "greet.rig", MANIFEST);
     let target = dir.join("no-such-dir").join("greet.csp");
 
     let output = run(vec![
@@ -221,7 +379,7 @@ fn an_unwritable_destination_is_reported() {
     assert!(!target.exists());
     assert_eq!(
         entries(&dir),
-        vec!["greet.csa"],
+        vec!["greet.csa", "greet.rig"],
         "no temporary file is left"
     );
 }
@@ -230,6 +388,7 @@ fn an_unwritable_destination_is_reported() {
 fn an_existing_output_is_replaced() {
     let dir = scratch("replace");
     let source = write_source(&dir, "greet.csa", SOURCE);
+    write_manifest(&dir, "greet.rig", MANIFEST);
     let target = dir.join("greet.csp");
     fs::write(&target, b"stale bytes").expect("seed the old output");
 
@@ -243,7 +402,7 @@ fn an_existing_output_is_replaced() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert_eq!(
         fs::read(&target).expect("read the file"),
-        expected_image().to_bytes()
+        expected_image(MANIFEST).to_bytes()
     );
 }
 
@@ -251,6 +410,7 @@ fn an_existing_output_is_replaced() {
 fn the_source_file_is_never_overwritten() {
     let dir = scratch("source-guard");
     let source = write_source(&dir, "greet.csa", SOURCE);
+    write_manifest(&dir, "greet.rig", MANIFEST);
     let before = fs::read(&source).expect("read the source");
 
     let output = run(vec![
@@ -267,7 +427,7 @@ fn the_source_file_is_never_overwritten() {
         stderr(&output)
     );
     assert_eq!(fs::read(&source).expect("read the source"), before);
-    assert_eq!(entries(&dir), vec!["greet.csa"]);
+    assert_eq!(entries(&dir), vec!["greet.csa", "greet.rig"]);
 }
 
 #[test]

@@ -3,11 +3,7 @@
 .fuel 4096
 .max_wait 600.0
 
-.muscle brow_l
-.muscle brow_r
 .group brows = brow_l, brow_r
-.sensor_f smile
-.sensor_i gaze_lock
 .var_f phase = 0.5
 .var_i state = -2
 

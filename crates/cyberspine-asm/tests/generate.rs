@@ -3,11 +3,17 @@
 //!
 //! Every positive test that builds an `Image` also runs it through
 //! `Image::from_bytes`: an image the loader rejects is not a finished image.
+//!
+//! `docs/asm.md` §3.2 makes the rig the only source of muscles and observables,
+//! so a test that names one has to hand in a `Rig` that contains it. The helpers
+//! below make that explicit: `rig` builds the smallest rig a test can get away
+//! with, and the `_with` forms take it.
 
 use cyberspine_asm::assembler::{ImageGenError, generate_image, parse};
 use cyberspine_core::binfmt::image::{Image, SensorSource};
 use cyberspine_core::isa::jump::jump_target;
 use cyberspine_core::isa::{ImmType, Insn, OpCode};
+use cyberspine_core::rig::Rig;
 
 /// The scalar header is currently mandatory (see `tests/header.rs`).
 const HEADER: &str = ".layer 10\n.clock hz = 60\n.fuel 4096\n.max_wait 600.0\n";
@@ -16,17 +22,52 @@ fn source(body: &str) -> String {
     format!("{HEADER}{body}")
 }
 
-fn generate(src: &str) -> Result<Image, ImageGenError> {
+fn rig(muscles: &[&str], sensors_f: &[&str], sensors_i: &[&str]) -> Rig {
+    let mut rig = Rig::new("test", 1);
+    for name in muscles {
+        rig = rig.muscle(*name);
+    }
+    for name in sensors_f {
+        rig = rig.sensor_f(*name);
+    }
+    for name in sensors_i {
+        rig = rig.sensor_i(*name);
+    }
+    rig
+}
+
+/// A rig with no names at all, for the tests that never mention one.
+fn empty_rig() -> Rig {
+    rig(&[], &[], &[])
+}
+
+/// Assemble a whole source against `rig`.
+fn generate_with(src: &str, rig: &Rig) -> Result<Image, ImageGenError> {
     let asm = parse(src).expect("the source should parse");
-    generate_image(&asm)
+    generate_image(&asm, rig)
+}
+
+/// Assemble a body under the standard header against `rig`.
+fn body_with(body: &str, rig: &Rig) -> Result<Image, ImageGenError> {
+    generate_with(&source(body), rig)
+}
+
+fn assemble_with(body: &str, rig: &Rig) -> Image {
+    body_with(body, rig).unwrap_or_else(|error| {
+        panic!("the source should generate an image: {error}\n--- body ---\n{body}")
+    })
+}
+
+fn error_with(body: &str, rig: &Rig) -> ImageGenError {
+    body_with(body, rig).expect_err("generation should fail")
 }
 
 fn assemble(body: &str) -> Image {
-    generate(&source(body)).expect("the source should generate an image")
+    assemble_with(body, &empty_rig())
 }
 
 fn generation_error(body: &str) -> ImageGenError {
-    generate(&source(body)).expect_err("generation should fail")
+    error_with(body, &empty_rig())
 }
 
 // ---------------------------------------------------------------------------
@@ -35,12 +76,18 @@ fn generation_error(body: &str) -> ImageGenError {
 
 #[test]
 fn a_minimal_program_gets_the_implicit_halt_and_the_header() {
-    let image = assemble(".text\nNOP\n");
+    let rig = empty_rig();
+    let image = assemble_with(".text\nNOP\n", &rig);
 
     assert_eq!(image.header.layer, 10);
     assert_eq!(image.header.hz, 60);
     assert_eq!(image.header.fuel, 4096);
     assert_eq!(image.header.max_wait, 600.0);
+    assert_eq!(
+        image.header.rig,
+        rig.fingerprint(),
+        "the image is bound to the rig it was assembled for"
+    );
     assert_eq!(image.code.len(), 2);
     assert_eq!(image.code[0].op, OpCode::Nop);
     assert_eq!(image.code[1].op, OpCode::Halt);
@@ -61,13 +108,10 @@ fn an_empty_instruction_section_is_exactly_one_halt() {
 
 #[test]
 fn names_resolve_to_the_spec_table_order() {
-    let image = assemble(
+    let rig = rig(&["brow_l", "brow_r"], &["smile"], &["gaze_lock"]);
+    let image = assemble_with(
         "\
-.muscle brow_l
-.muscle brow_r
 .group brows = brow_l, brow_r
-.sensor_f smile
-.sensor_i gaze_lock
 .var_f phase = 0.5
 .var_i state = -2
 .text
@@ -83,6 +127,7 @@ FEXCITE brows, f1
 FLUSH
 HALT
 ",
+        &rig,
     );
 
     assert_eq!(image.muscles.len(), 2);
@@ -108,12 +153,28 @@ HALT
     assert_eq!(image.vars_i.len(), 1);
     assert_eq!(image.vars_i[0].init, -2);
 
-    // The `imm` of each instruction is the logical index, in the order above.
+    // The `imm` of each instruction is the physical index, in the order above.
     let imm: Vec<u32> = image.code.iter().map(|insn| insn.imm).collect();
     assert_eq!(imm, vec![0, 2, 3, 0, 1, 0, 0, 1, 0, 1, 0, 0]);
 
     let reloaded = Image::from_bytes(&image.to_bytes()).expect("the loader must accept it");
     assert_eq!(reloaded, image);
+}
+
+/// The table order is the rig's order, not the source's: swapping two names in
+/// the manifest is another rig, and the image follows the manifest.
+#[test]
+fn the_rig_order_decides_the_indices() {
+    let rig = rig(&["b_second", "a_first"], &[], &[]);
+    let image = assemble_with(
+        ".text\nFEXCITE b_second, f1\nFLUSH\nFEXCITE a_first, f1\nFLUSH\n",
+        &rig,
+    );
+
+    assert_eq!(&*image.muscles[0].name, "b_second");
+    assert_eq!(&*image.muscles[1].name, "a_first");
+    assert_eq!(image.code[0].imm, 0);
+    assert_eq!(image.code[2].imm, 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -122,16 +183,16 @@ HALT
 
 #[test]
 fn a_group_expands_to_one_excite_per_member() {
-    let image = assemble(
+    let rig = rig(&["a", "b"], &[], &[]);
+    let image = assemble_with(
         "\
-.muscle a
-.muscle b
 .group g = a, b
 .text
 FEXCITE g, f1
 FLUSH
 HALT
 ",
+        &rig,
     );
 
     assert_eq!(image.code.len(), 4);
@@ -207,16 +268,10 @@ fn the_documented_example_assembles_and_reloads() {
 .fuel 4096
 .max_wait 600.0
 
-.muscle brow_l
-.muscle brow_r
-.muscle mouth_corner_l
-.muscle mouth_corner_r
+.rig \"rigs/live2d-standard.rig\"
+
 .group brows = brow_l, brow_r
 .group corners = mouth_corner_l, mouth_corner_r
-
-.sensor_f smile
-.sensor_f brow_raise
-.sensor_i gaze_lock
 
 .text
 entry:
@@ -256,13 +311,20 @@ L_done:
     HALT
 ";
 
+    let rig = rig(
+        &["brow_l", "brow_r", "mouth_corner_l", "mouth_corner_r"],
+        &["smile", "brow_raise"],
+        &["gaze_lock"],
+    );
+
     let asm = parse(src).expect("the documented example parses");
-    let image = generate_image(&asm).expect("the documented example assembles");
+    let image = generate_image(&asm, &rig).expect("the documented example assembles");
 
     assert_eq!(image.code.len(), 28);
     assert_eq!(image.muscles.len(), 4);
     assert_eq!(image.sensors_f.len(), 7);
     assert_eq!(image.sensors_i.len(), 2);
+    assert_eq!(image.header.rig, rig.fingerprint());
     assert_eq!(image.code.last().expect("non-empty").op, OpCode::Halt);
 
     assert_eq!(jump_target(1, image.code[1].imm as i32), Some(27));
@@ -293,38 +355,41 @@ fn duplicate_and_undefined_labels_are_rejected() {
 
 #[test]
 fn unknown_names_are_rejected_per_namespace() {
+    let rig = rig(&["brow_l"], &["smile"], &["gaze_lock"]);
+
     assert!(matches!(
-        generation_error(".text\nFSENSE f1, nope\nHALT\n"),
+        error_with(".text\nFSENSE f1, nope\nHALT\n", &rig),
         ImageGenError::UnknownSensorF(_)
     ));
     assert!(matches!(
-        generation_error(".text\nISENSE i1, nope\nHALT\n"),
+        error_with(".text\nISENSE i1, nope\nHALT\n", &rig),
         ImageGenError::UnknownSensorI(_)
     ));
     assert!(matches!(
-        generation_error(".text\nFVGET f1, nope\nHALT\n"),
+        error_with(".text\nFVGET f1, nope\nHALT\n", &rig),
         ImageGenError::UnknownVarF(_)
     ));
     assert!(matches!(
-        generation_error(".text\nIVGET i1, nope\nHALT\n"),
+        error_with(".text\nIVGET i1, nope\nHALT\n", &rig),
         ImageGenError::UnknownVarI(_)
     ));
     assert!(matches!(
-        generation_error(".text\nFEXCITE nope, f1\nHALT\n"),
+        error_with(".text\nFEXCITE nope, f1\nHALT\n", &rig),
         ImageGenError::UnknownExciteTarget(_)
     ));
 }
 
 #[test]
 fn groups_are_only_legal_at_fexcite() {
-    let err = generation_error(
+    let rig = rig(&["a"], &[], &[]);
+    let err = error_with(
         "\
-.muscle a
 .group g = a
 .text
 FSENSE f1, g
 HALT
 ",
+        &rig,
     );
     assert!(
         matches!(err, ImageGenError::GroupOutsideExcite(_)),
@@ -333,7 +398,7 @@ HALT
 }
 
 #[test]
-fn group_members_must_be_declared_muscles() {
+fn group_members_must_be_rig_muscles() {
     let err = generation_error(".group g = missing\n.text\nHALT\n");
     assert!(
         matches!(err, ImageGenError::UnknownGroupMember { .. }),
@@ -343,33 +408,54 @@ fn group_members_must_be_declared_muscles() {
 
 #[test]
 fn a_group_name_cannot_collide_with_a_muscle() {
-    let err = generation_error(".muscle a\n.group a = a\n.text\nHALT\n");
+    let rig = rig(&["a"], &[], &[]);
+    let err = error_with(".group a = a\n.text\nHALT\n", &rig);
     assert!(
         matches!(err, ImageGenError::GroupNameCollision(_)),
         "unexpected error: {err}"
     );
 }
 
+/// A `Rig` built in code never passes through the manifest parser, but
+/// `generate_image` still owes the loader a legal image
+/// (`docs/binfmt.md` §9.2 M1 / M2 / M5).
 #[test]
-fn an_explicit_sensor_cannot_shadow_a_muscle_readback() {
-    let err = generation_error(".muscle a\n.sensor_f a\n.text\nHALT\n");
-    assert!(
-        matches!(err, ImageGenError::MuscleReadbackCollision(_)),
-        "unexpected error: {err}"
-    );
+fn a_rig_that_would_produce_an_illegal_image_is_refused() {
+    let reserved = Rig::new("r", 1).muscle("dt");
+    assert!(matches!(
+        body_with(".text\nHALT\n", &reserved),
+        Err(ImageGenError::ReservedName(_))
+    ));
+
+    let register_shape = Rig::new("r", 1).sensor_f("f3");
+    assert!(matches!(
+        body_with(".text\nHALT\n", &register_shape),
+        Err(ImageGenError::ReservedName(_))
+    ));
+
+    let not_an_identifier = Rig::new("r", 1).muscle("9bad");
+    assert!(matches!(
+        body_with(".text\nHALT\n", &not_an_identifier),
+        Err(ImageGenError::NotAnIdentifier(_))
+    ));
+
+    let repeated = Rig::new("r", 1).muscle("m").sensor_f("m");
+    assert!(matches!(
+        body_with(".text\nHALT\n", &repeated),
+        Err(ImageGenError::DuplicateName(_))
+    ));
 }
 
 #[test]
 fn duplicate_declarations_are_rejected() {
+    let rig = rig(&["a"], &[], &[]);
+
     for body in [
-        ".muscle a\n.muscle a\n.text\nHALT\n",
-        ".sensor_f s\n.sensor_f s\n.text\nHALT\n",
-        ".sensor_i s\n.sensor_i s\n.text\nHALT\n",
         ".var_f v = 0.0\n.var_f v = 1.0\n.text\nHALT\n",
         ".var_i v = 0\n.var_i v = 1\n.text\nHALT\n",
-        ".muscle a\n.group g = a\n.group g = a\n.text\nHALT\n",
+        ".group g = a\n.group g = a\n.text\nHALT\n",
     ] {
-        let err = generation_error(body);
+        let err = error_with(body, &rig);
         assert!(
             matches!(err, ImageGenError::DuplicateName(_)),
             "for {body:?}: unexpected error: {err}"
@@ -378,18 +464,15 @@ fn duplicate_declarations_are_rejected() {
 }
 
 #[test]
-fn reserved_names_are_rejected_in_every_table() {
+fn reserved_names_are_rejected_in_the_tables_the_source_still_owns() {
+    let rig = rig(&["a"], &[], &[]);
+
     for body in [
-        ".muscle dt\n.text\nHALT\n",
-        ".muscle tick\n.text\nHALT\n",
-        ".muscle f0\n.text\nHALT\n",
-        ".muscle i63\n.text\nHALT\n",
-        ".sensor_f dt\n.text\nHALT\n",
-        ".sensor_i tick\n.text\nHALT\n",
         ".var_f dt = 0.0\n.text\nHALT\n",
         ".var_i tick = 0\n.text\nHALT\n",
+        ".group dt = a\n.text\nHALT\n",
     ] {
-        let err = generation_error(body);
+        let err = error_with(body, &rig);
         assert!(
             matches!(err, ImageGenError::ReservedName(_)),
             "for {body:?}: unexpected error: {err}"
@@ -403,14 +486,14 @@ fn reserved_names_are_rejected_in_every_table() {
 
 #[test]
 fn an_unflushed_excite_before_a_suspend_point_is_rejected() {
-    let err = generation_error(
+    let rig = rig(&["m"], &[], &[]);
+    let err = error_with(
         "\
-.muscle m
-.text
 FEXCITE m, f1
 YIELD
 HALT
 ",
+        &rig,
     );
     assert!(
         matches!(
@@ -426,23 +509,22 @@ HALT
 
 #[test]
 fn an_unflushed_excite_before_halt_is_rejected() {
-    let err = generation_error(
+    let rig = rig(&["m"], &[], &[]);
+    let err = error_with(
         "\
-.muscle m
-.text
 FEXCITE m, f1
 HALT
 ",
+        &rig,
     );
     assert!(matches!(err, ImageGenError::PendingNotFlushed { .. }));
 }
 
 #[test]
 fn a_flush_on_only_one_branch_still_leaks() {
-    let err = generation_error(
+    let rig = rig(&["m"], &[], &[]);
+    let err = error_with(
         "\
-.muscle m
-.text
 FEXCITE m, f1
 IJZ i1, L
 FLUSH
@@ -450,6 +532,7 @@ L:
 YIELD
 HALT
 ",
+        &rig,
     );
     assert!(
         matches!(err, ImageGenError::PendingNotFlushed { suspend_pc: 3, .. }),
@@ -459,10 +542,9 @@ HALT
 
 #[test]
 fn a_flush_on_every_branch_is_accepted() {
-    let image = assemble(
+    let rig = rig(&["m"], &[], &[]);
+    let image = assemble_with(
         "\
-.muscle m
-.text
 FEXCITE m, f1
 IJZ i1, L
 FLUSH
@@ -473,6 +555,7 @@ done:
 YIELD
 HALT
 ",
+        &rig,
     );
     assert_eq!(image.code.last().expect("non-empty").op, OpCode::Halt);
 }
@@ -511,7 +594,10 @@ fn hz_must_be_positive_and_max_wait_finite() {
 .text
 HALT
 ";
-    assert!(matches!(generate(zero_hz), Err(ImageGenError::ZeroHz)));
+    assert!(matches!(
+        generate_with(zero_hz, &empty_rig()),
+        Err(ImageGenError::ZeroHz)
+    ));
 
     let bad_max_wait = "\
 .layer 10
@@ -522,7 +608,7 @@ HALT
 HALT
 ";
     assert!(matches!(
-        generate(bad_max_wait),
+        generate_with(bad_max_wait, &empty_rig()),
         Err(ImageGenError::InvalidMaxWait)
     ));
 }

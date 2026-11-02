@@ -2,7 +2,7 @@ pub mod diagnostic;
 pub mod header;
 pub mod text;
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use cyberspine_core::binfmt::image::{
     FORMAT_VERSION, FixedHeader as ImageFixedHeader, ISA_VERSION, Image, Muscle, Sensor,
@@ -10,7 +10,7 @@ use cyberspine_core::binfmt::image::{
 };
 use cyberspine_core::isa::jump::{jump_offset, jump_target};
 use cyberspine_core::isa::{ImmType, Insn, OpCode, RegName};
-use cyberspine_core::rig::Fingerprint;
+use cyberspine_core::rig::Rig;
 use smol_str::SmolStr;
 use thiserror::Error;
 use winnow::{Parser, combinator::trace, token::take_while};
@@ -34,6 +34,23 @@ pub(crate) fn is_reserved_name(name: &str) -> bool {
     }
     let rest = chars.as_str();
     !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+}
+
+/// `docs/asm.md` §3.2: muscles and observables come from the rig manifest, so
+/// the directives that used to declare them are gone rather than unknown.
+pub(crate) fn is_removed_directive(name: &str) -> bool {
+    name.eq_ignore_ascii_case("muscle")
+        || name.eq_ignore_ascii_case("sensor_f")
+        || name.eq_ignore_ascii_case("sensor_i")
+}
+
+fn is_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_alphabetic() || first == '_' => {}
+        _ => return false,
+    }
+    chars.all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
 pub(crate) fn ident<'i>(input: &mut Line<'i>) -> PResult<&'i str> {
@@ -126,6 +143,8 @@ pub enum ImageGenError {
     DuplicateName(SmolStr),
     #[error("`{0}` is a reserved name")]
     ReservedName(SmolStr),
+    #[error("the rig declares `{0}`, which is not an identifier")]
+    NotAnIdentifier(SmolStr),
     #[error("FEXCITE target `{0}` is neither a muscle nor a group")]
     UnknownExciteTarget(SmolStr),
     #[error("unknown float sensor `{0}`")]
@@ -142,8 +161,6 @@ pub enum ImageGenError {
     UnknownGroupMember { group: SmolStr, member: SmolStr },
     #[error("group `{0}` collides with a muscle name")]
     GroupNameCollision(SmolStr),
-    #[error("sensor `{0}` collides with the read-back sensor of the same muscle")]
-    MuscleReadbackCollision(SmolStr),
     #[error("FEXCITE at {excite_pc} is still pending at {suspend_pc}; FLUSH is missing")]
     PendingNotFlushed { excite_pc: usize, suspend_pc: usize },
     #[error("WAIT at {pc} is not a non-negative finite duration up to max_wait")]
@@ -156,11 +173,13 @@ pub enum ImageGenError {
     TooManyInstructions,
 }
 
-/// Resolve names, labels and groups, then produce the canonical `Image`.
-pub fn generate_image(asm: &Asm) -> Result<Image, ImageGenError> {
+/// Resolve names, labels and groups against `rig`, then produce the canonical
+/// `Image`.
+pub fn generate_image(asm: &Asm, rig: &Rig) -> Result<Image, ImageGenError> {
     check_header(&asm.header)?;
+    check_rig(rig)?;
 
-    let symbols = Symbols::build(&asm.header)?;
+    let symbols = Symbols::build(&asm.header, rig)?;
     let layout = layout(&asm.text, &symbols)?;
     let mut code: Vec<Insn> = emit(&layout, &symbols).collect::<Result<_, _>>()?;
     debug_assert_eq!(code.len(), layout.code_len);
@@ -183,7 +202,7 @@ pub fn generate_image(asm: &Asm) -> Result<Image, ImageGenError> {
             hz: asm.header.fixed.clock_hz,
             fuel: asm.header.fixed.fuel,
             max_wait: asm.header.fixed.max_wait,
-            rig: Fingerprint::UNBOUND,
+            rig: rig.fingerprint(),
         },
         code,
         muscles: symbols.image_muscles,
@@ -205,10 +224,35 @@ fn check_header(header: &AsmHeader) -> Result<(), ImageGenError> {
     Ok(())
 }
 
-/// The five name tables as name -> logical index, mirroring the on-disk order
-/// (`docs/binfmt.md` §3 / §6, `docs/asm.md` §3.3):
-/// `muscles`, `sensors_f` = read-backs ++ explicit ++ `dt`,
-/// `sensors_i` = explicit ++ `tick`, then the two var tables.
+/// A `Rig` built in code bypasses [`cyberspine_rig`]'s checks, but its names
+/// still have to produce an image the loader accepts (`docs/binfmt.md` §9.2 M1,
+/// M2, M5): one identifier namespace, no built-in names, no repeats.
+fn check_rig(rig: &Rig) -> Result<(), ImageGenError> {
+    let mut seen = HashSet::new();
+    for name in rig
+        .muscles
+        .iter()
+        .chain(&rig.sensors_f)
+        .chain(&rig.sensors_i)
+    {
+        let name = SmolStr::new(&**name);
+        if is_reserved_name(&name) {
+            return Err(ImageGenError::ReservedName(name));
+        }
+        if !is_identifier(&name) {
+            return Err(ImageGenError::NotAnIdentifier(name));
+        }
+        if !seen.insert(name.clone()) {
+            return Err(ImageGenError::DuplicateName(name));
+        }
+    }
+    Ok(())
+}
+
+/// The five name tables as name -> physical index, mirroring the on-disk order
+/// (`docs/binfmt.md` §3 / §6, `docs/asm.md` §3.3): `muscles` from the rig,
+/// `sensors_f` = read-backs ++ rig observables ++ `dt`,
+/// `sensors_i` = rig observables ++ `tick`, then the two var tables.
 struct Symbols {
     muscles: HashMap<SmolStr, u32>,
     sensors_f: HashMap<SmolStr, u32>,
@@ -224,7 +268,7 @@ struct Symbols {
 }
 
 impl Symbols {
-    fn build(header: &AsmHeader) -> Result<Self, ImageGenError> {
+    fn build(header: &AsmHeader, rig: &Rig) -> Result<Self, ImageGenError> {
         let mut muscles = HashMap::new();
         let mut sensors_f = HashMap::new();
         let mut sensors_i = HashMap::new();
@@ -238,12 +282,9 @@ impl Symbols {
         let mut image_vars_f = Vec::new();
         let mut image_vars_i = Vec::new();
 
-        for (index, name) in header.muscles.iter().enumerate() {
-            check_declarable(name)?;
-            if muscles.contains_key(name) {
-                return Err(ImageGenError::DuplicateName(name.clone()));
-            }
+        for (index, name) in rig.muscles.iter().enumerate() {
             let index = index as u32;
+            let name = SmolStr::new(&**name);
             muscles.insert(name.clone(), index);
             // §6.2: every muscle is its own read-back float sensor, at the same index.
             sensors_f.insert(name.clone(), index);
@@ -279,14 +320,8 @@ impl Symbols {
         }
 
         let sensor_f_base = image_sensors_f.len() as u32;
-        for (offset, name) in header.sensors_f.iter().enumerate() {
-            check_declarable(name)?;
-            if muscles.contains_key(name) {
-                return Err(ImageGenError::MuscleReadbackCollision(name.clone()));
-            }
-            if sensors_f.contains_key(name) {
-                return Err(ImageGenError::DuplicateName(name.clone()));
-            }
+        for (offset, name) in rig.sensors_f.iter().enumerate() {
+            let name = SmolStr::new(&**name);
             sensors_f.insert(name.clone(), sensor_f_base + offset as u32);
             image_sensors_f.push(Sensor {
                 name: name.as_str().into(),
@@ -299,11 +334,8 @@ impl Symbols {
             source: SensorSource::BuiltinDt,
         });
 
-        for (index, name) in header.sensors_i.iter().enumerate() {
-            check_declarable(name)?;
-            if sensors_i.contains_key(name) {
-                return Err(ImageGenError::DuplicateName(name.clone()));
-            }
+        for (index, name) in rig.sensors_i.iter().enumerate() {
+            let name = SmolStr::new(&**name);
             sensors_i.insert(name.clone(), index as u32);
             image_sensors_i.push(Sensor {
                 name: name.as_str().into(),

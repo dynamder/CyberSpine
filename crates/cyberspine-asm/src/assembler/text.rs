@@ -18,7 +18,7 @@ use crate::assembler::{
     diagnostic::{
         AsmParseErrors, PResult, ParseErrorKind, cut_at, into_syntax, snippet, token_snippet,
     },
-    ident, is_reserved_name,
+    ident, is_removed_directive, is_reserved_name,
     text::insn::insn,
 };
 
@@ -119,7 +119,13 @@ fn finish_text_line(input: &mut Line<'_>, had_insn: bool) -> PResult<()> {
 
     let start = *input;
     if let Some(rest) = start.strip_prefix('.') {
-        return cut_at(start, ParseErrorKind::LateDirective(directive_name(rest)));
+        let name = directive_name(rest);
+        let kind = if is_removed_directive(&name) {
+            ParseErrorKind::RemovedDirective(name)
+        } else {
+            ParseErrorKind::LateDirective(name)
+        };
+        return cut_at(start, kind);
     }
 
     let kind = if had_insn {

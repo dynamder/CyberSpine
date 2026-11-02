@@ -196,6 +196,7 @@ dependencies = [
  "annotate-snippets",
  "clap",
  "cyberspine-core",
+ "cyberspine-rig",
  "cyberspine-vm",
  "smol_str",
  "thiserror",

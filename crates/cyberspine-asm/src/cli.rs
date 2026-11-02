@@ -17,4 +17,9 @@ pub struct CliArgs {
     /// Where to write the assembled `.csp`. Defaults to the input with a `.csp` extension.
     #[arg(short, long)]
     pub output: Option<PathBuf>,
+
+    /// The rig manifest to assemble for; overrides the source's `.rig`.
+    /// A relative path is resolved against the `.csa`'s own directory.
+    #[arg(short, long)]
+    pub rig: Option<PathBuf>,
 }

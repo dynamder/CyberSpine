@@ -620,6 +620,14 @@ fn trailing_input_late_directives_and_reserved_labels_are_distinguished() {
         "{errs:?}"
     );
 
+    // §3.2: the removed declarations say so here too, not "late directive".
+    let errs = errors(".muscle brow_l");
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(
+        matches!(&errs[0].kind, ParseErrorKind::RemovedDirective(name) if name == "muscle"),
+        "{errs:?}"
+    );
+
     let errs = errors("f0:");
     assert_eq!(errs.len(), 1, "{errs:?}");
     assert!(
@@ -723,7 +731,7 @@ fn header_and_text_share_one_cursor() {
         ".clock hz = 60",
         ".fuel 4096",
         ".max_wait 600.0",
-        ".muscle brow_l",
+        ".group brows = brow_l, brow_r",
         ".text",
         "entry:",
         "    FMOVI f1, 1.0",

@@ -3,7 +3,6 @@
 .fuel 128
 .max_wait 10.0
 
-.muscle mouth
 
 .text
 top:

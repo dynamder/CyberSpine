@@ -4,16 +4,9 @@
 .fuel           4096
 .max_wait       600.0
 
-.muscle         brow_l
-.muscle         brow_r
-.muscle         mouth_corner_l
-.muscle         mouth_corner_r
 .group          brows   = brow_l, brow_r
 .group          corners = mouth_corner_l, mouth_corner_r
 
-.sensor_f       smile
-.sensor_f       brow_raise
-.sensor_i       gaze_lock
 
 .text
 entry:

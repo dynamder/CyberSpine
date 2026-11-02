@@ -1,11 +1,16 @@
-use std::{fs, path::Path, process::ExitCode};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
 
 use clap::Parser;
 use cyberspine_asm::{
-    assembler,
+    assembler::{self, Asm},
     cli::CliArgs,
     store::{self, WriteError},
 };
+use cyberspine_core::rig::Rig;
 
 fn main() -> ExitCode {
     let cli_args = CliArgs::parse();
@@ -30,7 +35,9 @@ fn run(cli_args: &CliArgs) -> Result<(), String> {
     let asm =
         assembler::parse(&asm_str).map_err(|errors| errors.render(&cli_args.asm_file, &asm_str))?;
 
-    let image = assembler::generate_image(&asm)
+    let rig = load_rig(cli_args, &asm)?;
+
+    let image = assembler::generate_image(&asm, &rig)
         .map_err(|error| format!("{}: error: {error}\n", cli_args.asm_file.display()))?;
 
     let output = cli_args
@@ -51,6 +58,33 @@ fn run(cli_args: &CliArgs) -> Result<(), String> {
     })?;
 
     Ok(())
+}
+
+/// `docs/asm.md` §3.2: `--rig` overrides the `.rig` directive, and a relative
+/// path is resolved against the `.csa`'s directory rather than the cwd.
+fn load_rig(cli_args: &CliArgs, asm: &Asm) -> Result<Rig, String> {
+    let declared = asm.header.rig.as_ref().map(PathBuf::from);
+    let path = cli_args.rig.clone().or(declared).ok_or_else(|| {
+        format!(
+            "{}: error: no rig manifest; add a `.rig` directive or pass `--rig`\n",
+            cli_args.asm_file.display()
+        )
+    })?;
+
+    let path = match cli_args.asm_file.parent() {
+        Some(base) if !path.is_absolute() => base.join(path),
+        _ => path,
+    };
+
+    let text = fs::read_to_string(&path).map_err(|error| {
+        format!(
+            "error: cannot read the rig manifest `{}`: {error}\n",
+            path.display()
+        )
+    })?;
+
+    cyberspine_rig::from_json(&text)
+        .map_err(|error| format!("{}: error: {error}\n", path.display()))
 }
 
 /// `-o` pointed at the source would replace a `.csa` with binary, and the atomic

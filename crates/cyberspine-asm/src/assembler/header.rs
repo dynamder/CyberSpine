@@ -135,10 +135,7 @@ pub struct AsmHeader {
     /// The manifest path from `.rig`, resolved against the source file by the
     /// caller. `None` means the manifest has to come from `--rig`.
     pub rig: Option<SmolStr>,
-    pub muscles: Vec<SmolStr>,
     pub muscle_groups: Vec<GroupDef>,
-    pub sensors_f: Vec<SmolStr>,
-    pub sensors_i: Vec<SmolStr>,
     pub vars_f: Vec<(SmolStr, f32)>,
     pub vars_i: Vec<(SmolStr, i32)>,
 }
@@ -150,10 +147,7 @@ pub enum HeaderStmt {
     Fuel(u32),
     MaxWait(f32),
     Rig(SmolStr),
-    Muscle(SmolStr),
     Group(GroupDef),
-    Sensorf(SmolStr),
-    SensorI(SmolStr),
     Varf { name: SmolStr, value: f32 },
     VarI { name: SmolStr, value: i32 },
     Text,
@@ -314,19 +308,10 @@ fn header_stmt<'i>(input: &mut Line<'i>) -> PResult<HeaderStmt> {
                 quoted_path,
             )?)
         }
-        "muscle" => {
-            space_after(input, "muscle")?;
-            HeaderStmt::Muscle(argument(input, "muscle", "a name", name_arg)?)
+        "muscle" | "sensor_f" | "sensor_i" => {
+            return cut_at(start, ParseErrorKind::RemovedDirective(SmolStr::new(dir)));
         }
         "group" => HeaderStmt::Group(group(input)?),
-        "sensor_f" => {
-            space_after(input, "sensor_f")?;
-            HeaderStmt::Sensorf(argument(input, "sensor_f", "a name", name_arg)?)
-        }
-        "sensor_i" => {
-            space_after(input, "sensor_i")?;
-            HeaderStmt::SensorI(argument(input, "sensor_i", "a name", name_arg)?)
-        }
         "var_f" => {
             space_after(input, "var_f")?;
             let name = argument(input, "var_f", "a name", name_arg)?;
@@ -405,10 +390,7 @@ pub fn header(input: &mut &str) -> Result<AsmHeader, AsmParseErrors> {
 
     let mut parsing_fixed_header = ParsingFixedHeader::default();
     let mut rig: Option<SmolStr> = None;
-    let mut muscles: Vec<SmolStr> = Vec::new();
     let mut muscle_groups: Vec<GroupDef> = Vec::new();
-    let mut sensors_f: Vec<SmolStr> = Vec::new();
-    let mut sensors_i: Vec<SmolStr> = Vec::new();
     let mut vars_f: Vec<(SmolStr, f32)> = Vec::new();
     let mut vars_i: Vec<(SmolStr, i32)> = Vec::new();
     let mut errors = Vec::new();
@@ -463,10 +445,7 @@ pub fn header(input: &mut &str) -> Result<AsmHeader, AsmParseErrors> {
                         };
                         push_field(result, location, &mut errors);
                     }
-                    HeaderStmt::Muscle(muscle) => muscles.push(muscle),
                     HeaderStmt::Group(group_def) => muscle_groups.push(group_def),
-                    HeaderStmt::Sensorf(sensor_f) => sensors_f.push(sensor_f),
-                    HeaderStmt::SensorI(sensor_i) => sensors_i.push(sensor_i),
                     HeaderStmt::Varf { name, value } => vars_f.push((name, value)),
                     HeaderStmt::VarI { name, value } => vars_i.push((name, value)),
                     // `.text` was handled above so it can end the loop before
@@ -491,10 +470,7 @@ pub fn header(input: &mut &str) -> Result<AsmHeader, AsmParseErrors> {
                 Ok(AsmHeader {
                     fixed,
                     rig,
-                    muscles,
                     muscle_groups,
-                    sensors_f,
-                    sensors_i,
                     vars_f,
                     vars_i,
                 })

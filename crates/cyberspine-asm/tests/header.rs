@@ -88,11 +88,7 @@ const FULL: &[&str] = &[
     ".fuel 4096",
     ".max_wait 600.0",
     ".rig \"rigs/live2d.rig\"",
-    ".muscle brow_l",
-    ".muscle brow_r",
     ".group brows = brow_l, brow_r",
-    ".sensor_f smile",
-    ".sensor_i gaze_lock",
     ".var_f phase = 0.0",
     ".var_i state = 0",
     ".text",
@@ -106,14 +102,11 @@ fn expected_full() -> AsmHeader {
             fuel: 4096,
             max_wait: 600.0,
         },
-        muscles: vec![SmolStr::new("brow_l"), SmolStr::new("brow_r")],
         rig: Some(SmolStr::new("rigs/live2d.rig")),
         muscle_groups: vec![GroupDef {
             name: SmolStr::new("brows"),
             members: vec![SmolStr::new("brow_l"), SmolStr::new("brow_r")],
         }],
-        sensors_f: vec![SmolStr::new("smile")],
-        sensors_i: vec![SmolStr::new("gaze_lock")],
         vars_f: vec![(SmolStr::new("phase"), 0.0)],
         vars_i: vec![(SmolStr::new("state"), 0)],
     }
@@ -125,24 +118,19 @@ fn control_full_header_matches_expected_value() {
     assert_eq!(got, expected_full());
 }
 
-/// §3.3：表序按声明序。顺序是语义的一部分（名字→下标），不能被解析顺手排序。
+/// §3.3：变量的表序按声明序。顺序是语义的一部分（名字→下标），不能被解析顺手排序。
 #[test]
-fn control_declaration_order_is_preserved() {
+fn control_variable_declaration_order_is_preserved() {
     let src = text(&[
         ".layer 1",
         ".clock hz = 1",
         ".fuel 1",
         ".max_wait 1.0",
-        ".muscle c",
-        ".muscle a",
-        ".muscle b",
         ".var_i z = 1",
         ".var_i y = 2",
         ".text",
     ]);
     let got = parse_ok(&src);
-    let names: Vec<SmolStr> = ["c", "a", "b"].into_iter().map(SmolStr::new).collect();
-    assert_eq!(got.muscles, names);
     assert_eq!(
         got.vars_i,
         vec![(SmolStr::new("z"), 1), (SmolStr::new("y"), 2)]
@@ -165,12 +153,10 @@ fn control_header_with_no_name_tables_parses() {
             max_wait: 600.0,
         }
     );
-    assert!(got.muscles.is_empty(), "未声明肌肉时不应凭空产生条目");
     assert!(got.muscle_groups.is_empty());
-    assert!(got.sensors_f.is_empty());
-    assert!(got.sensors_i.is_empty());
     assert!(got.vars_f.is_empty());
     assert!(got.vars_i.is_empty());
+    assert_eq!(got.rig, None, "未给出 `.rig` 时由调用方决定 manifest");
 }
 
 /// §2：「`.text` 只是可选标记行」。
@@ -181,23 +167,28 @@ fn control_text_marker_is_optional() {
     assert_eq!(got.fixed.layer, 1);
 }
 
-/// 只给部分名字表，其余省略。
+/// 只给一部分声明时，其余为空。
 #[test]
-fn control_partial_name_tables_parse() {
+fn control_partial_declarations_parse() {
     let src = text(&[
         ".layer 1",
         ".clock hz = 1",
         ".fuel 1",
         ".max_wait 1.0",
-        ".muscle brow_l",
-        ".sensor_i gaze_lock",
+        ".group brow = brow_l",
+        ".var_f phase = 0.0",
         ".text",
     ]);
     let got = parse_ok(&src);
-    assert_eq!(got.muscles, vec![SmolStr::new("brow_l")]);
-    assert_eq!(got.sensors_i, vec![SmolStr::new("gaze_lock")]);
-    assert!(got.sensors_f.is_empty());
-    assert!(got.vars_f.is_empty());
+    assert_eq!(
+        got.muscle_groups,
+        vec![GroupDef {
+            name: SmolStr::new("brow"),
+            members: vec![SmolStr::new("brow_l")],
+        }]
+    );
+    assert_eq!(got.vars_f, vec![(SmolStr::new("phase"), 0.0)]);
+    assert!(got.vars_i.is_empty());
 }
 
 /// `group` 只有一个成员时不应被当成语法错误（`.group` 的成员表是 1..N）。
@@ -230,14 +221,11 @@ fn control_blank_lines_between_directives_are_allowed() {
 .fuel 4096
 .max_wait 600.0
 
-.muscle brow_l
-
 .group brows = brow_l
 
 .text
 ";
     let got = parse_ok(src);
-    assert_eq!(got.muscles, vec![SmolStr::new("brow_l")]);
     assert_eq!(got.muscle_groups.len(), 1);
 }
 
@@ -398,7 +386,7 @@ fn independent_header_errors_are_all_reported() {
         ".fuel 4096",
         ".max_wait 600.0",
         ".wobble 1",
-        ".muscle brow_l",
+        ".group g = a",
         ".hey 2",
         ".text",
     ]);
@@ -421,9 +409,6 @@ const TYPE_MISMATCHES: &[(&str, &str)] = &[
     (".clock hz = abc", "hz 是 u32，给了标识符"),
     (".fuel 1.5", "fuel 是 u32，给了浮点"),
     (".max_wait abc", "max_wait 是 f32，给了标识符"),
-    (".sensor_f 123", "sensor 名必须是标识符"),
-    (".sensor_i 1.5", "sensor 名必须是标识符"),
-    (".muscle 123", "肌肉名必须是标识符"),
     (".var_i state = 1.5", "var_i 是 i32，给了浮点"),
     (".var_i state = abc", "var_i 是 i32，给了标识符"),
     (".var_f phase = abc", "var_f 是 f32，给了标识符"),
@@ -491,6 +476,27 @@ fn typos_are_rejected() {
 #[test]
 fn unknown_directive_is_rejected() {
     parse_rejected(&base_with(".wobble 1"));
+}
+
+/// §3.2：肌肉与可观测量已由 manifest 声明，所以旧伪指令不是"不认识"，
+/// 而是明确告诉作者名字搬去了哪里。
+#[test]
+fn the_removed_declarations_point_at_the_manifest() {
+    for (line, name) in [
+        (".muscle brow_l", "muscle"),
+        (".sensor_f smile", "sensor_f"),
+        (".sensor_i gaze_lock", "sensor_i"),
+        (".MUSCLE brow_l", "MUSCLE"),
+    ] {
+        let errors = parse_errors(&base_with(line));
+        assert_eq!(errors.len(), 1, "for {line}: {errors:?}");
+        assert!(
+            matches!(&errors[0].kind, ParseErrorKind::RemovedDirective(found) if found == name),
+            "for {line}: {errors:?}"
+        );
+        assert_eq!(errors[0].location.line, 5, "for {line}");
+        assert_eq!(errors[0].location.column, 1, "for {line}");
+    }
 }
 
 // ---------------------------------------------------------------------------
