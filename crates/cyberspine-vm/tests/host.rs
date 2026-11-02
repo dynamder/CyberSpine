@@ -680,7 +680,7 @@ fn an_image_assembled_for_another_rig_is_refused() {
         matches!(
             error,
             LoadError::RigMismatch { declared, backend }
-                if declared == other.fingerprint() && backend == mine.fingerprint()
+                if declared == other.fingerprint() && backend.fingerprint() == mine.fingerprint()
         ),
         "unexpected error: {error}"
     );

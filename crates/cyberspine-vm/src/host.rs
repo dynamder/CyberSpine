@@ -11,7 +11,7 @@
 use cyberspine_core::binfmt::image::{Sensor, SensorSource};
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::exec::{Fault, Instance, Program, Sensors, Status};
-use cyberspine_core::rig::Fingerprint;
+use cyberspine_core::rig::{BoundFingerprint, Fingerprint};
 
 use crate::backend::{Backend, Snapshot};
 
@@ -51,7 +51,7 @@ pub enum LoadError {
     #[error("the image was assembled for rig {declared}, this backend implements {backend}")]
     RigMismatch {
         declared: Fingerprint,
-        backend: Fingerprint,
+        backend: BoundFingerprint,
     },
     #[error("the image carries no rig fingerprint; call `Host::allow_unbound` to load it anyway")]
     Unbound,
@@ -365,8 +365,10 @@ impl<B: Backend> Host<B> {
     /// body", and only an explicit opt-out lets it through.
     fn check_rig(&self, image: &VerifiedImage) -> Result<(), LoadError> {
         let declared = image.header.rig;
+        // A backend's fingerprint is bound by its type, so this can never be the
+        // UNBOUND value: "both unbound" cannot pass for a match.
         let backend = self.backend.fingerprint();
-        if declared == backend {
+        if declared == backend.fingerprint() {
             return Ok(());
         }
         if declared.is_unbound() {

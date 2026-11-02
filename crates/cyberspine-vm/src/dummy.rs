@@ -4,7 +4,7 @@
 //! values and does nothing else. That is enough to check ordering, timing and
 //! the command path without a physics model.
 
-use cyberspine_core::rig::{Fingerprint, Rig};
+use cyberspine_core::rig::{BoundFingerprint, Rig};
 
 use crate::backend::{Backend, Snapshot};
 
@@ -17,7 +17,7 @@ pub enum Call {
 
 /// What a backend did, in order, so a test can assert the tick's shape.
 pub struct DummyBackend {
-    fingerprint: Fingerprint,
+    fingerprint: BoundFingerprint,
     muscles: Vec<f32>,
     sensors_f: Vec<f32>,
     sensors_i: Vec<i32>,
@@ -28,7 +28,7 @@ pub struct DummyBackend {
 impl DummyBackend {
     pub fn new(rig: Rig) -> Self {
         Self {
-            fingerprint: rig.fingerprint(),
+            fingerprint: BoundFingerprint::of(&rig),
             muscles: vec![0.0; rig.muscles.len()],
             sensors_f: vec![0.0; rig.sensors_f.len()],
             sensors_i: vec![0; rig.sensors_i.len()],
@@ -63,7 +63,7 @@ impl DummyBackend {
 }
 
 impl Backend for DummyBackend {
-    fn fingerprint(&self) -> Fingerprint {
+    fn fingerprint(&self) -> BoundFingerprint {
         self.fingerprint
     }
 

@@ -47,6 +47,38 @@ impl core::fmt::Debug for Fingerprint {
     }
 }
 
+/// A fingerprint that is known to name a body.
+///
+/// [`Fingerprint`] can be [`Fingerprint::UNBOUND`], because an image may be
+/// assembled without a rig. A backend cannot: it *is* a body, so it always has
+/// an identity to report. Splitting the two types removes the case where an
+/// unbound image and an unbound backend "match" and slip past the host's check
+/// (`docs/rig.md` §4).
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BoundFingerprint(Fingerprint);
+
+impl BoundFingerprint {
+    pub fn of(rig: &Rig) -> Self {
+        Self(rig.fingerprint())
+    }
+
+    pub fn fingerprint(self) -> Fingerprint {
+        self.0
+    }
+}
+
+impl core::fmt::Display for BoundFingerprint {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl core::fmt::Debug for BoundFingerprint {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "BoundFingerprint({})", self.0)
+    }
+}
+
 /// Which table a [`RigError`] refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RigTable {

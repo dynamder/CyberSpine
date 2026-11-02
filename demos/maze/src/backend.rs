@@ -5,7 +5,7 @@
 //! world. The grid, the walls and the position never leave this side; the
 //! program only sees the names in `maze.rig.json`.
 
-use cyberspine_core::rig::{Fingerprint, Name, Rig};
+use cyberspine_core::rig::{BoundFingerprint, Name, Rig};
 use cyberspine_vm::{Backend, Snapshot};
 
 use crate::grid::{Cell, DEFAULT_LAYOUT, Grid, Heading};
@@ -126,7 +126,7 @@ fn name(text: &'static str) -> Name {
 /// each muscle was last commanded to hold.
 pub struct MazeBackend {
     grid: Grid,
-    fingerprint: Fingerprint,
+    fingerprint: BoundFingerprint,
     x: i32,
     y: i32,
     heading: Heading,
@@ -146,7 +146,7 @@ impl MazeBackend {
     pub fn with_grid(grid: Grid) -> Self {
         let (x, y) = grid.start();
         Self {
-            fingerprint: rig().fingerprint(),
+            fingerprint: BoundFingerprint::of(&rig()),
             grid,
             x,
             y,
@@ -216,7 +216,7 @@ impl Default for MazeBackend {
 }
 
 impl Backend for MazeBackend {
-    fn fingerprint(&self) -> Fingerprint {
+    fn fingerprint(&self) -> BoundFingerprint {
         self.fingerprint
     }
 

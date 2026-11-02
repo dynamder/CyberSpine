@@ -7,7 +7,7 @@
 //! every observation travels in a single [`Snapshot`], so the host never
 //! interrogates the body piecewise.
 
-use cyberspine_core::rig::Fingerprint;
+use cyberspine_core::rig::BoundFingerprint;
 
 /// Everything the body reports about itself at one instant.
 ///
@@ -44,7 +44,11 @@ pub trait Backend {
     /// The host compares it with the image's before anything runs. It guards
     /// against a stale or wrong manifest, not against a hostile backend: code
     /// that lies here is already running on the device (§13.3).
-    fn fingerprint(&self) -> Fingerprint;
+    ///
+    /// The return type is [`BoundFingerprint`], not [`Fingerprint`]: a body
+    /// always has an identity, so "no fingerprint at all" is not a state a
+    /// backend can report.
+    fn fingerprint(&self) -> BoundFingerprint;
 
     /// Report the body as it is right now, filling every slot of `out`.
     ///
