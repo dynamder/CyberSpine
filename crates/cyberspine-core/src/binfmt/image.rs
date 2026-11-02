@@ -17,6 +17,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::isa::{Insn, OpCode};
+use crate::rig::Fingerprint;
 
 /// `b"CSPX"` (`docs/binfmt.md` §4). A big-endian reader sees `"XPSC"`, which is
 /// a byte-order check for free.
@@ -35,11 +36,16 @@ pub const HASH_LEN: usize = 32;
 /// The smallest legal file: header, one `HALT`, hash (§3).
 pub const MIN_FILE_LEN: usize = HEADER_LEN + INSN_LEN + HASH_LEN;
 
-/// Format version this crate writes: major 1, minor 0 (§4). The high byte is the
+/// Format version this crate writes: major 1, minor 1 (§4). The high byte is the
 /// major number; a loader must reject any other major and any minor above its
 /// own (§9.1 C2).
+///
+/// Minor 1 gives the last 32 bytes of the header a meaning: they carry the rig
+/// fingerprint instead of being reserved zeros. An older loader rejects the new
+/// images by the minor; this loader still accepts minor 0, whose fingerprint
+/// reads as [`Fingerprint::UNBOUND`].
 pub const FORMAT_MAJOR: u8 = 1;
-pub const FORMAT_MINOR: u8 = 0;
+pub const FORMAT_MINOR: u8 = 1;
 pub const FORMAT_VERSION: u16 = ((FORMAT_MAJOR as u16) << 8) | (FORMAT_MINOR as u16);
 
 /// Instruction encoding and semantics version (`docs/binfmt.md` §4).
@@ -62,8 +68,8 @@ pub const DEFAULT_MAX_WAIT: f32 = 600.0;
 /// The scalar half of the fixed header (§4).
 ///
 /// The other half — `magic`, `flags`, `file_len`, `code_len`, the five counts,
-/// `reserved_a`, `reserved_b` and `reserved0`/`reserved1`/`reserved2` — is either
-/// derived from the image or required to be zero, so it deliberately has no
+/// `reserved_a`, `reserved_b` and `reserved0`/`reserved1` — is either derived
+/// from the image or required to be zero, so it deliberately has no
 /// representation here (P3: 布局全推导). `reserved_a` (offset 8) and
 /// `reserved_b` (offset 48) used to hold `cycle_table_version` and
 /// `cycles_per_tick`; the cycle-accounting table is retired (`docs/isa.md` §6.5)
@@ -76,6 +82,9 @@ pub struct FixedHeader {
     pub hz: u32,
     pub fuel: u32,
     pub max_wait: f32,
+    /// The rig this image was assembled against (`docs/isa.md` §13). Lives in
+    /// the header's last 32 bytes, which used to be reserved zeros.
+    pub rig: Fingerprint,
 }
 
 impl Default for FixedHeader {
@@ -87,6 +96,7 @@ impl Default for FixedHeader {
             hz: DEFAULT_HZ,
             fuel: DEFAULT_FUEL,
             max_wait: DEFAULT_MAX_WAIT,
+            rig: Fingerprint::UNBOUND,
         }
     }
 }
@@ -278,7 +288,7 @@ impl Image {
         out.extend_from_slice(&self.header.fuel.to_le_bytes());
         out.extend_from_slice(&self.header.max_wait.to_bits().to_le_bytes());
         out.extend_from_slice(&0u32.to_le_bytes()); // reserved1: must be 0
-        out.extend_from_slice(&[0u8; 32]); // reserved2: must be all zero
+        out.extend_from_slice(&self.header.rig.0); // rig fingerprint (§4)
         debug_assert_eq!(
             out.len(),
             HEADER_LEN,

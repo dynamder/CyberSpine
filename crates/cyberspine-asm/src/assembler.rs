@@ -10,6 +10,7 @@ use cyberspine_core::binfmt::image::{
 };
 use cyberspine_core::isa::jump::{jump_offset, jump_target};
 use cyberspine_core::isa::{ImmType, Insn, OpCode, RegName};
+use cyberspine_core::rig::Fingerprint;
 use smol_str::SmolStr;
 use thiserror::Error;
 use winnow::{Parser, combinator::trace, token::take_while};
@@ -182,6 +183,7 @@ pub fn generate_image(asm: &Asm) -> Result<Image, ImageGenError> {
             hz: asm.header.fixed.clock_hz,
             fuel: asm.header.fixed.fuel,
             max_wait: asm.header.fixed.max_wait,
+            rig: Fingerprint::UNBOUND,
         },
         code,
         muscles: symbols.image_muscles,

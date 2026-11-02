@@ -29,6 +29,7 @@ use super::image::{
     FORMAT_MAJOR, FORMAT_MINOR, FixedHeader, HASH_LEN, HEADER_LEN, INSN_LEN, ISA_VERSION, Image,
     MAGIC, MIN_FILE_LEN, Muscle, Sensor, SensorSource, VarF, VarI,
 };
+use crate::rig::Fingerprint;
 
 /// Which metadata table an error refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,6 +238,7 @@ impl Image {
                 hz: raw.hz,
                 fuel: raw.fuel,
                 max_wait,
+                rig: Fingerprint(raw.rig),
             },
             code: Vec::new(),
             muscles,
@@ -285,7 +287,7 @@ struct RawHeader {
     fuel: u32,
     max_wait_bits: u32,
     reserved1: u32,
-    reserved2: [u8; 32],
+    rig: [u8; 32],
 }
 
 impl RawHeader {
@@ -293,8 +295,9 @@ impl RawHeader {
     /// `HEADER_LEN` bytes, so no read here can fall short.
     ///
     /// The order below is the on-disk order, which is also the order of the §4
-    /// table — including `reserved2`, which sits at offset 64 and not next to the
-    /// magic. Reading in any other order silently transposes every later field.
+    /// table — including the rig fingerprint, which sits at offset 64 and not
+    /// next to the magic. Reading in any other order silently transposes every
+    /// later field.
     fn parse(header: &[u8]) -> Result<Self, LoadError> {
         let mut c = Cursor::new(header, 0);
 
@@ -323,8 +326,8 @@ impl RawHeader {
         let max_wait_bits = c.u32_le()?;
         let reserved1 = c.u32_le()?;
 
-        let mut reserved2 = [0u8; 32];
-        reserved2.copy_from_slice(c.take(32)?);
+        let mut rig = [0u8; 32];
+        rig.copy_from_slice(c.take(32)?);
         debug_assert_eq!(
             c.pos, HEADER_LEN,
             "the fixed header is exactly {HEADER_LEN} bytes"
@@ -349,7 +352,7 @@ impl RawHeader {
             fuel,
             max_wait_bits,
             reserved1,
-            reserved2,
+            rig,
         })
     }
 }
@@ -402,9 +405,6 @@ fn check_container(raw: &RawHeader, bytes: &[u8]) -> Result<(), LoadError> {
     }
     if raw.reserved1 != 0 {
         return Err(LoadError::ReservedNotZero { field: "reserved1" });
-    }
-    if raw.reserved2.iter().any(|&b| b != 0) {
-        return Err(LoadError::ReservedNotZero { field: "reserved2" });
     }
 
     // C4 — the clock must be usable, and the `WAIT` bound must be a sane f32.

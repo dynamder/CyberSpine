@@ -30,3 +30,4 @@ extern crate alloc;
 pub mod binfmt;
 pub mod exec;
 pub mod isa;
+pub mod rig;

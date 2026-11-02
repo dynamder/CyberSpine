@@ -228,10 +228,11 @@ fn c2_isa_version_is_accepted_only_in_the_supported_set() {
 
 #[test]
 fn c3_every_reserved_field_must_be_zero() {
-    // "Undefined bits are refused, not ignored" — each of the six reserved
+    // "Undefined bits are refused, not ignored" — each of the five still-reserved
     // regions is checked, because each is a place a future version could put
     // something this loader would otherwise misread. `reserved_a` and
-    // `reserved_b` are where the retired cycle table used to live.
+    // `reserved_b` are where the retired cycle table used to live. The last 32
+    // header bytes are no longer reserved: they carry the rig fingerprint.
     let image = Image::halt_only();
 
     for (offset, field, width) in [
@@ -240,7 +241,6 @@ fn c3_every_reserved_field_must_be_zero() {
         (OFF_RESERVED0, "reserved0", 2),
         (OFF_RESERVED_B, "reserved_b", 4),
         (OFF_RESERVED1, "reserved1", 4),
-        (OFF_RESERVED2, "reserved2", 32),
     ] {
         let mut patch = vec![0u8; width];
         patch[0] = 1;
@@ -252,6 +252,29 @@ fn c3_every_reserved_field_must_be_zero() {
             other => panic!("{field} = 1 was not refused: {other}"),
         }
     }
+}
+
+#[test]
+fn a_rig_fingerprint_survives_the_round_trip() {
+    let rig = cyberspine_core::rig::Rig::new("test-rig", 1)
+        .muscle("mouth")
+        .sensor_f("blink")
+        .sensor_i("gaze");
+    let fingerprint = rig.fingerprint();
+
+    let mut image = Image::halt_only();
+    image.header.rig = fingerprint;
+    let bytes = image.to_bytes();
+
+    assert_eq!(
+        &bytes[OFF_RESERVED2..OFF_RESERVED2 + 32],
+        &fingerprint.0,
+        "the fingerprint lives in the header's last 32 bytes"
+    );
+
+    let loaded = Image::from_bytes(&bytes).expect("a fingerprinted image loads");
+    assert_eq!(loaded.header.rig, fingerprint);
+    assert!(!loaded.header.rig.is_unbound());
 }
 
 #[test]
