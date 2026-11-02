@@ -5,7 +5,7 @@
 //! world. The grid, the walls and the position never leave this side; the
 //! program only sees the names in `maze.rig.json`.
 
-use cyberspine_core::rig::{Fingerprint, Rig};
+use cyberspine_core::rig::{Fingerprint, Name, Rig};
 use cyberspine_vm::{Backend, Snapshot};
 
 use crate::grid::{Cell, DEFAULT_LAYOUT, Grid, Heading};
@@ -105,15 +105,21 @@ impl SensorI {
 pub fn rig() -> Rig {
     let mut rig = Rig::new(RIG_NAME, RIG_VERSION);
     for muscle in Muscle::ALL {
-        rig = rig.muscle(muscle.name());
+        rig = rig.muscle(name(muscle.name()));
     }
     for sensor in SensorF::ALL {
-        rig = rig.sensor_f(sensor.name());
+        rig = rig.sensor_f(name(sensor.name()));
     }
     for sensor in SensorI::ALL {
-        rig = rig.sensor_i(sensor.name());
+        rig = rig.sensor_i(name(sensor.name()));
     }
     rig
+}
+
+/// The body's own names are literals; a typo here is caught by the test that
+/// compares this rig against the shipped manifest.
+fn name(text: &'static str) -> Name {
+    Name::new(text).expect("the body's names are literals")
 }
 
 /// The body's state: where the runner is, which way it faces, and the value

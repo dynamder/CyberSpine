@@ -15,7 +15,7 @@ use std::collections::HashSet;
 use cyberspine_asm::assembler::Asm;
 use cyberspine_asm::assembler::text::{AsmOperand, TextItem};
 use cyberspine_core::isa::OpCode;
-use cyberspine_core::rig::Rig;
+use cyberspine_core::rig::{Name, Rig};
 
 fn is_reserved(name: &str) -> bool {
     if matches!(name, "dt" | "tick") {
@@ -70,17 +70,17 @@ pub fn rig_for(asm: &Asm) -> Rig {
     let mut rig = Rig::new("fuzz", 1);
     for name in muscles {
         if seen.insert(name) {
-            rig = rig.muscle(name);
+            rig = rig.muscle(Name::new(name).expect("the ident parser only produces identifiers"));
         }
     }
     for name in sensors_f {
         if seen.insert(name) {
-            rig = rig.sensor_f(name);
+            rig = rig.sensor_f(Name::new(name).expect("the ident parser only produces identifiers"));
         }
     }
     for name in sensors_i {
         if seen.insert(name) {
-            rig = rig.sensor_i(name);
+            rig = rig.sensor_i(Name::new(name).expect("the ident parser only produces identifiers"));
         }
     }
     rig

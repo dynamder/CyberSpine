@@ -9,7 +9,12 @@ use std::path::PathBuf;
 use cyberspine_core::binfmt::image::Image;
 use cyberspine_core::binfmt::load::LoadError;
 use cyberspine_core::isa::{Insn, OpCode};
+use cyberspine_core::rig::Name;
 use cyberspine_vm::io::{LoadFileError, MAX_FILE_LEN, read_image};
+
+fn n(text: &str) -> Name {
+    Name::new(text).expect("test fixture name")
+}
 
 fn tmp_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
@@ -26,7 +31,7 @@ fn an_image_survives_a_trip_through_the_filesystem() {
     let path = tmp_path("round_trip.csp");
 
     let mut image = Image::new(vec![Insn::new(OpCode::Yield), Insn::new(OpCode::Halt)]);
-    image.push_muscle("jaw");
+    image.push_muscle(n("jaw"));
     fs::write(&path, image.to_bytes()).expect("write the image");
 
     let loaded = read_image(&path).expect("read the image back");

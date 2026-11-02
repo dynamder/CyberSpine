@@ -5,6 +5,11 @@ use cyberspine_core::binfmt::image::{Image, VarF, VarI};
 use cyberspine_core::exec::{Fault, Instance, Program, Sensors, Status, Step};
 use cyberspine_core::isa::register::RegId;
 use cyberspine_core::isa::{Insn, OpCode, math};
+use cyberspine_core::rig::Name;
+
+fn n(text: &str) -> Name {
+    Name::new(text).expect("test fixture name")
+}
 
 fn reg(id: u8) -> RegId {
     RegId::new(id).expect("id < RegId::COUNT")
@@ -582,7 +587,7 @@ fn an_instance_cannot_read_back_its_own_excitation() {
         },
         halt(),
     ]);
-    image.push_muscle("m0");
+    image.push_muscle(n("m0"));
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -612,11 +617,11 @@ fn variables_take_their_initial_value_from_the_image() {
         halt(),
     ]);
     image.vars_f.push(VarF {
-        name: "height".into(),
+        name: n("height"),
         init: 2.5,
     });
     image.vars_i.push(VarI {
-        name: "count".into(),
+        name: n("count"),
         init: -4,
     });
 
@@ -647,7 +652,7 @@ fn variables_survive_a_suspend() {
         halt(),
     ]);
     image.vars_f.push(VarF {
-        name: "state".into(),
+        name: n("state"),
         init: 0.0,
     });
 
@@ -670,7 +675,7 @@ fn excite_alone_publishes_nothing() {
         },
         halt(),
     ]);
-    image.push_muscle("m0");
+    image.push_muscle(n("m0"));
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -701,8 +706,8 @@ fn flush_publishes_only_what_was_pending_and_keeps_it_afterwards() {
         },
         halt(),
     ]);
-    image.push_muscle("m0");
-    image.push_muscle("m1");
+    image.push_muscle(n("m0"));
+    image.push_muscle(n("m1"));
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -739,8 +744,8 @@ fn a_published_value_stays_across_a_flush_of_another_muscle() {
         Insn::new(OpCode::Flush),
         halt(),
     ]);
-    image.push_muscle("m0");
-    image.push_muscle("m1");
+    image.push_muscle(n("m0"));
+    image.push_muscle(n("m1"));
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -922,7 +927,7 @@ fn the_same_inputs_produce_bit_identical_commands() {
         Insn::new(OpCode::Flush),
         halt(),
     ]);
-    image.push_muscle("m0");
+    image.push_muscle(n("m0"));
 
     let zeros = [0.0];
     let sensors = Sensors::new(&zeros, &[]);
@@ -953,7 +958,7 @@ fn the_same_inputs_produce_bit_identical_commands() {
 #[should_panic(expected = "host contract")]
 fn a_short_float_snapshot_is_a_host_violation() {
     let mut image = Image::new(vec![halt()]);
-    image.push_muscle("m0");
+    image.push_muscle(n("m0"));
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
@@ -967,7 +972,7 @@ fn a_short_integer_snapshot_is_a_host_violation() {
     image
         .sensors_i
         .push(cyberspine_core::binfmt::image::Sensor {
-            name: "tick".into(),
+            name: n("tick"),
             source: cyberspine_core::binfmt::image::SensorSource::BuiltinTick,
         });
     let program = Program::new(&image);

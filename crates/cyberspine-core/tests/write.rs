@@ -11,6 +11,15 @@ use cyberspine_core::binfmt::image::{
 };
 use cyberspine_core::isa::register::RegId;
 use cyberspine_core::isa::{Insn, OpCode};
+use cyberspine_core::rig::{Name, NameError};
+
+fn n(text: &str) -> Name {
+    Name::new(text).expect("test fixture name")
+}
+
+fn raw_name(text: &str) -> Name {
+    Name::new_unchecked(text)
+}
 
 fn u32_at(bytes: &[u8], offset: usize) -> u32 {
     u32::from_le_bytes(bytes[offset..offset + 4].try_into().expect("4 bytes"))
@@ -113,21 +122,21 @@ fn the_header_is_exactly_96_bytes() {
 #[test]
 fn the_tables_are_gap_free_and_in_the_order_section_6_fixes() {
     let mut image = Image::new(code(&[with_ra(OpCode::Fexcite, 1), insn(OpCode::Halt)]));
-    image.push_muscle("mouth");
+    image.push_muscle(n("mouth"));
     image.sensors_f.push(Sensor {
-        name: "dt".into(),
+        name: n("dt"),
         source: SensorSource::BuiltinDt,
     });
     image.sensors_i.push(Sensor {
-        name: "tick".into(),
+        name: n("tick"),
         source: SensorSource::BuiltinTick,
     });
     image.vars_f.push(VarF {
-        name: "gain".into(),
+        name: n("gain"),
         init: 0.5,
     });
     image.vars_i.push(VarI {
-        name: "count".into(),
+        name: n("count"),
         init: -7,
     });
 
@@ -184,10 +193,10 @@ fn a_sensor_is_a_name_then_one_source_byte() {
     .enumerate()
     {
         image.muscles.push(Muscle {
-            name: format!("m{i}").into(),
+            name: n(&format!("m{i}")),
         });
         image.sensors_f.push(Sensor {
-            name: format!("m{i}").into(),
+            name: n(&format!("m{i}")),
             source,
         });
     }
@@ -288,9 +297,9 @@ fn writing_the_same_image_twice_gives_identical_bytes() {
     // choose, so there is nothing for a second run to decide differently.
     let build = || {
         let mut image = Image::new(code(&[insn(OpCode::Yield), insn(OpCode::Halt)]));
-        image.push_muscle("jaw");
+        image.push_muscle(n("jaw"));
         image.vars_f.push(VarF {
-            name: "k".into(),
+            name: n("k"),
             init: f32::NAN,
         });
         image.to_bytes()
@@ -307,8 +316,8 @@ fn push_muscle_keeps_the_readback_invariant() {
     // §6.2: sensors_f[m] must be muscles[m] read back. The helper makes that
     // impossible to forget for the common case.
     let mut image = Image::halt_only();
-    image.push_muscle("a");
-    image.push_muscle("b");
+    image.push_muscle(n("a"));
+    image.push_muscle(n("b"));
 
     assert_eq!(image.muscles.len(), 2);
     assert_eq!(image.sensors_f.len(), 2);
@@ -332,9 +341,9 @@ fn the_writer_emits_names_it_cannot_vouch_for() {
     // §9.2 M1 is the loader's rule. The writer has to be able to produce a bad
     // name, or `tests/load.rs` could not test that the loader rejects one.
     let mut image = Image::halt_only();
-    image.muscles.push(Muscle { name: "".into() });
+    image.muscles.push(Muscle { name: raw_name("") });
     image.sensors_f.push(Sensor {
-        name: "9bad".into(),
+        name: raw_name("9bad"),
         source: SensorSource::Muscle,
     });
 
@@ -360,14 +369,9 @@ fn the_writer_leaves_the_trailing_halt_to_the_binder() {
 }
 
 #[test]
-#[should_panic(expected = "cannot contain NUL")]
-fn the_writer_refuses_a_name_the_format_cannot_represent() {
-    // An interior NUL would silently split one name into two. Unlike a bad
-    // charset, this is not a file the format can express, so it is refused at the
-    // only point where it could do damage.
-    let mut image = Image::halt_only();
-    image.muscles.push(Muscle {
-        name: "a\0b".into(),
-    });
-    let _ = image.to_bytes();
+fn an_interior_nul_is_not_a_name_at_all() {
+    // An interior NUL would silently split one name into two, so it is not a
+    // file this format can express. `Name` decides that before an `Image`
+    // exists, which is why the writer no longer has to refuse anything.
+    assert!(matches!(Name::new("a\0b"), Err(NameError::NotAnIdentifier)));
 }

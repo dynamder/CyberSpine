@@ -11,8 +11,13 @@ use cyberspine_core::binfmt::image::{Image, Sensor, SensorSource, VarF};
 use cyberspine_core::exec::Fault;
 use cyberspine_core::isa::register::RegId;
 use cyberspine_core::isa::{Insn, OpCode};
+use cyberspine_core::rig::Name;
 use cyberspine_core::rig::{Fingerprint, Rig};
 use cyberspine_vm::{Backend, Call, DummyBackend, FaultRecord, Host, LoadError, Snapshot};
+
+fn n(text: &str) -> Name {
+    Name::new(text).expect("test fixture name")
+}
 
 fn reg(id: u8) -> RegId {
     RegId::new(id).expect("id < RegId::COUNT")
@@ -110,7 +115,7 @@ fn var_set(index: usize, ra: u8) -> Insn {
 fn rig(count: usize) -> Rig {
     let mut rig = Rig::new("test", 1);
     for index in 0..count {
-        rig = rig.muscle(format!("m{index}"));
+        rig = rig.muscle(n(&format!("m{index}")));
     }
     rig
 }
@@ -126,7 +131,7 @@ fn action(code: Vec<Insn>, rig: &Rig) -> Image {
     image.header.rig = rig.fingerprint();
 
     for muscle in &rig.muscles {
-        image.push_muscle(muscle);
+        image.push_muscle(muscle.clone());
     }
     for name in &rig.sensors_f {
         image.sensors_f.push(Sensor {
@@ -135,7 +140,7 @@ fn action(code: Vec<Insn>, rig: &Rig) -> Image {
         });
     }
     image.sensors_f.push(Sensor {
-        name: "dt".into(),
+        name: n("dt"),
         source: SensorSource::BuiltinDt,
     });
     for name in &rig.sensors_i {
@@ -145,7 +150,7 @@ fn action(code: Vec<Insn>, rig: &Rig) -> Image {
         });
     }
     image.sensors_i.push(Sensor {
-        name: "tick".into(),
+        name: n("tick"),
         source: SensorSource::BuiltinTick,
     });
     image
@@ -548,7 +553,7 @@ fn an_excitation_is_invisible_to_the_tick_that_made_it() {
 
     let mut reader = action(vec![sense(1, 0), var_set(0, 1), yield_(), jump(-4)], &rig);
     reader.vars_f.push(VarF {
-        name: "seen".into(),
+        name: n("seen"),
         init: 0.0,
     });
     let reader_id = host.load(reader).expect("reader");
@@ -597,10 +602,10 @@ fn a_fault_removes_only_the_faulting_instance() {
 #[test]
 fn the_kth_backend_source_reads_the_kth_observable() {
     let rig = Rig::new("observe", 1)
-        .muscle("m")
-        .sensor_f("up")
-        .sensor_f("down")
-        .sensor_i("ticks");
+        .muscle(n("m"))
+        .sensor_f(n("up"))
+        .sensor_f(n("down"))
+        .sensor_i(n("ticks"));
 
     let mut backend = backend(&rig);
     backend.set_sensor_f(0, 0.25);
@@ -716,7 +721,7 @@ fn an_image_with_more_readbacks_than_muscles_is_refused() {
     let mut image = action(vec![yield_(), jump(-2)], &rig);
     image.header.rig = Fingerprint::UNBOUND;
     image.sensors_f.push(Sensor {
-        name: "extra".into(),
+        name: n("extra"),
         source: SensorSource::Muscle,
     });
 

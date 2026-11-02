@@ -12,12 +12,11 @@
 //! tested — a malformed file is indistinguishable from a hand-forged one, and
 //! the loader has to reject both.
 
-use alloc::boxed::Box;
 use alloc::vec;
 use alloc::vec::Vec;
 
 use crate::isa::{Insn, OpCode};
-use crate::rig::Fingerprint;
+use crate::rig::{Fingerprint, Name};
 
 /// `b"CSPX"` (`docs/binfmt.md` §4). A big-endian reader sees `"XPSC"`, which is
 /// a byte-order check for free.
@@ -105,7 +104,7 @@ impl Default for FixedHeader {
 /// `Image::muscles` is its id, and its meaning lives entirely in the backend.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Muscle {
-    pub name: Box<str>,
+    pub name: Name,
 }
 
 /// Where a sensor's value comes from (§6.3). The discriminants are the on-disk
@@ -146,7 +145,7 @@ impl SensorSource {
 /// `sensor := name src(u8)` (`docs/binfmt.md` §6.3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sensor {
-    pub name: Box<str>,
+    pub name: Name,
     pub source: SensorSource,
 }
 
@@ -154,14 +153,14 @@ pub struct Sensor {
 /// pattern, so NaN payloads, infinities and subnormals all round-trip.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VarF {
-    pub name: Box<str>,
+    pub name: Name,
     pub init: f32,
 }
 
 /// `var_i := name init(i32)` (§6.4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VarI {
-    pub name: Box<str>,
+    pub name: Name,
     pub init: i32,
 }
 
@@ -211,10 +210,10 @@ impl Image {
     ///
     /// To build a file that *violates* the invariant — which §9.2 M4 exists to
     /// catch — push to `muscles` and `sensors_f` independently.
-    pub fn push_muscle(&mut self, name: &str) {
-        self.muscles.push(Muscle { name: name.into() });
+    pub fn push_muscle(&mut self, name: Name) {
+        self.muscles.push(Muscle { name: name.clone() });
         self.sensors_f.push(Sensor {
-            name: name.into(),
+            name,
             source: SensorSource::Muscle,
         });
     }
@@ -225,22 +224,22 @@ impl Image {
         let mut out = Vec::new();
 
         for muscle in &self.muscles {
-            push_name(&mut out, &muscle.name);
+            push_name(&mut out, muscle.name.as_str());
         }
         for sensor in &self.sensors_f {
-            push_name(&mut out, &sensor.name);
+            push_name(&mut out, sensor.name.as_str());
             out.push(sensor.source.to_u8());
         }
         for sensor in &self.sensors_i {
-            push_name(&mut out, &sensor.name);
+            push_name(&mut out, sensor.name.as_str());
             out.push(sensor.source.to_u8());
         }
         for var in &self.vars_f {
-            push_name(&mut out, &var.name);
+            push_name(&mut out, var.name.as_str());
             out.extend_from_slice(&var.init.to_bits().to_le_bytes());
         }
         for var in &self.vars_i {
-            push_name(&mut out, &var.name);
+            push_name(&mut out, var.name.as_str());
             out.extend_from_slice(&var.init.to_le_bytes());
         }
 
@@ -311,16 +310,10 @@ impl Image {
 
 /// Write one NUL-terminated name (§6.1).
 ///
-/// The name's *validity* is not checked here — §9.2 M1 is the loader's job, and a
-/// test needs to be able to emit `""` or `"9bad"` to exercise it. The one thing
-/// refused is an interior NUL, because that is not a file this format can express
-/// at all: it would silently split one name into two.
+/// A [`Name`] is an ASCII identifier, so it is non-empty and carries no NUL:
+/// the bytes of a legal image are expressible by construction, and the writer
+/// has nothing left to refuse.
 fn push_name(out: &mut Vec<u8>, name: &str) {
-    let bytes = name.as_bytes();
-    assert!(
-        !bytes.contains(&0),
-        "a name cannot contain NUL: the format has no way to escape it ({name:?})"
-    );
-    out.extend_from_slice(bytes);
+    out.extend_from_slice(name.as_bytes());
     out.push(0);
 }

@@ -13,7 +13,11 @@ use cyberspine_asm::assembler::{ImageGenError, generate_image, parse};
 use cyberspine_core::binfmt::image::{Image, SensorSource};
 use cyberspine_core::isa::jump::jump_target;
 use cyberspine_core::isa::{ImmType, Insn, OpCode};
-use cyberspine_core::rig::Rig;
+use cyberspine_core::rig::{Name, Rig, RigError};
+
+fn n(text: &str) -> Name {
+    Name::new(text).expect("test fixture name")
+}
 
 /// The scalar header is currently mandatory (see `tests/header.rs`).
 const HEADER: &str = ".layer 10\n.clock hz = 60\n.fuel 4096\n.max_wait 600.0\n";
@@ -22,16 +26,22 @@ fn source(body: &str) -> String {
     format!("{HEADER}{body}")
 }
 
+/// A name that may be illegal: the tests below need rigs the *validator* must
+/// refuse, which no checked constructor can build.
+fn loose_name(text: &str) -> Name {
+    Name::new(text).unwrap_or_else(|_| Name::new_unchecked(text))
+}
+
 fn rig(muscles: &[&str], sensors_f: &[&str], sensors_i: &[&str]) -> Rig {
     let mut rig = Rig::new("test", 1);
     for name in muscles {
-        rig = rig.muscle(*name);
+        rig = rig.muscle(loose_name(name));
     }
     for name in sensors_f {
-        rig = rig.sensor_f(*name);
+        rig = rig.sensor_f(loose_name(name));
     }
     for name in sensors_i {
-        rig = rig.sensor_i(*name);
+        rig = rig.sensor_i(loose_name(name));
     }
     rig
 }
@@ -438,28 +448,26 @@ fn a_group_name_cannot_collide_with_a_muscle() {
 /// (`docs/binfmt.md` §9.2 M1 / M2 / M5).
 #[test]
 fn a_rig_that_would_produce_an_illegal_image_is_refused() {
-    let reserved = Rig::new("r", 1).muscle("dt");
+    let reserved = Rig::new("r", 1).muscle(n("dt"));
     assert!(matches!(
         body_with(".text\nHALT\n", &reserved),
-        Err(ImageGenError::ReservedName(_))
+        Err(ImageGenError::Rig(RigError::ReservedName { .. }))
     ));
 
-    let register_shape = Rig::new("r", 1).sensor_f("f3");
+    let register_shape = Rig::new("r", 1).sensor_f(n("f3"));
     assert!(matches!(
         body_with(".text\nHALT\n", &register_shape),
-        Err(ImageGenError::ReservedName(_))
+        Err(ImageGenError::Rig(RigError::ReservedName { .. }))
     ));
 
-    let not_an_identifier = Rig::new("r", 1).muscle("9bad");
-    assert!(matches!(
-        body_with(".text\nHALT\n", &not_an_identifier),
-        Err(ImageGenError::NotAnIdentifier(_))
-    ));
+    // `9bad` is not a name at all: it never reaches `generate_image`, because
+    // the type that carries a rig name cannot hold it.
+    assert!(Name::new("9bad").is_err());
 
-    let repeated = Rig::new("r", 1).muscle("m").sensor_f("m");
+    let repeated = Rig::new("r", 1).muscle(n("m")).sensor_f(n("m"));
     assert!(matches!(
         body_with(".text\nHALT\n", &repeated),
-        Err(ImageGenError::DuplicateName(_))
+        Err(ImageGenError::Rig(RigError::DuplicateName { .. }))
     ));
 }
 

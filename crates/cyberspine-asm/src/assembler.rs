@@ -2,7 +2,7 @@ pub mod diagnostic;
 pub mod header;
 pub mod text;
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use cyberspine_core::binfmt::image::{
     FORMAT_VERSION, FixedHeader as ImageFixedHeader, ISA_VERSION, Image, Muscle, Sensor,
@@ -10,7 +10,7 @@ use cyberspine_core::binfmt::image::{
 };
 use cyberspine_core::isa::jump::{jump_offset, jump_target};
 use cyberspine_core::isa::{ImmType, Insn, OpCode, RegName};
-use cyberspine_core::rig::Rig;
+use cyberspine_core::rig::{Name, Rig, RigError, is_reserved as is_reserved_name};
 use smol_str::SmolStr;
 use thiserror::Error;
 use winnow::{Parser, combinator::trace, token::take_while};
@@ -21,29 +21,6 @@ use header::{AsmHeader, header as header_section};
 use text::{AsmInsn, AsmOperand, TextItem, text as text_section};
 
 pub type Line<'i> = &'i str;
-
-/// `docs/asm.md` §1 / §6 第 8 条: `fN`/`iN` is the register shape and `dt`/`tick` are
-/// built-in sensor names, so none of them can be a label or a declared name.
-pub(crate) fn is_reserved_name(name: &str) -> bool {
-    if matches!(name, "dt" | "tick") {
-        return true;
-    }
-    let mut chars = name.chars();
-    if !matches!(chars.next(), Some('f' | 'i')) {
-        return false;
-    }
-    let rest = chars.as_str();
-    !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
-}
-
-fn is_identifier(name: &str) -> bool {
-    let mut chars = name.chars();
-    match chars.next() {
-        Some(first) if first.is_ascii_alphabetic() || first == '_' => {}
-        _ => return false,
-    }
-    chars.all(|character| character.is_ascii_alphanumeric() || character == '_')
-}
 
 pub(crate) fn ident<'i>(input: &mut Line<'i>) -> PResult<&'i str> {
     trace(
@@ -135,8 +112,8 @@ pub enum ImageGenError {
     DuplicateName(SmolStr),
     #[error("`{0}` is a reserved name")]
     ReservedName(SmolStr),
-    #[error("the rig declares `{0}`, which is not an identifier")]
-    NotAnIdentifier(SmolStr),
+    #[error("the rig is not usable: {0}")]
+    Rig(#[from] RigError),
     #[error("FEXCITE target `{0}` is neither a muscle nor a group")]
     UnknownExciteTarget(SmolStr),
     #[error("unknown float sensor `{0}`")]
@@ -216,29 +193,11 @@ fn check_header(header: &AsmHeader) -> Result<(), ImageGenError> {
     Ok(())
 }
 
-/// A `Rig` built in code bypasses [`cyberspine_rig`]'s checks, but its names
-/// still have to produce an image the loader accepts (`docs/binfmt.md` §9.2 M1,
-/// M2, M5): one identifier namespace, no built-in names, no repeats.
+/// The rig-level rules themselves live in `core::rig::Rig::validate`; this only
+/// maps them into the assembler's error type. A rig built in code never passes
+/// through the manifest parser, so the assembler re-checks it here.
 fn check_rig(rig: &Rig) -> Result<(), ImageGenError> {
-    let mut seen = HashSet::new();
-    for name in rig
-        .muscles
-        .iter()
-        .chain(&rig.sensors_f)
-        .chain(&rig.sensors_i)
-    {
-        let name = SmolStr::new(&**name);
-        if is_reserved_name(&name) {
-            return Err(ImageGenError::ReservedName(name));
-        }
-        if !is_identifier(&name) {
-            return Err(ImageGenError::NotAnIdentifier(name));
-        }
-        if !seen.insert(name.clone()) {
-            return Err(ImageGenError::DuplicateName(name));
-        }
-    }
-    Ok(())
+    Ok(rig.validate()?)
 }
 
 /// The five name tables as name -> physical index, mirroring the on-disk order
@@ -276,15 +235,13 @@ impl Symbols {
 
         for (index, name) in rig.muscles.iter().enumerate() {
             let index = index as u32;
-            let name = SmolStr::new(&**name);
-            muscles.insert(name.clone(), index);
+            let key = SmolStr::new(name.as_str());
+            muscles.insert(key.clone(), index);
             // binfmt.md §6.2: every muscle is its own read-back float sensor, at the same index.
-            sensors_f.insert(name.clone(), index);
-            image_muscles.push(Muscle {
-                name: name.as_str().into(),
-            });
+            sensors_f.insert(key, index);
+            image_muscles.push(Muscle { name: name.clone() });
             image_sensors_f.push(Sensor {
-                name: name.as_str().into(),
+                name: name.clone(),
                 source: SensorSource::Muscle,
             });
         }
@@ -313,30 +270,28 @@ impl Symbols {
 
         let sensor_f_base = image_sensors_f.len() as u32;
         for (offset, name) in rig.sensors_f.iter().enumerate() {
-            let name = SmolStr::new(&**name);
-            sensors_f.insert(name.clone(), sensor_f_base + offset as u32);
+            sensors_f.insert(SmolStr::new(name.as_str()), sensor_f_base + offset as u32);
             image_sensors_f.push(Sensor {
-                name: name.as_str().into(),
+                name: name.clone(),
                 source: SensorSource::Backend,
             });
         }
         sensors_f.insert(SmolStr::new("dt"), image_sensors_f.len() as u32);
         image_sensors_f.push(Sensor {
-            name: "dt".into(),
+            name: builtin("dt"),
             source: SensorSource::BuiltinDt,
         });
 
         for (index, name) in rig.sensors_i.iter().enumerate() {
-            let name = SmolStr::new(&**name);
-            sensors_i.insert(name.clone(), index as u32);
+            sensors_i.insert(SmolStr::new(name.as_str()), index as u32);
             image_sensors_i.push(Sensor {
-                name: name.as_str().into(),
+                name: name.clone(),
                 source: SensorSource::Backend,
             });
         }
         sensors_i.insert(SmolStr::new("tick"), image_sensors_i.len() as u32);
         image_sensors_i.push(Sensor {
-            name: "tick".into(),
+            name: builtin("tick"),
             source: SensorSource::BuiltinTick,
         });
 
@@ -347,7 +302,7 @@ impl Symbols {
             }
             vars_f.insert(name.clone(), index as u32);
             image_vars_f.push(VarF {
-                name: name.as_str().into(),
+                name: Name::new(name.as_str()).expect("the ident parser only produces identifiers"),
                 init: *init,
             });
         }
@@ -359,7 +314,7 @@ impl Symbols {
             }
             vars_i.insert(name.clone(), index as u32);
             image_vars_i.push(VarI {
-                name: name.as_str().into(),
+                name: Name::new(name.as_str()).expect("the ident parser only produces identifiers"),
                 init: *init,
             });
         }
@@ -378,6 +333,11 @@ impl Symbols {
             image_vars_i,
         })
     }
+}
+
+/// The two built-in sensor names, which are known to be identifiers.
+fn builtin(text: &'static str) -> Name {
+    Name::new(text).expect("the built-in names are identifiers")
 }
 
 fn check_declarable(name: &SmolStr) -> Result<(), ImageGenError> {

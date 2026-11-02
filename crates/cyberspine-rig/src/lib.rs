@@ -19,5 +19,7 @@
 
 pub mod manifest;
 
-pub use cyberspine_core::rig::{Fingerprint, Rig};
+pub use cyberspine_core::rig::{
+    Fingerprint, Name, NameError, Rig, RigError, RigTable, is_reserved,
+};
 pub use manifest::{ManifestError, from_json};

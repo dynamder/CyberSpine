@@ -3,8 +3,12 @@
 
 use cyberspine_asm::assembler::{generate_image, parse};
 use cyberspine_core::binfmt::image::Image;
-use cyberspine_core::rig::Rig;
+use cyberspine_core::rig::{Name, Rig};
 use cyberspine_vm::{DummyBackend, Host};
+
+fn n(text: &str) -> Name {
+    Name::new(text).expect("test fixture name")
+}
 
 const SOURCE: &str = r#"
 .layer 0
@@ -24,7 +28,7 @@ HALT
 
 #[test]
 fn an_assembled_source_runs_and_produces_the_expected_commands() {
-    let rig = Rig::new("end-to-end", 1).muscle("mouth");
+    let rig = Rig::new("end-to-end", 1).muscle(n("mouth"));
 
     let asm = parse(SOURCE).expect("the source parses");
     let image = generate_image(&asm, &rig).expect("the source assembles");

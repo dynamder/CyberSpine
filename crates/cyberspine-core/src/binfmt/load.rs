@@ -29,7 +29,7 @@ use super::image::{
     FORMAT_MAJOR, FORMAT_MINOR, FixedHeader, HASH_LEN, HEADER_LEN, INSN_LEN, ISA_VERSION, Image,
     MAGIC, MIN_FILE_LEN, Muscle, Sensor, SensorSource, VarF, VarI,
 };
-use crate::rig::Fingerprint;
+use crate::rig::{Fingerprint, Name, NameError};
 
 /// Which metadata table an error refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,11 +216,11 @@ impl Image {
             raw_code.push(cursor.u64_le()?);
         }
 
-        let muscles = read_names(&mut cursor, Table::Muscles, raw.muscle_count)?;
-        let sensors_f = read_sensors(&mut cursor, Table::SensorsF, raw.sensor_f_count)?;
-        let sensors_i = read_sensors(&mut cursor, Table::SensorsI, raw.sensor_i_count)?;
-        let vars_f = read_vars_f(&mut cursor, raw.var_f_count)?;
-        let vars_i = read_vars_i(&mut cursor, raw.var_i_count)?;
+        let muscles = read_table::<Muscle>(&mut cursor, Table::Muscles, raw.muscle_count)?;
+        let sensors_f = read_table::<Sensor>(&mut cursor, Table::SensorsF, raw.sensor_f_count)?;
+        let sensors_i = read_table::<Sensor>(&mut cursor, Table::SensorsI, raw.sensor_i_count)?;
+        let vars_f = read_table::<VarF>(&mut cursor, Table::VarsF, raw.var_f_count)?;
+        let vars_i = read_table::<VarI>(&mut cursor, Table::VarsI, raw.var_i_count)?;
 
         if cursor.pos != body_end {
             return Err(LoadError::TrailingBytes {
@@ -770,150 +770,117 @@ impl<'a> Cursor<'a> {
     }
 }
 
-/// Read one name and enforce M1 on it.
-///
-/// §6.1 tightens names to ASCII identifiers in v1 — a deliberate choice, because
-/// binding compares names byte for byte and arbitrary UTF-8 would admit
-/// look-alikes that bind differently while reading the same.
-fn read_name<'a>(
-    cursor: &mut Cursor<'a>,
-    table: Table,
-    index: usize,
-) -> Result<&'a str, LoadError> {
-    let bytes = cursor.cstr(table, index)?;
+/// One row of a metadata table: how to read it, and what to compare for the
+/// duplicate check (M2).
+trait Entry: Sized {
+    fn read(cursor: &mut Cursor<'_>, table: Table, index: usize) -> Result<Self, LoadError>;
 
-    if bytes.is_empty() {
-        return Err(LoadError::EmptyName { table, index });
-    }
-
-    let valid = matches!(bytes[0], b'A'..=b'Z' | b'a'..=b'z' | b'_')
-        && bytes[1..]
-            .iter()
-            .all(|&b| b.is_ascii_alphanumeric() || b == b'_');
-
-    if !valid {
-        return Err(LoadError::NameNotAnIdentifier {
-            table,
-            index,
-            name: String::from_utf8_lossy(bytes).into_owned(),
-        });
-    }
-
-    // Every byte was just checked to be ASCII, so this cannot fail.
-    Ok(core::str::from_utf8(bytes).expect("ASCII is valid UTF-8"))
+    fn name(&self) -> &Name;
 }
 
-/// Read `count` bare names, enforcing M1 and M2.
-fn read_names(cursor: &mut Cursor<'_>, table: Table, count: u32) -> Result<Vec<Muscle>, LoadError> {
-    let mut seen: Vec<&str> = Vec::with_capacity(count as usize);
-    let mut out = Vec::with_capacity(count as usize);
-
-    for index in 0..count as usize {
-        let name = read_name(cursor, table, index)?;
-        if seen.contains(&name) {
-            return Err(LoadError::DuplicateName {
-                table,
-                index,
-                name: String::from(name),
-            }); // M2
-        }
-        seen.push(name);
-        out.push(Muscle { name: name.into() });
+impl Entry for Muscle {
+    fn read(cursor: &mut Cursor<'_>, table: Table, index: usize) -> Result<Self, LoadError> {
+        Ok(Self {
+            name: read_name(cursor, table, index)?,
+        })
     }
 
-    Ok(out)
+    fn name(&self) -> &Name {
+        &self.name
+    }
 }
 
-/// Read `count` `(name, src)` pairs, enforcing M1, M2 and the unknown-`src` half
-/// of M5.
-fn read_sensors(
-    cursor: &mut Cursor<'_>,
-    table: Table,
-    count: u32,
-) -> Result<Vec<Sensor>, LoadError> {
-    let mut seen: Vec<&str> = Vec::with_capacity(count as usize);
-    let mut out = Vec::with_capacity(count as usize);
-
-    for index in 0..count as usize {
+impl Entry for Sensor {
+    fn read(cursor: &mut Cursor<'_>, table: Table, index: usize) -> Result<Self, LoadError> {
         let name = read_name(cursor, table, index)?;
-        // O(n²) on purpose: the tables are tiny, and a `Vec` carries no iteration
-        // order that could leak into anything. §9.2 M2 only needs equality.
-        if seen.contains(&name) {
-            return Err(LoadError::DuplicateName {
-                table,
-                index,
-                name: String::from(name),
-            });
-        }
-        seen.push(name);
-
         let src = cursor.take(1)?[0];
         let source = SensorSource::from_u8(src).ok_or(LoadError::UnknownSensorSource {
             table,
             index,
             src,
         })?;
-
-        out.push(Sensor {
-            name: name.into(),
-            source,
-        });
+        Ok(Self { name, source })
     }
 
-    Ok(out)
+    fn name(&self) -> &Name {
+        &self.name
+    }
 }
 
-fn read_vars_f(cursor: &mut Cursor<'_>, count: u32) -> Result<Vec<VarF>, LoadError> {
-    let table = Table::VarsF;
-    let mut seen: Vec<&str> = Vec::with_capacity(count as usize);
-    let mut out = Vec::with_capacity(count as usize);
-
-    for index in 0..count as usize {
+impl Entry for VarF {
+    fn read(cursor: &mut Cursor<'_>, table: Table, index: usize) -> Result<Self, LoadError> {
         let name = read_name(cursor, table, index)?;
-        // O(n²) on purpose: the tables are tiny, and a `Vec` carries no iteration
-        // order that could leak into anything. §9.2 M2 only needs equality.
-        if seen.contains(&name) {
-            return Err(LoadError::DuplicateName {
-                table,
-                index,
-                name: String::from(name),
-            });
-        }
-        seen.push(name);
         // §6.4: the initial value is a bit pattern, so NaN and both zeros survive.
         let init = f32::from_bits(cursor.u32_le()?);
-        out.push(VarF {
-            name: name.into(),
-            init,
-        });
+        Ok(Self { name, init })
+    }
+
+    fn name(&self) -> &Name {
+        &self.name
+    }
+}
+
+impl Entry for VarI {
+    fn read(cursor: &mut Cursor<'_>, table: Table, index: usize) -> Result<Self, LoadError> {
+        let name = read_name(cursor, table, index)?;
+        let init = cursor.u32_le()? as i32;
+        Ok(Self { name, init })
+    }
+
+    fn name(&self) -> &Name {
+        &self.name
+    }
+}
+
+/// Read `count` entries, enforcing M1 on each name and M2 across the table.
+fn read_table<T: Entry>(
+    cursor: &mut Cursor<'_>,
+    table: Table,
+    count: u32,
+) -> Result<Vec<T>, LoadError> {
+    // C5 already bounded `count` against the file length.
+    let mut out = Vec::with_capacity(count as usize);
+
+    for index in 0..count as usize {
+        let entry = T::read(cursor, table, index)?;
+        // O(n²) on purpose: the tables are tiny, and a `Vec` carries no iteration
+        // order that could leak into anything. §9.2 M2 only needs equality.
+        if out
+            .iter()
+            .any(|existing: &T| existing.name() == entry.name())
+        {
+            return Err(LoadError::DuplicateName {
+                table,
+                index,
+                name: entry.name().to_string(),
+            });
+        }
+        out.push(entry);
     }
 
     Ok(out)
 }
 
-fn read_vars_i(cursor: &mut Cursor<'_>, count: u32) -> Result<Vec<VarI>, LoadError> {
-    let table = Table::VarsI;
-    let mut seen: Vec<&str> = Vec::with_capacity(count as usize);
-    let mut out = Vec::with_capacity(count as usize);
+/// Read one name and enforce M1 on it.
+///
+/// §6.1 tightens names to ASCII identifiers in v1 — a deliberate choice, because
+/// binding compares names byte for byte and arbitrary UTF-8 would admit
+/// look-alikes that bind differently while reading the same.
+fn read_name(cursor: &mut Cursor<'_>, table: Table, index: usize) -> Result<Name, LoadError> {
+    let bytes = cursor.cstr(table, index)?;
 
-    for index in 0..count as usize {
-        let name = read_name(cursor, table, index)?;
-        // O(n²) on purpose: the tables are tiny, and a `Vec` carries no iteration
-        // order that could leak into anything. §9.2 M2 only needs equality.
-        if seen.contains(&name) {
-            return Err(LoadError::DuplicateName {
-                table,
-                index,
-                name: String::from(name),
-            });
-        }
-        seen.push(name);
-        let init = cursor.u32_le()? as i32;
-        out.push(VarI {
-            name: name.into(),
-            init,
-        });
-    }
+    let text = core::str::from_utf8(bytes).map_err(|_| LoadError::NameNotAnIdentifier {
+        table,
+        index,
+        name: String::from_utf8_lossy(bytes).into_owned(),
+    })?;
 
-    Ok(out)
+    Name::new(text).map_err(|error| match error {
+        NameError::Empty => LoadError::EmptyName { table, index },
+        NameError::NotAnIdentifier => LoadError::NameNotAnIdentifier {
+            table,
+            index,
+            name: String::from(text),
+        },
+    })
 }

@@ -20,6 +20,11 @@ use cyberspine_core::binfmt::image::Image;
 use cyberspine_core::exec::{Fault, Instance, Program, Sensors, Step};
 use cyberspine_core::isa::register::RegId;
 use cyberspine_core::isa::{Insn, OpCode};
+use cyberspine_core::rig::Name;
+
+fn muscle_name(text: &str) -> Name {
+    Name::new(text).expect("the firmware's hand-built images use literal names")
+}
 
 const CHECKS: [(&str, fn()); 6] = [
     ("loader", check_loader),
@@ -172,7 +177,7 @@ fn check_commands() {
         Insn::new(OpCode::Flush),
         halt(),
     ]);
-    image.push_muscle("m0");
+    image.push_muscle(muscle_name("m0"));
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
