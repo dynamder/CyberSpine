@@ -61,6 +61,12 @@ pub enum ParseErrorKind {
         expected: &'static str,
         found: SmolStr,
     },
+    #[error("`.description` needs at least one line starting with `\\\\`")]
+    MissingDescription,
+    #[error(
+        "`.description` lines must align their `\\\\`: expected column {expected}, found column {found}"
+    )]
+    DescriptionMisaligned { expected: usize, found: usize },
 
     // -- instructions -------------------------------------------------------
     #[error("unknown mnemonic `{0}`")]

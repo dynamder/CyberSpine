@@ -542,6 +542,16 @@ fn header_directives_are_not_instructions() {
     rejected(".muscle brow_l");
 }
 
+#[test]
+fn a_description_in_the_text_section_is_a_late_directive() {
+    let errs = errors(".description");
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(
+        matches!(&errs[0].kind, ParseErrorKind::LateDirective(name) if name == "description"),
+        "{errs:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // 5'. 诊断：类别与位置
 // ---------------------------------------------------------------------------

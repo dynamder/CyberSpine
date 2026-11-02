@@ -214,8 +214,9 @@ fn a_read_only_image_can_be_replaced() {
     permissions.set_readonly(true);
     fs::set_permissions(&path, permissions).expect("mark the file read-only");
 
-    // `std::fs::rename` falls back to `SetFileInformationByHandle` on
-    // `ACCESS_DENIED`, which is what makes this succeed on Windows 10 1607+.
+    // A plain `fs::rename` cannot replace a read-only destination on Windows.
+    // `write_atomic` clears the attribute for the rename, and the new file
+    // inherits it from the old one.
     let image = Image::halt_only();
     write_image(&image, &path).expect("replace the read-only image");
 

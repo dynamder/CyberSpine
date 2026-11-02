@@ -132,6 +132,9 @@ impl Default for ParsingFixedHeader {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AsmHeader {
     pub fixed: FixedHeader,
+    /// The author's description from `.description`. It is metadata only:
+    /// `generate_image` never reads it and nothing about it reaches the image.
+    pub description: Option<String>,
     /// The manifest path from `.rig`, resolved against the source file by the
     /// caller. `None` means the manifest has to come from `--rig`.
     pub rig: Option<SmolStr>,
@@ -146,6 +149,7 @@ pub enum HeaderStmt {
     Clock { hz: u32 },
     Fuel(u32),
     MaxWait(f32),
+    Description,
     Rig(SmolStr),
     Group(GroupDef),
     Varf { name: SmolStr, value: f32 },
@@ -299,6 +303,20 @@ fn header_stmt<'i>(input: &mut Line<'i>) -> PResult<HeaderStmt> {
             space_after(input, "max_wait")?;
             HeaderStmt::MaxWait(argument(input, "max_wait", "an f32", float)?)
         }
+        "description" => {
+            let rest = input.trim_start();
+            if !rest.is_empty() && !rest.starts_with('#') {
+                return cut_at(
+                    rest,
+                    ParseErrorKind::InvalidFieldValue {
+                        directive: "description",
+                        expected: "a newline followed by `\\\\` lines",
+                        found: token_snippet(rest),
+                    },
+                );
+            }
+            HeaderStmt::Description
+        }
         "rig" => {
             space_after(input, "rig")?;
             HeaderStmt::Rig(argument(
@@ -372,6 +390,64 @@ fn parse_header_line(input: &mut Line<'_>) -> PResult<HeaderStmt> {
     header_stmt(input)
 }
 
+/// One `.description` line: optional horizontal whitespace, then exactly `\\`.
+/// Returns the 1-based character column of the marker and the content after it.
+fn description_line(line: &str) -> Option<(usize, &str)> {
+    let indent = line
+        .char_indices()
+        .find(|(_, character)| !matches!(character, ' ' | '\t'))
+        .map_or(line.len(), |(offset, _)| offset);
+    let content = line[indent..].strip_prefix("\\\\")?;
+    Some((line[..indent].chars().count() + 1, content))
+}
+
+/// Consume the lines of one `.description` block. `index` points at the first
+/// line after the directive, and is advanced past every line that belongs to
+/// the block; `consumed` follows the same lines for the shared cursor.
+///
+/// Misaligned lines are reported but still collected, so one block can report
+/// every independent mistake. A line that is not a `\\` line ends the block.
+fn description_block(
+    lines: &[&str],
+    index: &mut usize,
+    consumed: &mut usize,
+    errors: &mut Vec<ParseError>,
+) -> (String, usize) {
+    let mut value = String::new();
+    let mut expected_column = None;
+    let mut count = 0usize;
+
+    while let Some(raw_line) = lines.get(*index) {
+        let line = raw_line.trim_end_matches('\n').trim_end_matches('\r');
+        let Some((column, content)) = description_line(line) else {
+            break;
+        };
+
+        match expected_column {
+            None => expected_column = Some(column),
+            Some(expected) if expected != column => errors.push(ParseError::new(
+                Location::new(*index + 1, column),
+                ParseErrorKind::DescriptionMisaligned {
+                    expected,
+                    found: column,
+                },
+            )),
+            Some(_) => {}
+        }
+
+        if count > 0 {
+            value.push('\n');
+        }
+        value.push_str(content);
+
+        count += 1;
+        *consumed += raw_line.len();
+        *index += 1;
+    }
+
+    (value, count)
+}
+
 /// Parses the declaration section and advances `*input` past it.
 ///
 /// The cursor stops after the optional `.text` marker, or before the first line
@@ -383,9 +459,11 @@ fn parse_header_line(input: &mut Line<'_>) -> PResult<HeaderStmt> {
 /// parser from checking the rest of the header and the instruction section.
 pub fn header(input: &mut &str) -> Result<AsmHeader, AsmParseErrors> {
     let src = *input;
+    let lines: Vec<&str> = src.split_inclusive('\n').collect();
     let mut consumed = 0usize;
 
     let mut parsing_fixed_header = ParsingFixedHeader::default();
+    let mut description: Option<String> = None;
     let mut rig: Option<SmolStr> = None;
     let mut muscle_groups: Vec<GroupDef> = Vec::new();
     let mut vars_f: Vec<(SmolStr, f32)> = Vec::new();
@@ -393,13 +471,16 @@ pub fn header(input: &mut &str) -> Result<AsmHeader, AsmParseErrors> {
     let mut errors = Vec::new();
     let mut header_end_line = None;
 
-    for (index, raw_line) in src.split_inclusive('\n').enumerate() {
+    let mut index = 0usize;
+    while index < lines.len() {
+        let raw_line = lines[index];
         let line_no = index + 1;
         let trimmed = raw_line.trim();
 
         // Blank and comment-only lines are not statements; skip them.
         if trimmed.is_empty() || trimmed.starts_with('#') {
             consumed += raw_line.len();
+            index += 1;
             continue;
         }
 
@@ -415,6 +496,7 @@ pub fn header(input: &mut &str) -> Result<AsmHeader, AsmParseErrors> {
         match parse_header_line(&mut cursor) {
             Ok(stmt) => {
                 consumed += raw_line.len();
+                index += 1;
 
                 if matches!(stmt, HeaderStmt::Text) {
                     header_end_line = Some(line_no);
@@ -435,6 +517,23 @@ pub fn header(input: &mut &str) -> Result<AsmHeader, AsmParseErrors> {
                     HeaderStmt::MaxWait(value) => {
                         push_field(parsing_fixed_header.max_wait(value), location, &mut errors)
                     }
+                    HeaderStmt::Description => {
+                        let (block, lines_read) =
+                            description_block(&lines, &mut index, &mut consumed, &mut errors);
+                        if description.is_some() {
+                            errors.push(ParseError::new(
+                                location,
+                                ParseErrorKind::DuplicateField("description"),
+                            ));
+                        } else if lines_read == 0 {
+                            errors.push(ParseError::new(
+                                location,
+                                ParseErrorKind::MissingDescription,
+                            ));
+                        } else {
+                            description = Some(block);
+                        }
+                    }
                     HeaderStmt::Rig(path) => {
                         let result = match rig.replace(path) {
                             Some(_) => Err(ParseErrorKind::DuplicateField("rig")),
@@ -452,6 +551,7 @@ pub fn header(input: &mut &str) -> Result<AsmHeader, AsmParseErrors> {
             }
             Err(err) => {
                 consumed += raw_line.len();
+                index += 1;
                 errors.push(into_syntax(err).located(line, line_no));
             }
         }
@@ -466,6 +566,7 @@ pub fn header(input: &mut &str) -> Result<AsmHeader, AsmParseErrors> {
             if errors.is_empty() {
                 Ok(AsmHeader {
                     fixed,
+                    description,
                     rig,
                     muscle_groups,
                     vars_f,

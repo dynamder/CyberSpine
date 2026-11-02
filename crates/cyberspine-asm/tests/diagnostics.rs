@@ -92,3 +92,38 @@ fn render_points_at_the_offending_lines() {
     assert!(rendered.contains("FADDD f1, f2, f3"), "{rendered}");
     assert!(rendered.contains("2 errors emitted"), "{rendered}");
 }
+
+/// `docs/asm.md` §3.4：对齐错误同时给出基准列、实际列和越界行的 `\\` 位置。
+#[test]
+fn a_misaligned_description_reports_both_columns() {
+    let src = "\
+.layer 10
+.clock hz = 60
+.fuel 4096
+.max_wait 600.0
+.description
+    \\\\first
+  \\\\second
+.text
+HALT
+";
+    let errors = parse(src).expect_err("the second marker is misaligned");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        matches!(
+            errors.errors[0].kind,
+            ParseErrorKind::DescriptionMisaligned {
+                expected: 5,
+                found: 3
+            }
+        ),
+        "{errors:?}"
+    );
+
+    let rendered = errors.render(Path::new("bad.csa"), src);
+    assert!(
+        rendered.contains("expected column 5, found column 3"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("bad.csa:7:3"), "{rendered}");
+}

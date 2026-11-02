@@ -24,6 +24,7 @@
 | 非十进整数 | `0x1F` `0b1010` `0o17`：**按 u32 位模式**，重解释为 i32（`0xFFFFFFFF` = `-1`） |
 | 浮点字面量 | `1.5` `-0.25` `1e-3` `inf` `-inf` `nan` |
 | 字符串 | `"..."`；只有 `\\` 与 `\"` 是转义。目前只用于 `.rig` |
+| 多行字符串 | 每行以 `\\` 开头（Zig 风格），`\\` 必须逐行对齐；目前只用于 `.description` |
 | 标签 | `ident` 后跟 `:` |
 | 伪指令 | `.` 开头 |
 
@@ -43,6 +44,7 @@ instr  ::= mnemonic operand ("," operand)*
 
 - 一条指令一行；`label: instr` 允许同行；一行可堆多个标签。
 - 声明型伪指令必须全部出现在**第一条指令之前**；`.text` 只是可选标记行。
+- `.description` 是唯一的跨行声明：块内每行以 `\\` 开头（§3.4）；其余伪指令仍是一行一条。
 
 ## 3. 头段伪指令
 
@@ -88,6 +90,25 @@ vars_f / vars_i = 源码声明序
 ```
 
 顺序即物理下标，因此 manifest 的数组顺序是语义的一部分。
+
+### 3.4 `.description`：作者说明
+
+```asm
+.description
+    \\抬眉 → 微笑 → 保持 → 复位
+    \\Greet: raise brows, smile, hold, reset.
+```
+
+- 只接受 Zig 风格多行字符串：`.description` 单独一行，后续每行在可选空格/制表符后以
+  `\\` 开头；所有 `\\` 必须对齐到同一列，第一行决定基准列。
+- `\\` 之后到行尾的全部字符是内容：不转义、不 trim、`#` 也是内容。
+- 值 = 各行内容用 `\n` 连接，**末尾不追加换行**（Zig：只有下一行继续时才追加）。
+- 空内容行写成单独的 `\\`；不以 `\\` 开头的行结束块（真正的空行或注释行都会结束块）。
+- 至少一行；最多出现一次；只能出现在第一条指令/`.text` 之前。
+- 只保存在 `AsmHeader.description`，`generate_image` 不读取它：不进入 `.csp`，
+  不参与 rig 指纹、哈希或执行。
+- `.description "..."`、重复声明、缺行、`\\` 不对齐分别报
+  `InvalidFieldValue`、`DuplicateField`、`MissingDescription`、`DescriptionMisaligned`。
 
 ## 4. 指令与操作数
 
@@ -162,6 +183,7 @@ FLUSH                            # 无操作数；published ← pending，清 pe
 6. **pending 泄漏**：见 §4.3，硬错误。
 7. `WAIT` 时长非负有限且 ≤ `max_wait`。
 8. 名字、标签合法；`fN`/`iN`/`dt`/`tick` 保留名不得用作标签、变量名或组名。manifest 里的名字受同一组规则约束：`generate_image` 也校验它拿到的 `Rig`，因为代码里构造的 `Rig` 不经过 manifest 解析，而镜像仍必须是加载期合法的。
+9. `.description` 至少一行、至多一次，且所有 `\\` 对齐到同一列。
 
 pending 检查是一个布尔数据流：`FEXCITE` 置真，`FLUSH` 清假，在挂起点/HALT 处若为真报错；分支处取并集。
 
@@ -205,8 +227,9 @@ cyinea -a greet.csa -o out.csp   # 指定输出路径
   Windows 上继承只读属性。否则临时文件写入器会把产物悄悄变成 `0600`。
 - **不 `fsync`**：原子 ≠ 掉电持久。`rename` 保证读者看到旧的或新的，不保证
   两者之一在断电后仍在。
-- **只读目标仍会被替换**：Unix 只看目录权限，Windows 走 `SetFileInformationByHandle`
-  回退；这与 `fs::write` 的行为不同，是有意为之。
+- **只读目标仍会被替换**：Unix 只看目录权限；Windows 在 rename 前临时清除目标的只读
+  属性，失败时恢复，成功后新文件由 `copy_mode` 继承只读属性。这与 `fs::write` 的行为
+  不同，是有意为之。
 - **Windows 上被占用的目标**：短暂退避重试（杀毒/索引器），仍失败则报错并提示
   文件可能被其他进程打开或映射。
 - **写前自检**：编码结果必须先通过加载器（`binfmt.md` §9）才会落盘；不通过按
@@ -218,6 +241,9 @@ cyinea -a greet.csa -o out.csp   # 指定输出路径
 
 ```
 # greet.csa — 打招呼：抬眉 → 微笑 → 保持 → 复位
+.description
+    \\打招呼：抬眉 → 微笑 → 保持 → 复位
+    \\Greet: raise brows, smile, hold, reset.
 .rig            "rigs/live2d-standard.rig.json"
 
 .layer          10

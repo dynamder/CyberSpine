@@ -102,6 +102,23 @@ fn an_empty_instruction_section_is_exactly_one_halt() {
     assert_eq!(image.code, vec![Insn::new(OpCode::Halt)]);
 }
 
+/// `docs/asm.md` §3.4：`.description` 是纯元数据，不能改变镜像的任何字节。
+#[test]
+fn a_description_does_not_change_the_image() {
+    let plain = assemble_with(".text\nNOP\n", &empty_rig());
+    let described = assemble_with(
+        r#".description
+    \\one
+    \\two
+.text
+NOP
+"#,
+        &empty_rig(),
+    );
+
+    assert_eq!(plain.to_bytes(), described.to_bytes());
+}
+
 // ---------------------------------------------------------------------------
 // 2. Name resolution and table order
 // ---------------------------------------------------------------------------

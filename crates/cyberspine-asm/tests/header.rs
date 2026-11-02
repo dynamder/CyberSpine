@@ -11,7 +11,7 @@
 //! 所以逆向用例不仅能断言"被拒绝"，还能断言"被哪条规则、哪一行拒绝"。
 
 use cyberspine_asm::assembler::{
-    AsmParseErrors, ParseError, ParseErrorKind,
+    AsmParseErrors, Location, ParseError, ParseErrorKind,
     header::{AsmHeader, FixedHeader, GroupDef, header},
 };
 use smol_str::SmolStr;
@@ -102,6 +102,7 @@ fn expected_full() -> AsmHeader {
             fuel: 4096,
             max_wait: 600.0,
         },
+        description: None,
         rig: Some(SmolStr::new("rigs/live2d.rig.json")),
         muscle_groups: vec![GroupDef {
             name: SmolStr::new("brows"),
@@ -521,7 +522,7 @@ fn content_after_text_marker_is_not_part_of_header() {
 }
 
 // ---------------------------------------------------------------------------
-// `.rig`：清单路径（`docs/asm.md` §3.4）
+// `.rig`：清单路径（`docs/asm.md` §3.2）
 // ---------------------------------------------------------------------------
 
 /// 只有 `\\` 和 `\"` 是转义；其余反斜杠必须原样写两遍。
@@ -568,4 +569,260 @@ fn an_unterminated_rig_path_is_rejected() {
         ".text",
     ]);
     parse_rejected(&src);
+}
+
+// ---------------------------------------------------------------------------
+// `.description`：作者说明（`docs/asm.md` §3.4）
+// ---------------------------------------------------------------------------
+
+/// §3.4：值是各行内容按 Zig 语义用 `\n` 连接，末尾不追加换行。
+#[test]
+fn a_description_is_collected_without_a_trailing_newline() {
+    let src = text(&[
+        ".layer 10",
+        ".clock hz = 60",
+        ".fuel 4096",
+        ".max_wait 600.0",
+        ".description",
+        r"    \\抬眉 → 微笑",
+        r"    \\hold, then reset.",
+        ".text",
+    ]);
+    let got = parse_ok(&src);
+    assert_eq!(
+        got.description.as_deref(),
+        Some("抬眉 → 微笑\nhold, then reset.")
+    );
+}
+
+/// `\\` 之后是原文：空格、`#`、反斜杠都不特殊；单独 `\\` 是空内容行。
+#[test]
+fn a_description_preserves_its_content_verbatim() {
+    let src = text(&[
+        ".layer 10",
+        ".clock hz = 60",
+        ".fuel 4096",
+        ".max_wait 600.0",
+        ".description",
+        r"    \\  leading and trailing  ",
+        r"    \\# this is content, not a comment",
+        r"    \\back\\slash",
+        r"    \\",
+        ".text",
+    ]);
+    let got = parse_ok(&src);
+    assert_eq!(
+        got.description.as_deref(),
+        Some("  leading and trailing  \n# this is content, not a comment\nback\\\\slash\n")
+    );
+}
+
+/// §3.4：所有 `\\` 必须对齐；第一行决定基准列，错误定位到越界行的 `\\`。
+#[test]
+fn a_description_requires_aligned_markers() {
+    let src = text(&[
+        ".layer 10",
+        ".clock hz = 60",
+        ".fuel 4096",
+        ".max_wait 600.0",
+        ".description",
+        r"    \\first",
+        r"  \\second",
+        ".text",
+    ]);
+    let errors = parse_errors(&src);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        matches!(
+            &errors[0].kind,
+            ParseErrorKind::DescriptionMisaligned {
+                expected: 5,
+                found: 3
+            }
+        ),
+        "{errors:?}"
+    );
+    assert_eq!(errors[0].location, Location::new(7, 3));
+}
+
+#[test]
+fn a_second_description_is_rejected() {
+    let src = text(&[
+        ".layer 10",
+        ".clock hz = 60",
+        ".fuel 4096",
+        ".max_wait 600.0",
+        ".description",
+        r"    \\first",
+        ".description",
+        r"    \\second",
+        ".text",
+    ]);
+    let errors = parse_errors(&src);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        matches!(
+            errors[0].kind,
+            ParseErrorKind::DuplicateField("description")
+        ),
+        "{errors:?}"
+    );
+    assert_eq!(errors[0].location.line, 7);
+}
+
+/// `.description` 只接受多行字符串，不接受行内值。
+#[test]
+fn an_inline_description_is_rejected() {
+    for line in [".description hello", ".description \"hello\""] {
+        let errors = parse_errors(&base_with(line));
+        assert_eq!(errors.len(), 1, "for {line}: {errors:?}");
+        assert!(
+            matches!(
+                &errors[0].kind,
+                ParseErrorKind::InvalidFieldValue {
+                    directive: "description",
+                    ..
+                }
+            ),
+            "for {line}: {errors:?}"
+        );
+        assert_eq!(errors[0].location.line, 5, "for {line}");
+    }
+}
+
+#[test]
+fn a_description_without_any_marker_line_is_rejected() {
+    let src = text(&[
+        ".layer 10",
+        ".clock hz = 60",
+        ".fuel 4096",
+        ".max_wait 600.0",
+        ".description",
+        ".text",
+    ]);
+    let errors = parse_errors(&src);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        matches!(errors[0].kind, ParseErrorKind::MissingDescription),
+        "{errors:?}"
+    );
+    assert_eq!(errors[0].location.line, 5);
+}
+
+/// 块在第一个非 `\\` 行结束，下一行继续按声明解析。
+#[test]
+fn a_description_block_ends_at_the_next_declaration() {
+    let src = text(&[
+        ".layer 10",
+        ".clock hz = 60",
+        ".fuel 4096",
+        ".max_wait 600.0",
+        ".description",
+        r"    \\hello",
+        ".var_i state = 0",
+        ".text",
+    ]);
+    let got = parse_ok(&src);
+    assert_eq!(got.description.as_deref(), Some("hello"));
+    assert_eq!(got.vars_i, vec![(SmolStr::new("state"), 0)]);
+}
+
+/// 块结束后，`header()` 的共享游标停在第一条指令上。
+#[test]
+fn a_description_block_leaves_the_next_instruction_in_the_cursor() {
+    let src = text(&[
+        ".layer 10",
+        ".clock hz = 60",
+        ".fuel 4096",
+        ".max_wait 600.0",
+        ".description",
+        r"    \\hello",
+        "HALT",
+    ]);
+    let mut cursor = src.as_str();
+    let got = header(&mut cursor).expect("the header should parse");
+    assert_eq!(got.description.as_deref(), Some("hello"));
+    assert_eq!(cursor, "HALT\n");
+}
+
+/// 空行会结束块；空内容必须写成单独的 `\\`（Zig 风格）。
+#[test]
+fn a_blank_line_ends_the_description_block() {
+    let src = text(&[
+        ".layer 10",
+        ".clock hz = 60",
+        ".fuel 4096",
+        ".max_wait 600.0",
+        ".description",
+        r"    \\first",
+        "",
+        r"    \\second",
+        ".text",
+    ]);
+    let mut cursor = src.as_str();
+    let got = header(&mut cursor).expect("the header should parse");
+    assert_eq!(got.description.as_deref(), Some("first"));
+    assert_eq!(cursor, "    \\\\second\n.text\n");
+}
+
+#[test]
+fn a_description_accepts_crlf_line_endings() {
+    let src = ".layer 10\r\n.clock hz = 60\r\n.fuel 4096\r\n.max_wait 600.0\r\n.description\r\n    \\\\first\r\n    \\\\second\r\n.text\r\n";
+    let got = parse_ok(src);
+    assert_eq!(got.description.as_deref(), Some("first\nsecond"));
+}
+
+#[test]
+fn a_description_at_eof_without_a_final_newline_parses() {
+    let src = ".layer 1\n.clock hz = 1\n.fuel 1\n.max_wait 1.0\n.description\n    \\\\hello";
+    let got = parse_ok(src);
+    assert_eq!(got.description.as_deref(), Some("hello"));
+}
+
+#[test]
+fn a_description_directive_may_have_a_trailing_comment() {
+    let src = text(&[
+        ".layer 10",
+        ".clock hz = 60",
+        ".fuel 4096",
+        ".max_wait 600.0",
+        ".description # author note",
+        r"    \\hello",
+        ".text",
+    ]);
+    let got = parse_ok(&src);
+    assert_eq!(got.description.as_deref(), Some("hello"));
+}
+
+/// 声明顺序自由：`.description` 可以出现在四个标量之前。
+#[test]
+fn a_description_may_precede_the_fixed_scalars() {
+    let src = text(&[
+        ".description",
+        r"    \\hello",
+        ".layer 1",
+        ".clock hz = 1",
+        ".fuel 1",
+        ".max_wait 1.0",
+        ".text",
+    ]);
+    let got = parse_ok(&src);
+    assert_eq!(got.description.as_deref(), Some("hello"));
+    assert_eq!(got.fixed.layer, 1);
+}
+
+#[test]
+fn a_description_marker_may_be_indented_with_tabs() {
+    let src = text(&[
+        ".layer 1",
+        ".clock hz = 1",
+        ".fuel 1",
+        ".max_wait 1.0",
+        ".description",
+        "\t\\\\first",
+        "\t\\\\second",
+        ".text",
+    ]);
+    let got = parse_ok(&src);
+    assert_eq!(got.description.as_deref(), Some("first\nsecond"));
 }

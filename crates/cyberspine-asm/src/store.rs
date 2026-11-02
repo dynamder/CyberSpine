@@ -137,13 +137,27 @@ pub fn write_atomic(path: impl AsRef<Path>, bytes: &[u8]) -> io::Result<()> {
     // first fallible write.
     let temp = TempFile::new(temp_path);
 
-    fill(&destination, bytes, file)?;
-
     // `fill` closed the handle: Windows refuses to rename a file that is still
     // open, and the guard should never have to delete one either.
-    rename_with_retry(temp.path(), &destination)?;
-    temp.keep();
-    Ok(())
+    fill(&destination, bytes, file)?;
+
+    // Windows refuses to replace a read-only destination, even though replacing
+    // the directory entry is exactly what this function promises. Clear the
+    // attribute for the rename and put it back if the rename fails; on success
+    // the temporary file already carries the attribute (`copy_mode`).
+    let cleared_readonly = clear_readonly(&destination)?;
+    match rename_with_retry(temp.path(), &destination) {
+        Ok(()) => {
+            temp.keep();
+            Ok(())
+        }
+        Err(error) => {
+            if cleared_readonly {
+                restore_readonly(&destination);
+            }
+            Err(error)
+        }
+    }
 }
 
 /// Write the contents, close the handle, and apply the destination's mode.
@@ -249,9 +263,26 @@ impl Drop for TempFile {
     fn drop(&mut self) {
         if self.armed {
             // Best effort: the original I/O error is the one worth reporting.
-            let _ = fs::remove_file(&self.path);
+            let _ = remove_temp(&self.path);
         }
     }
+}
+
+/// Delete a temporary file. On Windows the guard has to clear the read-only
+/// attribute first, because `copy_mode` may have copied it from the
+/// destination and `DeleteFile` refuses to remove a read-only file.
+#[allow(clippy::permissions_set_readonly_false)]
+fn remove_temp(path: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    if let Ok(metadata) = fs::metadata(path) {
+        let mut permissions = metadata.permissions();
+        if permissions.readonly() {
+            permissions.set_readonly(false);
+            let _ = fs::set_permissions(path, permissions);
+        }
+    }
+
+    fs::remove_file(path)
 }
 
 /// Give the new file the destination's permissions, where the platform has any.
@@ -291,6 +322,47 @@ fn copy_mode(destination: &Path, file: &File) -> io::Result<()> {
 fn copy_mode(_destination: &Path, _file: &File) -> io::Result<()> {
     Ok(())
 }
+
+/// Clear a Windows read-only destination before replacing it. Returns whether
+/// the attribute changed, so a failed rename can restore it; Unix replaces the
+/// directory entry and never needs this.
+#[cfg(windows)]
+#[allow(clippy::permissions_set_readonly_false)]
+fn clear_readonly(path: &Path) -> io::Result<bool> {
+    let Ok(metadata) = fs::metadata(path) else {
+        return Ok(false);
+    };
+    let mut permissions = metadata.permissions();
+    if !permissions.readonly() {
+        return Ok(false);
+    }
+    permissions.set_readonly(false);
+    fs::set_permissions(path, permissions)?;
+    Ok(true)
+}
+
+#[cfg(not(windows))]
+fn clear_readonly(_path: &Path) -> io::Result<bool> {
+    Ok(false)
+}
+
+/// Best effort: put the old destination's read-only attribute back after a
+/// failed replace. The rename error is the one worth reporting.
+#[cfg(windows)]
+fn restore_readonly(path: &Path) {
+    let Ok(metadata) = fs::metadata(path) else {
+        return;
+    };
+    let mut permissions = metadata.permissions();
+    if permissions.readonly() {
+        return;
+    }
+    permissions.set_readonly(true);
+    let _ = fs::set_permissions(path, permissions);
+}
+
+#[cfg(not(windows))]
+fn restore_readonly(_path: &Path) {}
 
 /// Rename, retrying the *transient* failures Windows produces when another
 /// process has the destination open for a moment.
