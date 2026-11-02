@@ -7,7 +7,7 @@ use std::{
     io::{self, IsTerminal},
     process::ExitCode,
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use cyberspine_demo_maze::{
@@ -35,10 +35,15 @@ fn main() -> ExitCode {
     }
     draw(&session, style, interactive);
 
+    let frame = Duration::from_secs_f32(session.dt());
+    let mut last = Instant::now();
     while session.running() && session.ticks() < MAX_TICKS {
-        session.tick();
-        // One tick, one frame: the action's clock is the demo's pace.
-        thread::sleep(Duration::from_secs_f32(session.dt()));
+        // Frame pace is the demo's business; how many ticks that buys is the
+        // host's. A slow frame therefore falls behind in wall-clock terms but
+        // never changes what a tick contains.
+        thread::sleep(frame);
+        session.advance(last.elapsed().as_secs_f64());
+        last = Instant::now();
         draw(&session, style, interactive);
     }
 

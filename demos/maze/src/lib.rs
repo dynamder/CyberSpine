@@ -40,9 +40,13 @@ pub fn assemble(source: &str, rig: &Rig) -> Result<Image, Error> {
 }
 
 /// One assembled action, its body, and the host ticking them together.
+///
+/// Pacing is the host's (`Host::advance`): a frame hands over the real time it
+/// spent and the host decides how many ticks that buys. Nothing outside this
+/// type can step the machine one tick at a time, so an example cannot invent a
+/// second advance policy.
 pub struct Session {
     host: Host<MazeBackend>,
-    ticks: u64,
 }
 
 impl Session {
@@ -59,16 +63,17 @@ impl Session {
         let mut host = Host::new(MazeBackend::new());
         host.set_tracing(true);
         host.load(VerifiedImage::verify(image)?)?;
-        Ok(Self { host, ticks: 0 })
+        Ok(Self { host })
     }
 
-    pub fn tick(&mut self) {
-        self.host.tick();
-        self.ticks += 1;
+    /// Hand the host the real seconds a frame took; it runs the ticks they
+    /// contain and keeps the remainder.
+    pub fn advance(&mut self, seconds: f64) {
+        self.host.advance(seconds);
     }
 
     pub fn ticks(&self) -> u64 {
-        self.ticks
+        self.host.now()
     }
 
     /// One virtual tick in seconds, i.e. `1 / hz` from the image header.
@@ -91,7 +96,7 @@ impl Session {
     pub fn outcome(&self) -> Outcome {
         let backend = self.host.backend();
         Outcome {
-            ticks: self.ticks,
+            ticks: self.ticks(),
             moves: backend.moves(),
             turns: backend.turns(),
             bumps: backend.bumps(),
