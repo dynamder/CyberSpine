@@ -175,9 +175,14 @@ fn fill(destination: &Path, bytes: &[u8], mut file: File) -> io::Result<()> {
 /// target instead of replacing the link (the behaviour of `fs::write` and of
 /// Cargo's `write_atomic`).
 fn resolve_link(path: &Path) -> io::Result<PathBuf> {
-    let is_link = fs::symlink_metadata(path)
-        .map(|metadata| metadata.file_type().is_symlink())
-        .unwrap_or(false);
+    // Only "the destination does not exist yet" means "not a symlink". Any other
+    // error would otherwise replace the link instead of its target, which is the
+    // opposite of what this module promises.
+    let is_link = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata.file_type().is_symlink(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error),
+    };
     if !is_link {
         return Ok(path.to_path_buf());
     }
@@ -300,7 +305,9 @@ fn copy_mode(destination: &Path, file: &File) -> io::Result<()> {
             metadata.permissions().mode() & MODE_MASK,
         )),
         // A brand-new file keeps what `create_new` gave it: `0o666` minus umask.
-        Err(_) => Ok(()),
+        // Anything else is an error about the destination, not "no destination".
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
     }
 }
 
@@ -308,9 +315,11 @@ fn copy_mode(destination: &Path, file: &File) -> io::Result<()> {
 /// attribute, or a read-only artifact would silently become writable.
 #[cfg(windows)]
 fn copy_mode(destination: &Path, file: &File) -> io::Result<()> {
-    let readonly = fs::metadata(destination)
-        .map(|metadata| metadata.permissions().readonly())
-        .unwrap_or(false);
+    let readonly = match fs::metadata(destination) {
+        Ok(metadata) => metadata.permissions().readonly(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error),
+    };
     if !readonly {
         return Ok(());
     }

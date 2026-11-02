@@ -95,10 +95,14 @@ fn refuse_to_overwrite_source(source: &Path, output: &Path) -> Result<(), String
         return Ok(());
     }
 
-    let (Ok(source_real), Ok(output_real)) = (fs::canonicalize(source), fs::canonicalize(output))
-    else {
-        return Ok(());
+    // A path that exists but cannot be resolved is not a reason to skip the
+    // check: failing open here is what would let `-o` destroy the source.
+    let resolve = |path: &Path| {
+        fs::canonicalize(path)
+            .map_err(|error| format!("error: cannot resolve `{}`: {error}\n", path.display()))
     };
+    let source_real = resolve(source)?;
+    let output_real = resolve(output)?;
 
     if source_real == output_real {
         return Err(format!(
