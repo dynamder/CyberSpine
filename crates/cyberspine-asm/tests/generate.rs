@@ -91,7 +91,7 @@ fn a_minimal_program_gets_the_implicit_halt_and_the_header() {
     let image = assemble_with(".text\nNOP\n", &rig);
 
     assert_eq!(image.header.layer, 10);
-    assert_eq!(image.header.hz, 60);
+    assert_eq!(image.header.hz.get(), 60);
     assert_eq!(image.header.fuel, 4096);
     assert_eq!(image.header.max_wait, 600.0);
     assert_eq!(

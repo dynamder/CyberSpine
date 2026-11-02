@@ -4,6 +4,7 @@
 //! This is the bottom layer of the crate. `binfmt` and `cyberspine-asm` both
 //! depend on it; nothing here knows about images or execution.
 
+pub mod clock;
 pub mod jump;
 pub mod math;
 pub mod register;

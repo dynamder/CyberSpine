@@ -4,6 +4,7 @@
 use cyberspine_core::binfmt::image::{Image, Sensor, SensorSource, VarF, VarI};
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::exec::{Fault, Instance, Program, Sensors, Status, Step};
+use cyberspine_core::isa::clock::Hz;
 use cyberspine_core::isa::register::RegId;
 use cyberspine_core::isa::{Insn, OpCode, math};
 use cyberspine_core::rig::Name;
@@ -105,7 +106,7 @@ fn fed(code: Vec<Insn>, fuel: u32) -> Image {
 
 fn clocked(code: Vec<Insn>, hz: u32) -> Image {
     let mut image = Image::new(code);
-    image.header.hz = hz;
+    image.header.hz = Hz::new(hz).expect("test fixture rate");
     image
 }
 

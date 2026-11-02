@@ -8,6 +8,7 @@ use cyberspine_core::binfmt::image::{
     FORMAT_VERSION, FixedHeader as ImageFixedHeader, ISA_VERSION, Image, Muscle, Sensor,
     SensorSource, VarF, VarI,
 };
+use cyberspine_core::isa::clock::Hz;
 use cyberspine_core::isa::jump::{jump_offset, jump_target};
 use cyberspine_core::isa::{ImmType, Insn, OpCode, RegName};
 use cyberspine_core::rig::{Name, Rig, RigError, is_reserved as is_reserved_name};
@@ -168,7 +169,7 @@ pub fn generate_image(asm: &Asm, rig: &Rig) -> Result<Image, ImageGenError> {
             format_version: FORMAT_VERSION,
             isa_version: ISA_VERSION,
             layer: asm.header.fixed.layer,
-            hz: asm.header.fixed.clock_hz,
+            hz: clock_hz(&asm.header)?,
             fuel: asm.header.fixed.fuel,
             max_wait: asm.header.fixed.max_wait,
             rig: rig.fingerprint(),
@@ -182,10 +183,13 @@ pub fn generate_image(asm: &Asm, rig: &Rig) -> Result<Image, ImageGenError> {
     })
 }
 
+/// The clock rate the header declares, as the type every consumer divides by.
+fn clock_hz(header: &AsmHeader) -> Result<Hz, ImageGenError> {
+    Hz::new(header.fixed.clock_hz).ok_or(ImageGenError::ZeroHz)
+}
+
 fn check_header(header: &AsmHeader) -> Result<(), ImageGenError> {
-    if header.fixed.clock_hz == 0 {
-        return Err(ImageGenError::ZeroHz);
-    }
+    clock_hz(header)?;
     let max_wait = header.fixed.max_wait;
     if !max_wait.is_finite() || max_wait < 0.0 {
         return Err(ImageGenError::InvalidMaxWait);

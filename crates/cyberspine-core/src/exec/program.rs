@@ -3,6 +3,7 @@
 use crate::binfmt::image::{VarF, VarI};
 use crate::binfmt::load::VerifiedImage;
 use crate::isa::Insn;
+use crate::isa::clock::Hz;
 
 /// A loaded action with the names stripped: exactly what execution reads.
 ///
@@ -17,7 +18,7 @@ pub struct Program<'p> {
     sensor_f_count: usize,
     sensor_i_count: usize,
     muscle_count: usize,
-    hz: u32,
+    hz: Hz,
     fuel: u32,
 }
 
@@ -65,7 +66,7 @@ impl<'p> Program<'p> {
     }
 
     /// Ticks per virtual second, and the denominator of `WAIT` (`docs/isa.md` §6.1).
-    pub fn hz(&self) -> u32 {
+    pub fn hz(&self) -> Hz {
         self.hz
     }
 }

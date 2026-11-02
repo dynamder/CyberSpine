@@ -10,6 +10,7 @@
 use cyberspine_core::binfmt::image::{Image, Sensor, SensorSource, VarF};
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::exec::Fault;
+use cyberspine_core::isa::clock::Hz;
 use cyberspine_core::isa::register::RegId;
 use cyberspine_core::isa::{Insn, OpCode};
 use cyberspine_core::rig::Name;
@@ -480,7 +481,7 @@ fn a_waiting_instance_is_not_resumed_early() {
     let rig = rig(0);
     let mut host = Host::new(backend(&rig));
     let mut image = action(vec![wait(0.25), imovi(1, 1), yield_(), jump(-2)], &rig);
-    image.header.hz = 64;
+    image.header.hz = Hz::new(64).expect("64 Hz");
     let id = host.load(verified(image)).expect("64 Hz image");
 
     host.tick();
@@ -741,11 +742,11 @@ fn images_with_different_clocks_are_refused() {
     let mut host = Host::new(backend(&rig));
 
     let mut first = action(vec![yield_(), jump(-2)], &rig);
-    first.header.hz = 60;
+    first.header.hz = Hz::new(60).expect("60 Hz");
     host.load(verified(first)).expect("first clock");
 
     let mut second = action(vec![yield_(), jump(-2)], &rig);
-    second.header.hz = 30;
+    second.header.hz = Hz::new(30).expect("30 Hz");
     let error = host.load(verified(second)).expect_err("clock mismatch");
 
     assert!(

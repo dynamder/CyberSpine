@@ -6,6 +6,7 @@ use alloc::vec;
 
 use crate::exec::program::Program;
 use crate::exec::registers::Registers;
+use crate::isa::clock::Hz;
 use crate::isa::jump::jump_target_unchecked;
 use crate::isa::math;
 use crate::isa::register::RegId;
@@ -432,8 +433,8 @@ impl Mask {
 
 /// `ceil(seconds × hz)`, in f64 because a 1e-7 relative error becomes a whole
 /// tick on the wrong side of the ceiling (`docs/exec.md` §7.3–§7.4).
-fn ceil_ticks(seconds: f32, hz: u32) -> u64 {
-    let ticks = f64::from(seconds) * f64::from(hz);
+fn ceil_ticks(seconds: f32, hz: Hz) -> u64 {
+    let ticks = f64::from(seconds) * f64::from(hz.get());
     if ticks.is_nan() || ticks <= 0.0 {
         return 0;
     }

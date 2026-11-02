@@ -22,6 +22,7 @@ use core::fmt;
 
 use thiserror::Error;
 
+use crate::isa::clock::Hz;
 use crate::isa::jump::jump_target;
 use crate::isa::{DecodeError, Insn, OpCode};
 
@@ -251,7 +252,7 @@ impl VerifiedImage {
                 format_version: raw.format_version,
                 isa_version: raw.isa_version,
                 layer: raw.layer,
-                hz: raw.hz,
+                hz: Hz::new(raw.hz).ok_or(LoadError::ZeroHz)?,
                 fuel: raw.fuel,
                 max_wait: f32::from_bits(raw.max_wait_bits),
                 rig: Fingerprint(raw.rig),
@@ -300,9 +301,6 @@ impl Image {
     /// [`VerifiedImage::verify`] runs it on its own. One implementation, so a
     /// rule cannot pass on the disk path and fail on the in-memory one.
     pub fn validate(&self) -> Result<(), LoadError> {
-        if self.header.hz == 0 {
-            return Err(LoadError::ZeroHz);
-        }
         if !self.header.max_wait.is_finite() || self.header.max_wait < 0.0 {
             return Err(LoadError::InvalidMaxWait {
                 bits: self.header.max_wait.to_bits(),

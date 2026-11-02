@@ -11,6 +11,7 @@
 use cyberspine_core::binfmt::image::{Sensor, SensorSource};
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::exec::{Fault, Instance, Program, Sensors, Status};
+use cyberspine_core::isa::clock::Hz;
 use cyberspine_core::rig::{BoundFingerprint, Fingerprint};
 
 use crate::backend::{Backend, Snapshot};
@@ -153,7 +154,7 @@ pub struct Host<B: Backend> {
     rig_muscles: Vec<f32>,
     allow_unbound: bool,
     now: u64,
-    hz: Option<u32>,
+    hz: Option<Hz>,
     dt: f32,
     accumulator: f64,
     max_ticks_per_frame: u32,
@@ -205,10 +206,13 @@ impl<B: Backend> Host<B> {
         match self.hz {
             None => {
                 self.hz = Some(hz);
-                self.dt = 1.0 / hz as f32;
+                self.dt = hz.dt();
             }
             Some(host) if host != hz => {
-                return Err(LoadError::Hz { declared: hz, host });
+                return Err(LoadError::Hz {
+                    declared: hz.get(),
+                    host: host.get(),
+                });
             }
             Some(_) => {}
         }
@@ -303,7 +307,7 @@ impl<B: Backend> Host<B> {
         self.dt
     }
 
-    pub fn hz(&self) -> Option<u32> {
+    pub fn hz(&self) -> Option<Hz> {
         self.hz
     }
 

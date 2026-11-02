@@ -28,7 +28,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-use cyberspine_core::binfmt::image::{HASH_LEN, HEADER_LEN, Image, SensorSource};
+use cyberspine_core::binfmt::image::{HASH_LEN, HEADER_LEN, SensorSource};
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::binfmt::load::{LoadError, Table};
 use cyberspine_core::isa::OpCode;
@@ -386,7 +386,7 @@ fn golden_valid_all_loads_and_decodes() {
     // Header: every scalar non-default.
     assert_eq!(image.header.layer, 3);
     assert_eq!(image.header.isa_version, 1);
-    assert_eq!(image.header.hz, 120);
+    assert_eq!(image.header.hz.get(), 120);
     assert_eq!(image.header.fuel, 8192);
     assert_eq!(image.header.max_wait, 12.5);
 
