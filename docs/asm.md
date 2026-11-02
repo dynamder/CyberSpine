@@ -9,9 +9,9 @@
 ## 0. 定位
 
 - 输入：UTF-8 文本 `.csa`；输出：`Image`（`crates/cyberspine-core/src/binfmt/image.rs`）→ `.csp` 字节，外加 `DebugInfo { labels, line_map }`。
-- 汇编器**不接触 rig**。名字只解析成**头段表下标**（逻辑下标）；逻辑下标 → rig 物理下标是加载期 bind 的事（缺失绑 VOID，`isa.md` §13.3）。
-- 指令语法由 `OpCode::signature()` 派生；助记符表由 `OpCode::ALL` + `mnemonic()` 反查生成。**加一条指令只改 `crates/cyberspine-core/src/vm/op.rs`，不手抄任何清单。**
-- 汇编期完成：标签→偏移、名字→表下标、`group` 展开、隐式 `HALT` 补齐、所有静态可判定的校验。
+- 汇编器**只读 manifest，不接触 rig 的实现**。manifest 声明肌肉、可观测量和身份（[`rig.md`](rig.md)）；名字在装配期解析成 **rig 的物理下标**，直接写进 `imm`（`isa.md` §13.2）。镜像因此与 rig 一一对应，加载期用指纹校验。
+- 指令语法由 `OpCode::signature()` 派生；助记符表由 `OpCode::ALL` + `mnemonic()` 反查生成。**加一条指令只改 `crates/cyberspine-core/src/isa.rs`，不手抄任何清单。**
+- 装配期完成：标签→偏移、名字→物理下标、`group` 展开、隐式 `HALT` 补齐、所有静态可判定的校验。
 
 ## 1. 词法
 
@@ -23,6 +23,7 @@
 | 十进制整数 | `42` `-42`（带符号，范围 i32） |
 | 非十进整数 | `0x1F` `0b1010` `0o17`：**按 u32 位模式**，重解释为 i32（`0xFFFFFFFF` = `-1`） |
 | 浮点字面量 | `1.5` `-0.25` `1e-3` `inf` `-inf` `nan` |
+| 字符串 | `"..."`；只有 `\\` 与 `\"` 是转义。目前只用于 `.rig` |
 | 标签 | `ident` 后跟 `:` |
 | 伪指令 | `.` 开头 |
 
@@ -58,33 +59,34 @@ instr  ::= mnemonic operand ("," operand)*
 - **当前实现（v1）要求四个标量全部显式给出**；缺失字段在声明段结束处报
   `MissingField`（四个缺失会一次报全）。未来若改为可省，必须在这里定义各自缺省值。
 
-### 3.2 名字表
+### 3.2 rig 与名字
 
-```
-.muscle  brow_l                     # 肌肉：只是一个名字
-.muscle  brow_r
-.group   brows = brow_l, brow_r     # 汇编期展开；只在 FEXCITE 位置可用
-.sensor_f blink_speed               # 后端可观测量，f32
-.sensor_i gaze_lock                 # 后端可观测量，i32
-.var_f   phase = 0.0                # 实例变量，f32
-.var_i   state = 0                  # 实例变量，i32
+```asm
+.rig "rigs/live2d-standard.rig"      # JSON manifest，路径相对本文件
+
+.group   brows = brow_l, brow_r      # 汇编期展开；只在 FEXCITE 位置可用
+.var_f   phase = 0.0                 # 实例变量，f32
+.var_i   state = 0                   # 实例变量，i32
 ```
 
-- `.muscle X` **自动**生成一条同名读回 sensor（`binfmt.md` §6.2 的读回不变量靠构造成立）；显式 `.sensor_f` 与肌肉同名 = 错误。
-- `dt` / `tick` **自动声明**、始终存在，不需要写。
-- `.group` v1 **不嵌套**；组名不得与肌肉名重名（会撞上读回 sensor 的唯一性）。
-- `muscle`, `sensor` 在汇编时需要从后端获取信息，以确定立即数index，然后进行绑定
+- **肌肉和可观测量的声明不在源码里**。它们由 manifest 提供（[`rig.md`](rig.md)）；源码只引用名字。
+- `.rig` 给出 manifest 路径，`cyinea --rig <path>` 可覆盖；两者都没有时汇编失败。
+- `dt` / `tick` 由语言内置，不在 manifest 里，也不能被声明。
+- `.group` v1 **不嵌套**；成员必须是 manifest 里存在的肌肉名。
+- 引用了 manifest 中不存在的名字 → **汇编错误**（不是运行期的 VOID）。
 
 ### 3.3 表序
 
-镜像表序固定（`binfmt.md` §3/§6）：
+镜像的表由 manifest 生成，`dt` / `tick` 追加在末尾（`binfmt.md` §3/§6）：
 
 ```
-muscles   = [.muscle 声明序]
-sensors_f = [每个肌肉的读回项，按 .muscle 序] ++ [.sensor_f 声明序] ++ [dt]
-sensors_i = [.sensor_i 声明序] ++ [tick]
-vars_f / vars_i = 声明序
+muscles   = [manifest.muscles 序]
+sensors_f = [每个肌肉的读回项，按 manifest.muscles 序] ++ [manifest.sensors_f 序] ++ [dt]
+sensors_i = [manifest.sensors_i 序] ++ [tick]
+vars_f / vars_i = 源码声明序
 ```
+
+顺序即物理下标，因此 manifest 的数组顺序是语义的一部分。
 
 ## 4. 指令与操作数
 
@@ -154,8 +156,8 @@ FLUSH                            # 无操作数；published ← pending，清 pe
 1. 未定义/重复标签。
 2. 跳转目标越界。
 3. 寄存器文件不匹配、arity 错误、立即数超范围。
-4. `FEXCITE` 引用的名字不在 muscles 表；`FSENSE`/`ISENSE`/`FVGET`/`FVSET`/`IVGET`/`IVSET` 的名字不在对应表。
-5. `.sensor_f` 与肌肉同名。
+4. `FEXCITE` 引用的名字不在 manifest 的 muscles；`FSENSE`/`ISENSE`/`FVGET`/`FVSET`/`IVGET`/`IVSET` 的名字不在对应表。
+5. `.group` 的成员不在 manifest 的 muscles。
 6. **pending 泄漏**：见 §4.3，硬错误。
 7. `WAIT` 时长非负有限且 ≤ `max_wait`。
 8. 名字、标签合法；`fN`/`iN`/`dt`/`tick` 保留名不得用作标签/名字。
@@ -215,21 +217,15 @@ cyinea -a greet.csa -o out.csp   # 指定输出路径
 
 ```
 # greet.csa — 打招呼：抬眉 → 微笑 → 保持 → 复位
+.rig            "rigs/live2d-standard.rig"
+
 .layer          10
 .clock          hz = 60
 .fuel           4096
 .max_wait       600.0
 
-.muscle         brow_l
-.muscle         brow_r
-.muscle         mouth_corner_l
-.muscle         mouth_corner_r
 .group          brows   = brow_l, brow_r
 .group          corners = mouth_corner_l, mouth_corner_r
-
-.sensor_f       smile
-.sensor_f       brow_raise
-.sensor_i       gaze_lock
 
 .text
 entry:
@@ -279,4 +275,4 @@ L_done:
 
 ## 9. 与 opcode 表的绑定
 
-助记符、操作数、arity、立即数类型全部由 `crates/cyberspine-core/src/vm/op.rs` 的 `isa_table!` 派生。本文件描述的是**词法**（怎么写寄存器/数字/名字/标签）；指令语义见 `isa.md` §4。
+助记符、操作数、arity、立即数类型全部由 `crates/cyberspine-core/src/isa.rs` 的 `isa_table!` 派生。本文件描述的是**词法**（怎么写寄存器/数字/名字/标签）；指令语义见 `isa.md` §4。
