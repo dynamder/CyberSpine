@@ -478,10 +478,10 @@ fn unknown_directive_is_rejected() {
     parse_rejected(&base_with(".wobble 1"));
 }
 
-/// §3.2：肌肉与可观测量已由 manifest 声明，所以旧伪指令不是"不认识"，
-/// 而是明确告诉作者名字搬去了哪里。
+/// §3.2：肌肉与可观测量已由 manifest 声明，旧伪指令就此消失 —— 它们没有被留成
+/// 别名或迁移特例，所以报的就是"不认识的伪指令"。
 #[test]
-fn the_removed_declarations_point_at_the_manifest() {
+fn the_old_declarations_are_unknown_directives() {
     for (line, name) in [
         (".muscle brow_l", "muscle"),
         (".sensor_f smile", "sensor_f"),
@@ -491,7 +491,7 @@ fn the_removed_declarations_point_at_the_manifest() {
         let errors = parse_errors(&base_with(line));
         assert_eq!(errors.len(), 1, "for {line}: {errors:?}");
         assert!(
-            matches!(&errors[0].kind, ParseErrorKind::RemovedDirective(found) if found == name),
+            matches!(&errors[0].kind, ParseErrorKind::UnknownDirective(found) if found == name),
             "for {line}: {errors:?}"
         );
         assert_eq!(errors[0].location.line, 5, "for {line}");

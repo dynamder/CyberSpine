@@ -48,8 +48,6 @@ pub enum ParseErrorKind {
     LateDirective(SmolStr),
     #[error("`.{0}` is declared more than once")]
     DuplicateField(&'static str),
-    #[error("`.{0}` has been removed; the rig manifest declares it")]
-    RemovedDirective(SmolStr),
     #[error("`.{0}` is missing from the fixed header")]
     MissingField(&'static str),
     #[error("`.{directive}` needs {expected}")]

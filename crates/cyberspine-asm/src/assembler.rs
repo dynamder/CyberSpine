@@ -36,14 +36,6 @@ pub(crate) fn is_reserved_name(name: &str) -> bool {
     !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
 }
 
-/// `docs/asm.md` §3.2: muscles and observables come from the rig manifest, so
-/// the directives that used to declare them are gone rather than unknown.
-pub(crate) fn is_removed_directive(name: &str) -> bool {
-    name.eq_ignore_ascii_case("muscle")
-        || name.eq_ignore_ascii_case("sensor_f")
-        || name.eq_ignore_ascii_case("sensor_i")
-}
-
 fn is_identifier(name: &str) -> bool {
     let mut chars = name.chars();
     match chars.next() {

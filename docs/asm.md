@@ -71,7 +71,7 @@ instr  ::= mnemonic operand ("," operand)*
 
 - **肌肉和可观测量的声明不在源码里**。它们由 manifest 提供（[`rig.md`](rig.md)）；源码只引用名字。
 - `.rig` 给出 manifest 路径（相对**本文件所在目录**）；`cyinea --rig <path>` 可覆盖它，同样相对本文件。两者都没有时汇编失败。
-- 旧伪指令 `.muscle` / `.sensor_f` / `.sensor_i` 已删除：源码里出现它们报"已移除，改由 manifest 声明"，而不是 `unknown directive`。
+- 旧伪指令 `.muscle` / `.sensor_f` / `.sensor_i` 已删除，源码里出现即 `unknown directive` —— 名字只来自 manifest。
 - `dt` / `tick` 由语言内置，不在 manifest 里，也不能被声明。
 - `.group` v1 **不嵌套**；成员必须是 manifest 里存在的肌肉名。
 - 引用了 manifest 中不存在的名字 → **汇编错误**（不是运行期的 VOID）。

@@ -308,9 +308,6 @@ fn header_stmt<'i>(input: &mut Line<'i>) -> PResult<HeaderStmt> {
                 quoted_path,
             )?)
         }
-        "muscle" | "sensor_f" | "sensor_i" => {
-            return cut_at(start, ParseErrorKind::RemovedDirective(SmolStr::new(dir)));
-        }
         "group" => HeaderStmt::Group(group(input)?),
         "var_f" => {
             space_after(input, "var_f")?;
