@@ -7,6 +7,7 @@ name = "agents-dev-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "cyberspine-vm",
 ]
 
 [[package]]
@@ -195,6 +196,7 @@ dependencies = [
  "annotate-snippets",
  "clap",
  "cyberspine-core",
+ "cyberspine-vm",
  "smol_str",
  "thiserror",
  "winnow",

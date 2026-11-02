@@ -14,3 +14,6 @@ annotate-snippets = "0.12.17"
 [[bin]]
 name = "cyinea"
 path = "src/main.rs"
+
+[dev-dependencies]
+cyberspine-vm = { path = "../cyberspine-vm" }
