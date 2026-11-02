@@ -18,6 +18,7 @@ use cyberspine_asm::assembler::{generate_image, parse};
 use cyberspine_core::binfmt::image::Image;
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::rig::Rig;
+use cyberspine_testkit::scratch_dir;
 
 const SOURCE: &str = "\
 .layer 10
@@ -53,12 +54,7 @@ const MANIFEST_OTHER: &str = r#"{
 }"#;
 
 fn scratch(name: &str) -> PathBuf {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join("cli")
-        .join(name);
-    let _ = fs::remove_dir_all(&dir);
-    fs::create_dir_all(&dir).expect("create the scratch directory");
-    dir
+    scratch_dir(&format!("cli/{name}"))
 }
 
 fn entries(dir: &Path) -> Vec<String> {
@@ -76,15 +72,9 @@ fn entries(dir: &Path) -> Vec<String> {
     names
 }
 
-fn write_source(dir: &Path, name: &str, source: &str) -> PathBuf {
+fn write_file(dir: &Path, name: &str, text: &str) -> PathBuf {
     let path = dir.join(name);
-    fs::write(&path, source).expect("write the source file");
-    path
-}
-
-fn write_manifest(dir: &Path, name: &str, text: &str) -> PathBuf {
-    let path = dir.join(name);
-    fs::write(&path, text).expect("write the manifest");
+    fs::write(&path, text).expect("write the fixture file");
     path
 }
 
@@ -112,8 +102,8 @@ fn expected_image(manifest: &str) -> Image {
 #[test]
 fn a_source_is_assembled_into_the_requested_file() {
     let dir = scratch("output");
-    let source = write_source(&dir, "greet.csa", SOURCE);
-    write_manifest(&dir, "greet.rig.json", MANIFEST);
+    let source = write_file(&dir, "greet.csa", SOURCE);
+    write_file(&dir, "greet.rig.json", MANIFEST);
     let target = dir.join("greet.csp");
 
     let output = run(vec![
@@ -150,8 +140,8 @@ fn a_source_is_assembled_into_the_requested_file() {
 #[test]
 fn the_default_output_replaces_the_extension() {
     let dir = scratch("default-output");
-    let source = write_source(&dir, "greet.csa", SOURCE);
-    write_manifest(&dir, "greet.rig.json", MANIFEST);
+    let source = write_file(&dir, "greet.csa", SOURCE);
+    write_file(&dir, "greet.rig.json", MANIFEST);
 
     let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
 
@@ -166,8 +156,8 @@ fn the_default_output_replaces_the_extension() {
 #[test]
 fn a_bare_output_name_lands_in_the_working_directory() {
     let dir = scratch("relative-output");
-    let source = write_source(&dir, "greet.csa", SOURCE);
-    write_manifest(&dir, "greet.rig.json", MANIFEST);
+    let source = write_file(&dir, "greet.csa", SOURCE);
+    write_file(&dir, "greet.rig.json", MANIFEST);
 
     // `-o out.csp` has no parent directory at all, which is the one path where
     // the temporary file's parent has to default to `.`.
@@ -198,8 +188,8 @@ fn a_bare_output_name_lands_in_the_working_directory() {
 #[test]
 fn a_relative_manifest_is_resolved_against_the_source_not_the_cwd() {
     let dir = scratch("relative-manifest");
-    let source = write_source(&dir, "greet.csa", SOURCE);
-    write_manifest(&dir, "greet.rig.json", MANIFEST);
+    let source = write_file(&dir, "greet.csa", SOURCE);
+    write_file(&dir, "greet.rig.json", MANIFEST);
     let elsewhere = scratch("relative-manifest-cwd");
 
     let output = Command::new(env!("CARGO_BIN_EXE_cyinea"))
@@ -216,9 +206,9 @@ fn a_relative_manifest_is_resolved_against_the_source_not_the_cwd() {
 #[test]
 fn the_rig_flag_overrides_the_directive() {
     let dir = scratch("rig-override");
-    let source = write_source(&dir, "greet.csa", SOURCE);
-    write_manifest(&dir, "greet.rig.json", MANIFEST);
-    let other = write_manifest(&dir, "other.rig.json", MANIFEST_OTHER);
+    let source = write_file(&dir, "greet.csa", SOURCE);
+    write_file(&dir, "greet.rig.json", MANIFEST);
+    let other = write_file(&dir, "other.rig.json", MANIFEST_OTHER);
     let target = dir.join("greet.csp");
 
     let output = run(vec![
@@ -249,7 +239,7 @@ fn the_rig_flag_overrides_the_directive() {
 #[test]
 fn a_source_without_a_manifest_is_reported() {
     let dir = scratch("no-manifest");
-    let source = write_source(
+    let source = write_file(
         &dir,
         "bare.csa",
         "\
@@ -277,7 +267,7 @@ fn a_source_without_a_manifest_is_reported() {
 #[test]
 fn a_missing_manifest_file_is_reported() {
     let dir = scratch("missing-manifest");
-    let source = write_source(&dir, "greet.csa", SOURCE);
+    let source = write_file(&dir, "greet.csa", SOURCE);
 
     let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
 
@@ -294,8 +284,8 @@ fn a_missing_manifest_file_is_reported() {
 #[test]
 fn a_broken_manifest_is_reported_against_its_own_path() {
     let dir = scratch("broken-manifest");
-    let source = write_source(&dir, "greet.csa", SOURCE);
-    write_manifest(&dir, "greet.rig.json", "{\"rig\": {\"name\": \"g\"}}");
+    let source = write_file(&dir, "greet.csa", SOURCE);
+    write_file(&dir, "greet.rig.json", "{\"rig\": {\"name\": \"g\"}}");
 
     let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
 
@@ -317,7 +307,7 @@ fn a_broken_manifest_is_reported_against_its_own_path() {
 fn a_parse_error_produces_no_file() {
     let dir = scratch("parse-error");
     // Only `.layer`: the other three fixed-header fields are missing.
-    let source = write_source(&dir, "bad.csa", ".layer 10\n");
+    let source = write_file(&dir, "bad.csa", ".layer 10\n");
 
     let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
 
@@ -335,7 +325,7 @@ fn a_parse_error_produces_no_file() {
 fn a_generation_error_produces_no_file() {
     let dir = scratch("generation-error");
     // `FEXCITE` still pending when `HALT` is reached (`docs/asm.md` §6 第 6 条).
-    let source = write_source(
+    let source = write_file(
         &dir,
         "pending.csa",
         "\
@@ -350,7 +340,7 @@ fn a_generation_error_produces_no_file() {
     HALT
 ",
     );
-    write_manifest(&dir, "greet.rig.json", MANIFEST);
+    write_file(&dir, "greet.rig.json", MANIFEST);
 
     let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
 
@@ -369,7 +359,7 @@ fn a_generation_error_produces_no_file() {
 #[test]
 fn a_generation_error_is_rendered_at_its_line() {
     let dir = scratch("generation-location");
-    let source = write_source(
+    let source = write_file(
         &dir,
         "jump.csa",
         "\
@@ -384,7 +374,7 @@ fn a_generation_error_is_rendered_at_its_line() {
     HALT
 ",
     );
-    write_manifest(&dir, "greet.rig.json", MANIFEST);
+    write_file(&dir, "greet.rig.json", MANIFEST);
 
     let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
 
@@ -402,7 +392,7 @@ fn a_generation_error_is_rendered_at_its_line() {
 #[test]
 fn warnings_are_reported_and_denied_on_request() {
     let dir = scratch("warnings");
-    let source = write_source(
+    let source = write_file(
         &dir,
         "warn.csa",
         "\
@@ -416,7 +406,7 @@ never_used:
     HALT
 ",
     );
-    write_manifest(&dir, "greet.rig.json", MANIFEST);
+    write_file(&dir, "greet.rig.json", MANIFEST);
 
     let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
     assert!(output.status.success(), "stderr: {}", stderr(&output));
@@ -438,8 +428,8 @@ never_used:
 #[test]
 fn an_unwritable_destination_is_reported() {
     let dir = scratch("unwritable");
-    let source = write_source(&dir, "greet.csa", SOURCE);
-    write_manifest(&dir, "greet.rig.json", MANIFEST);
+    let source = write_file(&dir, "greet.csa", SOURCE);
+    write_file(&dir, "greet.rig.json", MANIFEST);
     let target = dir.join("no-such-dir").join("greet.csp");
 
     let output = run(vec![
@@ -466,8 +456,8 @@ fn an_unwritable_destination_is_reported() {
 #[test]
 fn an_existing_output_is_replaced() {
     let dir = scratch("replace");
-    let source = write_source(&dir, "greet.csa", SOURCE);
-    write_manifest(&dir, "greet.rig.json", MANIFEST);
+    let source = write_file(&dir, "greet.csa", SOURCE);
+    write_file(&dir, "greet.rig.json", MANIFEST);
     let target = dir.join("greet.csp");
     fs::write(&target, b"stale bytes").expect("seed the old output");
 
@@ -488,8 +478,8 @@ fn an_existing_output_is_replaced() {
 #[test]
 fn the_source_file_is_never_overwritten() {
     let dir = scratch("source-guard");
-    let source = write_source(&dir, "greet.csa", SOURCE);
-    write_manifest(&dir, "greet.rig.json", MANIFEST);
+    let source = write_file(&dir, "greet.csa", SOURCE);
+    write_file(&dir, "greet.rig.json", MANIFEST);
     let before = fs::read(&source).expect("read the source");
 
     let output = run(vec![
