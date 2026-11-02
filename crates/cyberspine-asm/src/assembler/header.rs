@@ -132,6 +132,9 @@ impl Default for ParsingFixedHeader {
 #[derive(Debug, Clone, PartialEq)]
 pub struct AsmHeader {
     pub fixed: FixedHeader,
+    /// The manifest path from `.rig`, resolved against the source file by the
+    /// caller. `None` means the manifest has to come from `--rig`.
+    pub rig: Option<SmolStr>,
     pub muscles: Vec<SmolStr>,
     pub muscle_groups: Vec<GroupDef>,
     pub sensors_f: Vec<SmolStr>,
@@ -146,6 +149,7 @@ pub enum HeaderStmt {
     Clock { hz: u32 },
     Fuel(u32),
     MaxWait(f32),
+    Rig(SmolStr),
     Muscle(SmolStr),
     Group(GroupDef),
     Sensorf(SmolStr),
@@ -153,6 +157,32 @@ pub enum HeaderStmt {
     Varf { name: SmolStr, value: f32 },
     VarI { name: SmolStr, value: i32 },
     Text,
+}
+
+/// A double-quoted string. Only `\\` and `\"` are escapes; a backslash before
+/// anything else is reported, so a Windows path has to be written `\\`.
+fn quoted_path<'i>(input: &mut Line<'i>) -> PResult<SmolStr> {
+    let text = *input;
+    let Some(rest) = text.strip_prefix('"') else {
+        return cut_at(text, ParseErrorKind::Unexpected);
+    };
+
+    let mut out = String::new();
+    let mut chars = rest.char_indices();
+    while let Some((offset, character)) = chars.next() {
+        match character {
+            '"' => {
+                *input = &rest[offset + 1..];
+                return Ok(SmolStr::new(out));
+            }
+            '\\' => match chars.next() {
+                Some((_, escaped @ ('\\' | '"'))) => out.push(escaped),
+                _ => return cut_at(&rest[offset..], ParseErrorKind::Unexpected),
+            },
+            other => out.push(other),
+        }
+    }
+    cut_at(text, ParseErrorKind::Unexpected)
 }
 
 fn name_arg<'i>(input: &mut Line<'i>) -> PResult<SmolStr> {
@@ -275,6 +305,15 @@ fn header_stmt<'i>(input: &mut Line<'i>) -> PResult<HeaderStmt> {
             space_after(input, "max_wait")?;
             HeaderStmt::MaxWait(argument(input, "max_wait", "an f32", float)?)
         }
+        "rig" => {
+            space_after(input, "rig")?;
+            HeaderStmt::Rig(argument(
+                input,
+                "rig",
+                "a quoted manifest path",
+                quoted_path,
+            )?)
+        }
         "muscle" => {
             space_after(input, "muscle")?;
             HeaderStmt::Muscle(argument(input, "muscle", "a name", name_arg)?)
@@ -365,6 +404,7 @@ pub fn header(input: &mut &str) -> Result<AsmHeader, AsmParseErrors> {
     let mut consumed = 0usize;
 
     let mut parsing_fixed_header = ParsingFixedHeader::default();
+    let mut rig: Option<SmolStr> = None;
     let mut muscles: Vec<SmolStr> = Vec::new();
     let mut muscle_groups: Vec<GroupDef> = Vec::new();
     let mut sensors_f: Vec<SmolStr> = Vec::new();
@@ -416,6 +456,13 @@ pub fn header(input: &mut &str) -> Result<AsmHeader, AsmParseErrors> {
                     HeaderStmt::MaxWait(value) => {
                         push_field(parsing_fixed_header.max_wait(value), location, &mut errors)
                     }
+                    HeaderStmt::Rig(path) => {
+                        let result = match rig.replace(path) {
+                            Some(_) => Err(ParseErrorKind::DuplicateField("rig")),
+                            None => Ok(()),
+                        };
+                        push_field(result, location, &mut errors);
+                    }
                     HeaderStmt::Muscle(muscle) => muscles.push(muscle),
                     HeaderStmt::Group(group_def) => muscle_groups.push(group_def),
                     HeaderStmt::Sensorf(sensor_f) => sensors_f.push(sensor_f),
@@ -443,6 +490,7 @@ pub fn header(input: &mut &str) -> Result<AsmHeader, AsmParseErrors> {
             if errors.is_empty() {
                 Ok(AsmHeader {
                     fixed,
+                    rig,
                     muscles,
                     muscle_groups,
                     sensors_f,

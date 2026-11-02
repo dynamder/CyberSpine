@@ -87,6 +87,7 @@ const FULL: &[&str] = &[
     ".clock hz = 60",
     ".fuel 4096",
     ".max_wait 600.0",
+    ".rig \"rigs/live2d.rig\"",
     ".muscle brow_l",
     ".muscle brow_r",
     ".group brows = brow_l, brow_r",
@@ -106,6 +107,7 @@ fn expected_full() -> AsmHeader {
             max_wait: 600.0,
         },
         muscles: vec![SmolStr::new("brow_l"), SmolStr::new("brow_r")],
+        rig: Some(SmolStr::new("rigs/live2d.rig")),
         muscle_groups: vec![GroupDef {
             name: SmolStr::new("brows"),
             members: vec![SmolStr::new("brow_l"), SmolStr::new("brow_r")],
@@ -510,4 +512,54 @@ fn content_after_text_marker_is_not_part_of_header() {
 ";
     let got = parse_ok(src);
     assert_eq!(got.fixed.layer, 10);
+}
+
+// ---------------------------------------------------------------------------
+// `.rig`：清单路径（`docs/asm.md` §3.4）
+// ---------------------------------------------------------------------------
+
+/// 只有 `\\` 和 `\"` 是转义；其余反斜杠必须原样写两遍。
+#[test]
+fn a_rig_path_is_a_quoted_string_with_two_escapes() {
+    let src = text(&[
+        ".layer 0",
+        ".clock hz = 60",
+        ".fuel 1",
+        ".max_wait 1.0",
+        ".rig \"rigs\\\\a\\\"b.rig\"",
+        ".text",
+    ]);
+    let got = parse_ok(&src);
+    assert_eq!(got.rig.as_deref(), Some("rigs\\a\"b.rig"));
+}
+
+#[test]
+fn a_second_rig_directive_is_rejected() {
+    let src = text(&[
+        ".layer 0",
+        ".clock hz = 60",
+        ".fuel 1",
+        ".max_wait 1.0",
+        ".rig \"a.rig\"",
+        ".rig \"b.rig\"",
+        ".text",
+    ]);
+    let errors = parse_errors(&src);
+    assert!(matches!(
+        errors[0].kind,
+        ParseErrorKind::DuplicateField("rig")
+    ));
+}
+
+#[test]
+fn an_unterminated_rig_path_is_rejected() {
+    let src = text(&[
+        ".layer 0",
+        ".clock hz = 60",
+        ".fuel 1",
+        ".max_wait 1.0",
+        ".rig \"a.rig",
+        ".text",
+    ]);
+    parse_rejected(&src);
 }
