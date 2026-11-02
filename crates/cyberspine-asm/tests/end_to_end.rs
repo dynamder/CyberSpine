@@ -1,8 +1,10 @@
-//! Source → image → host: the bytes the assembler writes are what actually run.
+//! Source → image → host: the bytes the assembler writes are what actually run,
+//! and they only run against the rig they were assembled for.
 
 use cyberspine_asm::assembler::{generate_image, parse};
+use cyberspine_core::binfmt::image::Image;
 use cyberspine_core::rig::Rig;
-use cyberspine_vm::{DummyBackend, Host, RigLayout};
+use cyberspine_vm::{DummyBackend, Host};
 
 const SOURCE: &str = r#"
 .layer 0
@@ -28,17 +30,12 @@ fn an_assembled_source_runs_and_produces_the_expected_commands() {
     let image = generate_image(&asm, &rig).expect("the source assembles");
 
     let bytes = image.to_bytes();
-    let loaded = cyberspine_core::binfmt::image::Image::from_bytes(&bytes)
-        .expect("the assembler's own output loads");
+    let loaded = Image::from_bytes(&bytes).expect("the assembler's own output loads");
 
-    let layout = RigLayout {
-        sensors_f: loaded.sensors_f.len(),
-        sensors_i: loaded.sensors_i.len(),
-        muscles: loaded.muscles.len(),
-    };
-    let mut host = Host::new(DummyBackend::new(layout));
+    let mut host = Host::new(DummyBackend::new(rig));
     host.set_tracing(true);
-    host.load(loaded).expect("the image matches its own rig");
+    host.load(loaded)
+        .expect("the backend implements the rig the image was assembled for");
 
     for _ in 0..3 {
         host.tick();

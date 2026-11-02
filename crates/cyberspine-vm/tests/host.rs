@@ -1,10 +1,17 @@
 //! The host's timing contract (`docs/isa.md` §8.4): what happens inside one
 //! tick, in what order, and what a frame may do to it.
+//!
+//! The images here are bound to the rig they are built for
+//! (`docs/isa.md` §13.3), which is what a real image does: the assembler writes
+//! the manifest's fingerprint into the header. `action` keeps the two sides in
+//! step — it emits exactly the metadata tables `generate_image` would emit for
+//! the same rig, so the fixtures stay legal images, not just acceptable ones.
 
 use cyberspine_core::binfmt::image::{Image, Sensor, SensorSource, VarF};
 use cyberspine_core::isa::register::RegId;
 use cyberspine_core::isa::{Insn, OpCode};
-use cyberspine_vm::{Call, DummyBackend, Host, LoadError, RigLayout};
+use cyberspine_core::rig::{Fingerprint, Rig};
+use cyberspine_vm::{Call, DummyBackend, Host, LoadError};
 
 fn reg(id: u8) -> RegId {
     RegId::new(id).expect("id < RegId::COUNT")
@@ -97,24 +104,54 @@ fn var_set(index: usize, ra: u8) -> Insn {
     }
 }
 
-fn action(code: Vec<Insn>, muscles: usize) -> Image {
-    let mut image = Image::new(code);
-    for index in 0..muscles {
-        image.push_muscle(&format!("m{index}"));
+/// A rig of `count` muscles named `m0`.., and no observables: the tests that do
+/// not care about sensors only ever read a muscle back.
+fn rig(count: usize) -> Rig {
+    let mut rig = Rig::new("test", 1);
+    for index in 0..count {
+        rig = rig.muscle(format!("m{index}"));
     }
+    rig
+}
+
+fn backend(rig: &Rig) -> DummyBackend {
+    DummyBackend::new(rig.clone())
+}
+
+/// An image bound to `rig`, carrying the tables the assembler would have
+/// generated for it (`docs/asm.md` §3.3).
+fn action(code: Vec<Insn>, rig: &Rig) -> Image {
+    let mut image = Image::new(code);
+    image.header.rig = rig.fingerprint();
+
+    for muscle in &rig.muscles {
+        image.push_muscle(muscle);
+    }
+    for name in &rig.sensors_f {
+        image.sensors_f.push(Sensor {
+            name: name.clone(),
+            source: SensorSource::Backend,
+        });
+    }
+    image.sensors_f.push(Sensor {
+        name: "dt".into(),
+        source: SensorSource::BuiltinDt,
+    });
+    for name in &rig.sensors_i {
+        image.sensors_i.push(Sensor {
+            name: name.clone(),
+            source: SensorSource::Backend,
+        });
+    }
+    image.sensors_i.push(Sensor {
+        name: "tick".into(),
+        source: SensorSource::BuiltinTick,
+    });
     image
 }
 
-fn rig(muscles: usize) -> DummyBackend {
-    DummyBackend::new(RigLayout {
-        sensors_f: muscles,
-        sensors_i: 0,
-        muscles,
-    })
-}
-
 /// `FEXCITE` once, `FLUSH` once, then yield forever without touching b2 again.
-fn publish_then_idle(muscle: usize, value: f32, muscles: usize) -> Image {
+fn publish_then_idle(muscle: usize, value: f32, rig: &Rig) -> Image {
     action(
         vec![
             fmovi(1, value),
@@ -123,7 +160,7 @@ fn publish_then_idle(muscle: usize, value: f32, muscles: usize) -> Image {
             yield_(),
             jump(-2),
         ],
-        muscles,
+        rig,
     )
 }
 
@@ -133,13 +170,14 @@ fn publish_then_idle(muscle: usize, value: f32, muscles: usize) -> Image {
 
 #[test]
 fn the_first_tick_sees_the_rigs_state() {
-    let mut backend = rig(1);
+    let rig = rig(1);
+    let mut backend = backend(&rig);
     backend.set_muscle(0, 0.75);
     let mut host = Host::new(backend);
 
     let id = host
-        .load(action(vec![sense(1, 0), yield_(), jump(-2)], 1))
-        .expect("same shape as the rig");
+        .load(action(vec![sense(1, 0), yield_(), jump(-2)], &rig))
+        .expect("assembled for this rig");
     host.tick();
 
     assert_eq!(
@@ -155,8 +193,10 @@ fn the_first_tick_sees_the_rigs_state() {
 
 #[test]
 fn a_tick_is_sample_commit_step_in_that_order() {
-    let mut host = Host::new(rig(0));
-    host.load(Image::new(vec![yield_(), jump(-2)])).expect("empty rig");
+    let rig = rig(0);
+    let mut host = Host::new(backend(&rig));
+    host.load(action(vec![yield_(), jump(-2)], &rig))
+        .expect("empty rig");
 
     host.tick();
 
@@ -168,10 +208,11 @@ fn a_tick_is_sample_commit_step_in_that_order() {
 
 #[test]
 fn a_terminated_instance_contributes_on_its_last_tick_only() {
-    let mut host = Host::new(rig(1));
+    let rig = rig(1);
+    let mut host = Host::new(backend(&rig));
     host.load(action(
         vec![fmovi(1, 0.5), excite(0, 1), flush(), halt()],
-        1,
+        &rig,
     ))
     .expect("same shape");
 
@@ -193,8 +234,9 @@ fn a_terminated_instance_contributes_on_its_last_tick_only() {
 
 #[test]
 fn excite_without_flush_never_reaches_the_backend() {
-    let mut host = Host::new(rig(1));
-    host.load(action(vec![fmovi(1, 0.9), excite(0, 1), halt()], 1))
+    let rig = rig(1);
+    let mut host = Host::new(backend(&rig));
+    host.load(action(vec![fmovi(1, 0.9), excite(0, 1), halt()], &rig))
         .expect("same shape");
 
     host.tick();
@@ -205,8 +247,10 @@ fn excite_without_flush_never_reaches_the_backend() {
 
 #[test]
 fn a_published_value_is_held_by_the_instance_not_the_host() {
-    let mut host = Host::new(rig(1));
-    host.load(publish_then_idle(0, 0.25, 1)).expect("same shape");
+    let rig = rig(1);
+    let mut host = Host::new(backend(&rig));
+    host.load(publish_then_idle(0, 0.25, &rig))
+        .expect("same shape");
 
     for _ in 0..3 {
         host.tick();
@@ -221,9 +265,10 @@ fn a_published_value_is_held_by_the_instance_not_the_host() {
 
 #[test]
 fn merge_is_decided_per_muscle() {
-    let mut host = Host::new(rig(2));
-    host.load(publish_then_idle(0, 0.25, 2)).expect("first");
-    host.load(publish_then_idle(1, 0.5, 2)).expect("second");
+    let rig = rig(2);
+    let mut host = Host::new(backend(&rig));
+    host.load(publish_then_idle(0, 0.25, &rig)).expect("first");
+    host.load(publish_then_idle(1, 0.5, &rig)).expect("second");
 
     host.tick();
 
@@ -236,9 +281,10 @@ fn merge_is_decided_per_muscle() {
 
 #[test]
 fn a_later_instance_of_the_same_layer_wins() {
-    let mut host = Host::new(rig(1));
-    host.load(publish_then_idle(0, 0.25, 1)).expect("first");
-    host.load(publish_then_idle(0, 0.5, 1)).expect("second");
+    let rig = rig(1);
+    let mut host = Host::new(backend(&rig));
+    host.load(publish_then_idle(0, 0.25, &rig)).expect("first");
+    host.load(publish_then_idle(0, 0.5, &rig)).expect("second");
 
     host.tick();
 
@@ -247,13 +293,14 @@ fn a_later_instance_of_the_same_layer_wins() {
 
 #[test]
 fn a_higher_layer_wins_even_when_it_was_loaded_first() {
-    let mut host = Host::new(rig(1));
+    let rig = rig(1);
+    let mut host = Host::new(backend(&rig));
 
-    let mut high = publish_then_idle(0, 0.75, 1);
+    let mut high = publish_then_idle(0, 0.75, &rig);
     high.header.layer = 2;
     host.load(high).expect("high layer");
 
-    let mut low = publish_then_idle(0, 0.25, 1);
+    let mut low = publish_then_idle(0, 0.25, &rig);
     low.header.layer = 1;
     host.load(low).expect("low layer");
 
@@ -264,13 +311,14 @@ fn a_higher_layer_wins_even_when_it_was_loaded_first() {
 
 #[test]
 fn a_higher_layer_that_publishes_nothing_does_not_shadow_a_lower_one() {
-    let mut host = Host::new(rig(1));
+    let rig = rig(1);
+    let mut host = Host::new(backend(&rig));
 
-    let mut high = action(vec![yield_(), jump(-2)], 1);
+    let mut high = action(vec![yield_(), jump(-2)], &rig);
     high.header.layer = 2;
     host.load(high).expect("high layer, silent");
 
-    let mut low = publish_then_idle(0, 0.25, 1);
+    let mut low = publish_then_idle(0, 0.25, &rig);
     low.header.layer = 1;
     host.load(low).expect("low layer, publishing");
 
@@ -285,13 +333,19 @@ fn a_higher_layer_that_publishes_nothing_does_not_shadow_a_lower_one() {
 
 #[test]
 fn a_frame_runs_exactly_the_ticks_its_time_contains() {
-    let mut host = Host::new(rig(0));
-    host.load(Image::new(vec![yield_(), jump(-2)])).expect("empty rig");
+    let rig = rig(0);
+    let mut host = Host::new(backend(&rig));
+    host.load(action(vec![yield_(), jump(-2)], &rig))
+        .expect("empty rig");
     let dt = f64::from(host.dt());
 
     host.advance(3.0 * dt);
     assert_eq!(host.now(), 3);
-    assert_eq!(host.backend().calls().len(), 9, "three ticks of three calls");
+    assert_eq!(
+        host.backend().calls().len(),
+        9,
+        "three ticks of three calls"
+    );
 
     host.advance(0.5 * dt);
     assert_eq!(host.now(), 3, "a partial tick waits in the remainder");
@@ -302,10 +356,11 @@ fn a_frame_runs_exactly_the_ticks_its_time_contains() {
 
 #[test]
 fn a_waiting_instance_is_not_resumed_early() {
-    let mut host = Host::new(rig(0));
-    let mut image = Image::new(vec![wait(0.25), imovi(1, 1), yield_(), jump(-2)]);
+    let rig = rig(0);
+    let mut host = Host::new(backend(&rig));
+    let mut image = action(vec![wait(0.25), imovi(1, 1), yield_(), jump(-2)], &rig);
     image.header.hz = 64;
-    let id = host.load(image).expect("z64 clock");
+    let id = host.load(image).expect("64 Hz image");
 
     host.tick();
     assert_eq!(
@@ -338,14 +393,18 @@ fn a_waiting_instance_is_not_resumed_early() {
 
 #[test]
 fn wait_zero_runs_once_per_tick() {
-    let mut host = Host::new(rig(0));
+    let rig = rig(0);
+    let mut host = Host::new(backend(&rig));
     let id = host
-        .load(Image::new(vec![
-            imovi(2, 1),
-            binary(OpCode::Iadd, 1, 1, 2),
-            wait(0.0),
-            jump(-3),
-        ]))
+        .load(action(
+            vec![
+                imovi(2, 1),
+                binary(OpCode::Iadd, 1, 1, 2),
+                wait(0.0),
+                jump(-3),
+            ],
+            &rig,
+        ))
         .expect("empty rig");
 
     for _ in 0..3 {
@@ -364,8 +423,10 @@ fn wait_zero_runs_once_per_tick() {
 
 #[test]
 fn a_slow_frame_drops_its_remainder_instead_of_spiralling() {
-    let mut host = Host::new(rig(0));
-    host.load(Image::new(vec![yield_(), jump(-2)])).expect("empty rig");
+    let rig = rig(0);
+    let mut host = Host::new(backend(&rig));
+    host.load(action(vec![yield_(), jump(-2)], &rig))
+        .expect("empty rig");
     host.set_max_ticks_per_frame(8);
     let dt = f64::from(host.dt());
 
@@ -382,21 +443,16 @@ fn a_slow_frame_drops_its_remainder_instead_of_spiralling() {
 
 #[test]
 fn an_excitation_is_invisible_to_the_tick_that_made_it() {
-    let mut host = Host::new(rig(1));
+    let rig = rig(1);
+    let mut host = Host::new(backend(&rig));
 
     host.load(action(
-        vec![
-            fmovi(1, 1.0),
-            excite(0, 1),
-            flush(),
-            yield_(),
-            jump(-2),
-        ],
-        1,
+        vec![fmovi(1, 1.0), excite(0, 1), flush(), yield_(), jump(-2)],
+        &rig,
     ))
     .expect("writer");
 
-    let mut reader = action(vec![sense(1, 0), var_set(0, 1), yield_(), jump(-4)], 1);
+    let mut reader = action(vec![sense(1, 0), var_set(0, 1), yield_(), jump(-4)], &rig);
     reader.vars_f.push(VarF {
         name: "seen".into(),
         init: 0.0,
@@ -420,82 +476,170 @@ fn an_excitation_is_invisible_to_the_tick_that_made_it() {
 
 #[test]
 fn a_fault_removes_only_the_faulting_instance() {
-    let mut host = Host::new(rig(0));
+    let rig = rig(0);
+    let mut host = Host::new(backend(&rig));
 
-    let mut faulty = Image::new(vec![nop(), nop(), yield_()]);
+    let mut faulty = action(vec![nop(), nop(), yield_()], &rig);
     faulty.header.fuel = 1;
     let faulty_id = host.load(faulty).expect("faulty");
 
-    let healthy_id = host.load(Image::new(vec![yield_(), jump(-2)])).expect("healthy");
+    let healthy_id = host
+        .load(action(vec![yield_(), jump(-2)], &rig))
+        .expect("healthy");
 
     host.tick();
 
-    assert!(host.instance(faulty_id).is_none(), "fuel exhaustion removed it");
+    assert!(
+        host.instance(faulty_id).is_none(),
+        "fuel exhaustion removed it"
+    );
     assert!(host.instance(healthy_id).is_some(), "the other one runs on");
 }
 
 // ---------------------------------------------------------------------------
-// Tracing and load checks
+// Observables: image the k-th backend source, the k-th backend observable
 // ---------------------------------------------------------------------------
 
 #[test]
-fn the_same_inputs_reproduce_the_same_trace() {
-    let run = || {
-        let mut host = Host::new(rig(1));
-        host.set_tracing(true);
-        host.load(publish_then_idle(0, 0.5, 1)).expect("same shape");
-        for _ in 0..4 {
-            host.tick();
-        }
-        host.trace().to_vec()
-    };
+fn the_kth_backend_source_reads_the_kth_observable() {
+    let rig = Rig::new("observe", 1)
+        .muscle("m")
+        .sensor_f("up")
+        .sensor_f("down")
+        .sensor_i("ticks");
 
-    assert_eq!(run(), run());
-    assert_eq!(run()[0].commands, vec![Some(0.5)]);
+    let mut backend = backend(&rig);
+    backend.set_sensor_f(0, 0.25);
+    backend.set_sensor_f(1, 0.75);
+    backend.set_sensor_i(0, 7);
+
+    let mut host = Host::new(backend);
+    let image = action(
+        // `sensors_f` is [m, up, down, dt] and `sensors_i` is [ticks, tick].
+        vec![
+            sense(1, 2),
+            sense(2, 3),
+            isense(3, 0),
+            yield_(),
+            jump(-5),
+            halt(),
+        ],
+        &rig,
+    );
+    Image::from_bytes(&image.to_bytes()).expect("the fixture is a legal image");
+    let id = host.load(image).expect("assembled for this rig");
+
+    host.tick();
+
+    let registers = host.instance(id).expect("suspended").registers();
+    assert_eq!(
+        registers.get_f(reg(1)),
+        0.75,
+        "sensor 2 is the second backend observable, not the second sensor"
+    );
+    assert_eq!(registers.get_f(reg(2)), host.dt(), "dt is still appended");
+    assert_eq!(registers.get_i(reg(3)), 7, "the first integer observable");
+}
+
+// ---------------------------------------------------------------------------
+// Load checks
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_image_assembled_for_another_rig_is_refused() {
+    let mine = rig(1);
+    let other = rig(2);
+    let mut host = Host::new(backend(&mine));
+
+    let error = host
+        .load(action(vec![yield_(), jump(-2)], &other))
+        .expect_err("two muscles against a one-muscle rig");
+
+    assert!(
+        matches!(
+            error,
+            LoadError::RigMismatch { declared, backend }
+                if declared == other.fingerprint() && backend == mine.fingerprint()
+        ),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
-fn an_image_that_does_not_match_the_rig_is_refused() {
-    let mut host = Host::new(rig(2));
+fn an_unbound_image_is_refused_unless_allowed() {
+    let rig = rig(1);
+    let mut unbound = action(vec![yield_(), jump(-2)], &rig);
+    unbound.header.rig = Fingerprint::UNBOUND;
 
+    let mut host = Host::new(backend(&rig));
+    let error = host.load(unbound).expect_err("no fingerprint, no proof");
+    assert!(matches!(error, LoadError::Unbound), "unexpected: {error}");
+
+    let mut host = Host::new(backend(&rig));
+    host.allow_unbound();
+    let mut unbound = action(vec![yield_(), jump(-2)], &rig);
+    unbound.header.rig = Fingerprint::UNBOUND;
+    host.load(unbound)
+        .expect("an unbound image is allowed when the host opts out");
+}
+
+#[test]
+fn an_unbound_image_still_has_to_fit_the_hosts_shape() {
+    let mut host = Host::new(backend(&rig(1)));
+    host.allow_unbound();
+
+    let mut first = action(vec![yield_(), jump(-2)], &rig(1));
+    first.header.rig = Fingerprint::UNBOUND;
+    host.load(first).expect("the first image fixes the shape");
+
+    let mut wider = action(vec![yield_(), jump(-2)], &rig(2));
+    wider.header.rig = Fingerprint::UNBOUND;
     let error = host
-        .load(action(vec![yield_(), jump(-2)], 1))
-        .expect_err("one muscle against a two-muscle rig");
+        .load(wider)
+        .expect_err("two muscles where the host holds one");
 
-    assert!(matches!(
-        error,
-        LoadError::SensorFCount {
-            declared: 1,
-            rig: 2
-        }
-    ));
+    assert!(
+        matches!(
+            error,
+            LoadError::MuscleCount {
+                declared: 2,
+                rig: 1
+            }
+        ),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
 fn images_with_different_clocks_are_refused() {
-    let mut host = Host::new(rig(0));
+    let rig = rig(0);
+    let mut host = Host::new(backend(&rig));
 
-    let mut first = Image::new(vec![yield_(), jump(-2)]);
+    let mut first = action(vec![yield_(), jump(-2)], &rig);
     first.header.hz = 60;
     host.load(first).expect("first clock");
 
-    let mut second = Image::new(vec![yield_(), jump(-2)]);
+    let mut second = action(vec![yield_(), jump(-2)], &rig);
     second.header.hz = 30;
     let error = host.load(second).expect_err("clock mismatch");
 
-    assert!(matches!(
-        error,
-        LoadError::Hz {
-            declared: 30,
-            host: 60
-        }
-    ));
+    assert!(
+        matches!(
+            error,
+            LoadError::Hz {
+                declared: 30,
+                host: 60
+            }
+        ),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
 fn a_halted_instance_is_removed_after_its_tick() {
-    let mut host = Host::new(rig(0));
-    let id = host.load(Image::new(vec![halt()])).expect("halt");
+    let rig = rig(0);
+    let mut host = Host::new(backend(&rig));
+    let id = host.load(action(vec![halt()], &rig)).expect("halt");
 
     host.tick();
 
@@ -505,22 +649,10 @@ fn a_halted_instance_is_removed_after_its_tick() {
 
 #[test]
 fn builtin_sensors_are_filled_by_the_host() {
-    let backend = DummyBackend::new(RigLayout {
-        sensors_f: 1,
-        sensors_i: 1,
-        muscles: 0,
-    });
-    let mut image = Image::new(vec![sense(1, 0), isense(2, 0), yield_(), jump(-3)]);
-    image.sensors_f.push(Sensor {
-        name: "dt".into(),
-        source: SensorSource::BuiltinDt,
-    });
-    image.sensors_i.push(Sensor {
-        name: "tick".into(),
-        source: SensorSource::BuiltinTick,
-    });
-
-    let mut host = Host::new(backend);
+    let rig = Rig::new("builtins", 1);
+    let mut host = Host::new(backend(&rig));
+    let image = action(vec![sense(1, 0), isense(2, 0), yield_(), jump(-3)], &rig);
+    // `sensors_f` is [dt] and `sensors_i` is [tick]: the rig has no observables.
     let id = host.load(image).expect("builtin rig");
 
     host.tick();
@@ -530,7 +662,28 @@ fn builtin_sensors_are_filled_by_the_host() {
 
     host.tick();
     assert_eq!(
-        host.instance(id).expect("suspended").registers().get_i(reg(2)),
+        host.instance(id)
+            .expect("suspended")
+            .registers()
+            .get_i(reg(2)),
         1
     );
+}
+
+#[test]
+fn the_same_inputs_reproduce_the_same_trace() {
+    let run = || {
+        let rig = rig(1);
+        let mut host = Host::new(backend(&rig));
+        host.set_tracing(true);
+        host.load(publish_then_idle(0, 0.5, &rig))
+            .expect("same shape");
+        for _ in 0..4 {
+            host.tick();
+        }
+        host.trace().to_vec()
+    };
+
+    assert_eq!(run(), run());
+    assert_eq!(run()[0].commands, vec![Some(0.5)]);
 }

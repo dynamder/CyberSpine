@@ -2,11 +2,17 @@
 //!
 //! This is the only place that owns `now`, load order and the command merge.
 //! The VM executes one instance at a time and never sees any of it.
+//!
+//! Before any of that, [`Host::load`] is where an image meets the body it was
+//! assembled for: the fingerprints are compared, and a mismatch is refused
+//! (`docs/isa.md` §13.3). Nothing here compares names — they became indices at
+//! assembly time.
 
 use cyberspine_core::binfmt::image::{Image, Sensor, SensorSource};
 use cyberspine_core::exec::{Instance, Program, Sensors, Status};
+use cyberspine_core::rig::Fingerprint;
 
-use crate::backend::{Backend, RigLayout, SensorValues};
+use crate::backend::{Backend, SensorValues};
 
 /// A stable handle on a loaded instance. Ids are never reused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -21,6 +27,13 @@ pub struct Tick {
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoadError {
+    #[error("the image was assembled for rig {declared}, this backend implements {backend}")]
+    RigMismatch {
+        declared: Fingerprint,
+        backend: Fingerprint,
+    },
+    #[error("the image carries no rig fingerprint; call `Host::allow_unbound` to load it anyway")]
+    Unbound,
     #[error("image declares {declared} float sensors, the rig provides {rig}")]
     SensorFCount { declared: usize, rig: usize },
     #[error("image declares {declared} integer sensors, the rig provides {rig}")]
@@ -31,9 +44,35 @@ pub enum LoadError {
     Hz { declared: u32, host: u32 },
 }
 
+/// How big the loaded image is, in the three numbers the host needs: the merge
+/// vector, and the two buffers a backend fills.
+///
+/// A backend does not declare these (`docs/isa.md` §9.2) — the image does, and
+/// every image loaded here shares one fingerprint, so it declares the same
+/// shape every time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Scale {
+    muscles: usize,
+    sensors_f: usize,
+    sensors_i: usize,
+}
+
+impl Scale {
+    fn of(image: &Image) -> Self {
+        let backend = |sensor: &&Sensor| sensor.source == SensorSource::Backend;
+        Self {
+            muscles: image.muscles.len(),
+            sensors_f: image.sensors_f.iter().filter(backend).count(),
+            sensors_i: image.sensors_i.iter().filter(backend).count(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum SourceF {
-    Backend,
+    /// The k-th `SensorSource::Backend` entry in `sensors_f`.
+    Backend(usize),
+    /// The k-th `SensorSource::Muscle` entry: that muscle's read-back.
     Muscle(usize),
     Dt,
     Tick,
@@ -41,7 +80,8 @@ enum SourceF {
 
 #[derive(Debug, Clone, Copy)]
 enum SourceI {
-    Backend,
+    /// The k-th `SensorSource::Backend` entry in `sensors_i`.
+    Backend(usize),
     Tick,
 }
 
@@ -57,17 +97,10 @@ struct Slot {
 }
 
 impl Slot {
-    fn fill<B: Backend>(
-        &mut self,
-        backend: &B,
-        rig_f: &[f32],
-        rig_i: &[i32],
-        now: u64,
-        dt: f32,
-    ) {
+    fn fill<B: Backend>(&mut self, backend: &B, rig_f: &[f32], rig_i: &[i32], now: u64, dt: f32) {
         for (index, source) in self.plan_f.iter().enumerate() {
             self.sensors_f[index] = match *source {
-                SourceF::Backend => rig_f[index],
+                SourceF::Backend(observable) => rig_f[observable],
                 SourceF::Muscle(muscle) => backend.muscle(muscle),
                 SourceF::Dt => dt,
                 SourceF::Tick => now as i32 as f32,
@@ -75,7 +108,7 @@ impl Slot {
         }
         for (index, source) in self.plan_i.iter().enumerate() {
             self.sensors_i[index] = match *source {
-                SourceI::Backend => rig_i[index],
+                SourceI::Backend(observable) => rig_i[observable],
                 SourceI::Tick => now as i32,
             };
         }
@@ -85,11 +118,12 @@ impl Slot {
 /// Several instances over one rig, advanced together.
 pub struct Host<B: Backend> {
     backend: B,
-    layout: RigLayout,
+    scale: Option<Scale>,
     slots: Vec<Slot>,
     merge_order: Vec<usize>,
     rig_f: Vec<f32>,
     rig_i: Vec<i32>,
+    allow_unbound: bool,
     now: u64,
     hz: Option<u32>,
     dt: f32,
@@ -103,14 +137,14 @@ pub struct Host<B: Backend> {
 
 impl<B: Backend> Host<B> {
     pub fn new(backend: B) -> Self {
-        let layout = backend.layout();
         Self {
-            rig_f: vec![0.0; layout.sensors_f],
-            rig_i: vec![0; layout.sensors_i],
             backend,
-            layout,
+            scale: None,
             slots: Vec::new(),
             merge_order: Vec::new(),
+            rig_f: Vec::new(),
+            rig_i: Vec::new(),
+            allow_unbound: false,
             now: 0,
             hz: None,
             dt: 0.0,
@@ -123,29 +157,18 @@ impl<B: Backend> Host<B> {
         }
     }
 
-    /// Load one action. The image must be assembled for this rig: same sensor
-    /// counts, same muscle count, same clock. Names become indices at assembly
-    /// time; nothing here compares strings.
+    /// Load one action.
+    ///
+    /// The image must have been assembled for this backend's rig: equal
+    /// fingerprints, hence equal shape and clock. Names became indices at
+    /// assembly time; nothing here compares strings.
+    ///
+    /// An image assembled without a rig carries [`Fingerprint::UNBOUND`] and is
+    /// refused, because nothing ties it to this body. Tests and firmware that
+    /// never see a host may opt out with [`Host::allow_unbound`].
     pub fn load(&mut self, image: Image) -> Result<InstanceId, LoadError> {
-        let layout = self.layout;
-        if image.sensors_f.len() != layout.sensors_f {
-            return Err(LoadError::SensorFCount {
-                declared: image.sensors_f.len(),
-                rig: layout.sensors_f,
-            });
-        }
-        if image.sensors_i.len() != layout.sensors_i {
-            return Err(LoadError::SensorICount {
-                declared: image.sensors_i.len(),
-                rig: layout.sensors_i,
-            });
-        }
-        if image.muscles.len() != layout.muscles {
-            return Err(LoadError::MuscleCount {
-                declared: image.muscles.len(),
-                rig: layout.muscles,
-            });
-        }
+        self.check_rig(&image)?;
+        self.fit_scale(&image)?;
 
         let hz = image.header.hz;
         match self.hz {
@@ -154,28 +177,13 @@ impl<B: Backend> Host<B> {
                 self.dt = 1.0 / hz as f32;
             }
             Some(host) if host != hz => {
-                return Err(LoadError::Hz {
-                    declared: hz,
-                    host,
-                });
+                return Err(LoadError::Hz { declared: hz, host });
             }
             Some(_) => {}
         }
 
-        let plan_f = image
-            .sensors_f
-            .iter()
-            .enumerate()
-            .map(|(index, sensor)| float_source(index, sensor))
-            .collect();
-        let plan_i = image
-            .sensors_i
-            .iter()
-            .map(|sensor| match sensor.source {
-                SensorSource::BuiltinTick => SourceI::Tick,
-                _ => SourceI::Backend,
-            })
-            .collect();
+        let plan_f = float_plan(&image.sensors_f);
+        let plan_i = int_plan(&image.sensors_i);
 
         let instance = {
             let program = Program::new(&image);
@@ -187,15 +195,24 @@ impl<B: Backend> Host<B> {
         self.slots.push(Slot {
             id,
             layer: image.header.layer,
+            sensors_f: vec![0.0; image.sensors_f.len()],
+            sensors_i: vec![0; image.sensors_i.len()],
             image,
             instance,
-            sensors_f: vec![0.0; layout.sensors_f],
-            sensors_i: vec![0; layout.sensors_i],
             plan_f,
             plan_i,
         });
         self.rebuild_merge_order();
         Ok(id)
+    }
+
+    /// Accept an image that was assembled without a rig.
+    ///
+    /// Only for paths that legitimately have no rig: tests, and firmware that
+    /// runs hand-built images. A real host must not call this — it is what makes
+    /// "this action was built for this body" a machine check.
+    pub fn allow_unbound(&mut self) {
+        self.allow_unbound = true;
     }
 
     /// One tick: sample, resume everything due, merge, hand over, step.
@@ -297,6 +314,57 @@ impl<B: Backend> Host<B> {
         self.max_ticks_per_frame = ticks.max(1);
     }
 
+    /// The image's fingerprint against the backend's: equal, or refused.
+    ///
+    /// An all-zero fingerprint means the image has no rig at all, which is a
+    /// different failure from a mismatch — it says "unbound", not "another
+    /// body", and only an explicit opt-out lets it through.
+    fn check_rig(&self, image: &Image) -> Result<(), LoadError> {
+        let declared = image.header.rig;
+        let backend = self.backend.fingerprint();
+        if declared == backend {
+            return Ok(());
+        }
+        if declared.is_unbound() {
+            return if self.allow_unbound {
+                Ok(())
+            } else {
+                Err(LoadError::Unbound)
+            };
+        }
+        Err(LoadError::RigMismatch { declared, backend })
+    }
+
+    /// The first image fixes the shape of everything the host allocates.
+    ///
+    /// Later images only have to agree with it. With equal fingerprints they
+    /// always do; this check is what an unbound image (which proves nothing
+    /// about its shape) is measured against.
+    fn fit_scale(&mut self, image: &Image) -> Result<(), LoadError> {
+        let scale = Scale::of(image);
+        match self.scale {
+            None => {
+                self.rig_f = vec![0.0; scale.sensors_f];
+                self.rig_i = vec![0; scale.sensors_i];
+                self.scale = Some(scale);
+                Ok(())
+            }
+            Some(host) if scale.sensors_f != host.sensors_f => Err(LoadError::SensorFCount {
+                declared: scale.sensors_f,
+                rig: host.sensors_f,
+            }),
+            Some(host) if scale.sensors_i != host.sensors_i => Err(LoadError::SensorICount {
+                declared: scale.sensors_i,
+                rig: host.sensors_i,
+            }),
+            Some(host) if scale.muscles != host.muscles => Err(LoadError::MuscleCount {
+                declared: scale.muscles,
+                rig: host.muscles,
+            }),
+            Some(_) => Ok(()),
+        }
+    }
+
     fn sample(&mut self) {
         let mut values = SensorValues {
             f: &mut self.rig_f,
@@ -331,7 +399,8 @@ impl<B: Backend> Host<B> {
     }
 
     fn merge(&self) -> Vec<Option<f32>> {
-        let mut merged = vec![None; self.layout.muscles];
+        let muscles = self.scale.map_or(0, |scale| scale.muscles);
+        let mut merged = vec![None; muscles];
         for &index in &self.merge_order {
             let instance = &self.slots[index].instance;
             for (muscle, slot) in merged.iter_mut().enumerate() {
@@ -360,11 +429,41 @@ impl<B: Backend> Host<B> {
     }
 }
 
-fn float_source(index: usize, sensor: &Sensor) -> SourceF {
-    match sensor.source {
-        SensorSource::Muscle => SourceF::Muscle(index),
-        SensorSource::Backend => SourceF::Backend,
-        SensorSource::BuiltinDt => SourceF::Dt,
-        SensorSource::BuiltinTick => SourceF::Tick,
-    }
+/// The k-th `Backend` entry of `sensors_f` is the backend's k-th observable
+/// (`docs/isa.md` §9.2), whatever the read-back and built-in entries around it.
+fn float_plan(sensors: &[Sensor]) -> Vec<SourceF> {
+    let mut backends = 0usize;
+    let mut muscles = 0usize;
+    sensors
+        .iter()
+        .map(|sensor| match sensor.source {
+            SensorSource::Muscle => {
+                let muscle = muscles;
+                muscles += 1;
+                SourceF::Muscle(muscle)
+            }
+            SensorSource::Backend => {
+                let observable = backends;
+                backends += 1;
+                SourceF::Backend(observable)
+            }
+            SensorSource::BuiltinDt => SourceF::Dt,
+            SensorSource::BuiltinTick => SourceF::Tick,
+        })
+        .collect()
+}
+
+fn int_plan(sensors: &[Sensor]) -> Vec<SourceI> {
+    let mut backends = 0usize;
+    sensors
+        .iter()
+        .map(|sensor| match sensor.source {
+            SensorSource::BuiltinTick => SourceI::Tick,
+            _ => {
+                let observable = backends;
+                backends += 1;
+                SourceI::Backend(observable)
+            }
+        })
+        .collect()
 }
