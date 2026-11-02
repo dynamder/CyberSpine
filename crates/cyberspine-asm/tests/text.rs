@@ -819,19 +819,23 @@ fn empty_instruction_section_yields_no_items() {
 // 8. 存疑：规范没写清的，先挂起来，不制造假红
 // ---------------------------------------------------------------------------
 
-/// §1 只说「数字允许 `_` 分隔（`1_000_000`）」，例子是整数；浮点是否含 `_`
-/// 没定义。winnow 的 `float` 不接受 `_`，所以这一条等了才决定要不要自己写 lexer。
+/// §1: `_` separates digits in integer literals only. The rule is a language
+/// rule, not whatever the float parser happens to do, so it is pinned here —
+/// including for the `0x` bit-pattern form.
 #[test]
-#[ignore = "docs/asm.md §1 未定义浮点是否允许 _ 分隔符"]
-fn float_underscore_separators_are_allowed() {
-    assert_eq!(imm_f32("FMOVI f1, 1_000.5"), 1000.5);
+fn float_underscore_separators_are_rejected() {
+    for source in ["FMOVI f1, 1_000.5", "FMOVI f1, 0x3F80_0000"] {
+        assert!(
+            text_of(source).is_err(),
+            "{source:?} must be rejected: floats have no digit separators"
+        );
+    }
+    // The integer form keeps its separators.
+    assert_eq!(imm_i32("IMOVI i1, 1_000"), 1000);
 }
 
-/// §1/§2 没提 CRLF。注意 winnow 的 `space0` 只吃空格和制表符
-/// （`AsChar::is_space` 的文档原文是 "Tests that self is ASCII space or tab"），
-/// 所以 `\r` 会留在行尾把 `eof` 顶掉。
+/// §2: `\r\n` is accepted wherever `\n` is.
 #[test]
-#[ignore = "docs/asm.md §1/§2 未规定 CRLF 行尾是否接受"]
 fn crlf_line_endings_are_accepted() {
     let source = ".layer 1\r\n.clock hz = 1\r\n.fuel 1\r\n.max_wait 1.0\r\n.text\r\nHALT\r\n";
     let mut cursor = source;

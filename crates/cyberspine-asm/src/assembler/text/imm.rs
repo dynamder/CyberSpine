@@ -107,6 +107,13 @@ pub(crate) fn imm_float(input: &mut Line<'_>) -> PResult<f32> {
 fn parse_float(token: &str) -> Option<f32> {
     let (negative, body) = split_sign(token);
 
+    // `docs/asm.md` §1: `_` separates digits in *integer* literals only. Refused
+    // explicitly rather than left to `f32::from_str`, so the rule is a property
+    // of the language instead of an accident of the parser underneath.
+    if body.contains('_') {
+        return None;
+    }
+
     for prefix in ["0x", "0X"] {
         if let Some(digits) = body.strip_prefix(prefix) {
             let bits = u32::from_str_radix(digits, 16).ok()?;
