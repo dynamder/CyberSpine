@@ -2,100 +2,18 @@
 //! `WAIT`, `FLUSH`, suspension and the pure-function guarantee.
 
 use cyberspine_core::binfmt::image::{Image, Sensor, SensorSource, VarF, VarI};
-use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::exec::{Fault, Instance, Program, Sensors, Status, Step};
 use cyberspine_core::isa::clock::Hz;
 use cyberspine_core::isa::register::RegId;
 use cyberspine_core::isa::{Insn, OpCode, math};
 use cyberspine_core::rig::Name;
+use cyberspine_testkit::{
+    binary, compare, fmovi, halt, image, imovi, jump, no_sensors, nop, reg, ternary, unary,
+    verified, wait,
+};
 
 fn n(text: &str) -> Name {
     Name::new(text).expect("test fixture name")
-}
-
-fn reg(id: u8) -> RegId {
-    RegId::new(id).expect("id < RegId::COUNT")
-}
-
-fn no_sensors() -> Sensors<'static> {
-    Sensors::new(&[], &[])
-}
-
-fn halt() -> Insn {
-    Insn::new(OpCode::Halt)
-}
-
-fn nop() -> Insn {
-    Insn::new(OpCode::Nop)
-}
-
-fn fmovi(rd: u8, value: f32) -> Insn {
-    Insn {
-        rd: reg(rd),
-        imm: value.to_bits(),
-        ..Insn::new(OpCode::Fmovi)
-    }
-}
-
-fn imovi(rd: u8, value: i32) -> Insn {
-    Insn {
-        rd: reg(rd),
-        imm: value as u32,
-        ..Insn::new(OpCode::Imovi)
-    }
-}
-
-fn unary(op: OpCode, rd: u8, ra: u8) -> Insn {
-    Insn {
-        rd: reg(rd),
-        ra: reg(ra),
-        ..Insn::new(op)
-    }
-}
-
-fn binary(op: OpCode, rd: u8, ra: u8, rb: u8) -> Insn {
-    Insn {
-        rd: reg(rd),
-        ra: reg(ra),
-        rb: reg(rb),
-        ..Insn::new(op)
-    }
-}
-
-fn ternary(op: OpCode, rd: u8, ra: u8, rb: u8, rc: u8) -> Insn {
-    Insn {
-        rd: reg(rd),
-        ra: reg(ra),
-        rb: reg(rb),
-        rc: reg(rc),
-        ..Insn::new(op)
-    }
-}
-
-fn compare(op: OpCode, ra: u8, rb: u8) -> Insn {
-    Insn {
-        ra: reg(ra),
-        rb: reg(rb),
-        ..Insn::new(op)
-    }
-}
-
-fn jump(off: i32) -> Insn {
-    Insn {
-        imm: off as u32,
-        ..Insn::new(OpCode::Jmp)
-    }
-}
-
-fn wait(seconds: f32) -> Insn {
-    Insn {
-        imm: seconds.to_bits(),
-        ..Insn::new(OpCode::Wait)
-    }
-}
-
-fn image(code: Vec<Insn>) -> Image {
-    Image::new(code)
 }
 
 fn fed(code: Vec<Insn>, fuel: u32) -> Image {
@@ -108,10 +26,6 @@ fn clocked(code: Vec<Insn>, hz: u32) -> Image {
     let mut image = Image::new(code);
     image.header.hz = Hz::new(hz).expect("test fixture rate");
     image
-}
-
-fn verified(image: Image) -> VerifiedImage {
-    VerifiedImage::verify(image).expect("the fixture is a legal image")
 }
 
 // ---------------------------------------------------------------------------

@@ -18,3 +18,4 @@ thiserror = { version = "2.0.21", default-features = false }
 # The integration tests under `tests/` are ordinary std crates: they hash bytes
 # themselves, so they use the default (std) build of blake3.
 blake3 = "1.8.7"
+cyberspine-testkit = { path = "../cyberspine-testkit" }
