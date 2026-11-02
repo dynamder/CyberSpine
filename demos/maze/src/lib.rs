@@ -22,7 +22,7 @@ pub const MAX_TICKS: u64 = 600;
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("the rig manifest is invalid: {0}")]
-    Manifest(#[from] cyberspine_rig::ManifestError),
+    Manifest(#[from] cyberspine_manifest::ManifestError),
     #[error("the program does not parse:\n{0}")]
     Parse(#[from] AsmParseErrors),
     #[error("the program does not assemble: {0}")]
@@ -57,7 +57,7 @@ impl Session {
     /// Assemble `source` against `manifest`, then load the image into a fresh
     /// body. The fingerprints must agree or `Host::load` refuses the image.
     pub fn open(source: &str, manifest: &str) -> Result<Self, Error> {
-        let rig = cyberspine_rig::from_json(manifest)?;
+        let rig = cyberspine_manifest::from_json(manifest)?;
         let image = assemble(source, &rig)?;
 
         let mut host = Host::new(MazeBackend::new());

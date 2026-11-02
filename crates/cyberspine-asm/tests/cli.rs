@@ -90,7 +90,7 @@ fn stderr(output: &Output) -> String {
 }
 
 fn rig_of(text: &str) -> Rig {
-    cyberspine_rig::from_json(text).expect("the test manifest is valid")
+    cyberspine_manifest::from_json(text).expect("the test manifest is valid")
 }
 
 /// The image the source is supposed to produce, straight from the library.

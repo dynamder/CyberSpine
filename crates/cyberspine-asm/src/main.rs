@@ -115,7 +115,7 @@ fn load_rig(cli_args: &CliArgs, asm: &Asm) -> Result<Rig, String> {
         )
     })?;
 
-    cyberspine_rig::from_json(&text)
+    cyberspine_manifest::from_json(&text)
         .map_err(|error| format!("{}: error: {error}\n", path.display()))
 }
 

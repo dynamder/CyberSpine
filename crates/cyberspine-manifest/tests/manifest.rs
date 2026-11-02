@@ -1,7 +1,7 @@
 //! The manifest is the assembler's only view of the body; a typo here must fail
 //! at build time, not produce a silently wrong action.
 
-use cyberspine_rig::{ManifestError, Name, Rig, RigError, RigTable, from_json};
+use cyberspine_manifest::{ManifestError, Name, Rig, RigError, RigTable, from_json};
 
 const GOOD: &str = r#"{
   "rig": { "name": "live2d-standard", "version": 1 },

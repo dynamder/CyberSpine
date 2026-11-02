@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 cyberspine-asm = { path = "../../crates/cyberspine-asm" }
 cyberspine-core = { path = "../../crates/cyberspine-core" }
-cyberspine-rig = { path = "../../crates/cyberspine-rig" }
+cyberspine-manifest = { path = "../../crates/cyberspine-manifest" }
 cyberspine-vm = { path = "../../crates/cyberspine-vm" }
 thiserror = "2.0.21"
 

@@ -9,7 +9,7 @@ use cyberspine_vm::{Host, LoadError};
 
 #[test]
 fn the_manifest_and_the_code_declare_the_same_rig() {
-    let manifest = cyberspine_rig::from_json(MANIFEST).expect("the shipped manifest parses");
+    let manifest = cyberspine_manifest::from_json(MANIFEST).expect("the shipped manifest parses");
     assert_eq!(manifest, rig());
     assert_eq!(manifest.fingerprint(), rig().fingerprint());
 }
@@ -40,7 +40,7 @@ fn the_program_walks_the_maze_to_the_goal() {
 
 #[test]
 fn the_assembled_bytes_load_and_run() {
-    let rig = cyberspine_rig::from_json(MANIFEST).expect("the shipped manifest parses");
+    let rig = cyberspine_manifest::from_json(MANIFEST).expect("the shipped manifest parses");
     let bytes = assemble(SOURCE, &rig)
         .expect("the shipped source assembles")
         .to_bytes();

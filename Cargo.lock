@@ -7,7 +7,7 @@ name = "agents-dev-cli"
 version = "0.1.0"
 dependencies = [
  "clap",
- "cyberspine-rig",
+ "cyberspine-manifest",
  "cyberspine-vm",
  "thiserror",
 ]
@@ -198,7 +198,7 @@ dependencies = [
  "annotate-snippets",
  "clap",
  "cyberspine-core",
- "cyberspine-rig",
+ "cyberspine-manifest",
  "cyberspine-store",
  "cyberspine-testkit",
  "cyberspine-vm",
@@ -223,7 +223,7 @@ version = "0.1.0"
 dependencies = [
  "cyberspine-asm",
  "cyberspine-core",
- "cyberspine-rig",
+ "cyberspine-manifest",
  "cyberspine-vm",
  "thiserror",
 ]
@@ -236,7 +236,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cyberspine-rig"
+name = "cyberspine-manifest"
 version = "0.1.0"
 dependencies = [
  "cyberspine-core",

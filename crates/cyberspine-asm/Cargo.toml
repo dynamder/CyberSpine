@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 winnow = "1.0.4"
 cyberspine-core = { path = "../cyberspine-core" }
-cyberspine-rig = { path = "../cyberspine-rig" }
+cyberspine-manifest = { path = "../cyberspine-manifest" }
 cyberspine-store = { path = "../cyberspine-store" }
 clap = { version = "4.6.7", features = ["derive"] }
 thiserror = "2.0.21"

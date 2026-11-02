@@ -63,7 +63,7 @@ enum Error {
     #[error("{path}: {source}")]
     Manifest {
         path: PathBuf,
-        source: cyberspine_rig::ManifestError,
+        source: cyberspine_manifest::ManifestError,
     },
     #[error("{path}: {source}")]
     Image {
@@ -97,7 +97,7 @@ fn run_image(path: &Path, rig_path: &Path, ticks: u32) -> Result<(), Error> {
         path: rig_path.to_path_buf(),
         source,
     })?;
-    let rig = cyberspine_rig::from_json(&manifest).map_err(|source| Error::Manifest {
+    let rig = cyberspine_manifest::from_json(&manifest).map_err(|source| Error::Manifest {
         path: rig_path.to_path_buf(),
         source,
     })?;

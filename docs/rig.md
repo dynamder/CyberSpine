@@ -3,7 +3,7 @@
 状态：v1
 依赖：[`isa.md`](isa.md) §13（rig、装配期绑定、指纹）、[`binfmt.md`](binfmt.md) §4（头段字段）、[`asm.md`](asm.md) §3.2（`.rig`）
 
-> **实现状态（2026-11）**：全部落地。`core::rig`（类型 + 指纹）、`cyberspine-rig`（JSON 解析）、汇编器按 manifest 生成表并把指纹写进头段、`cyinea --rig`、宿主的 `Backend::fingerprint()` 与加载期比对（含 `Host::allow_unbound`）。本文件描述的就是现状。
+> **实现状态（2026-11）**：全部落地。`cyberspine-rig`（类型 + 指纹）、`cyberspine-manifest`（JSON 解析）、汇编器按 manifest 生成表并把指纹写进头段、`cyinea --rig`、宿主的 `Backend::fingerprint()` 与加载期比对（含 `Host::allow_unbound`）。本文件描述的就是现状。
 
 ---
 
