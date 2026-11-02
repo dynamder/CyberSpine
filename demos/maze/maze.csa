@@ -13,9 +13,9 @@
 #   no marker  -> keep going straight
 #   goal       -> stop
 #
-# The only names this program knows are the ones in maze.rig.
+# The only names this program knows are the ones in maze.rig.json.
 
-.rig      "maze.rig"      # the body this action is assembled for
+.rig      "maze.rig.json" # the body this action is assembled for
 
 # hz is the control-loop rate: one tick is 1/4 s, which is also what the
 # viewer uses to pace the animation.

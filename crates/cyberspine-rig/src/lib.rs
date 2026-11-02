@@ -13,6 +13,9 @@
 //!   "sensors_i": ["gaze_lock"]
 //! }
 //! ```
+//!
+//! A manifest is named `<name>.rig.json` by convention: `.rig` names the
+//! assembler directive, and `.json` is what makes editors highlight it.
 
 pub mod manifest;
 

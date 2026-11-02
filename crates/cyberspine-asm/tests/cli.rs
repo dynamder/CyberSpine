@@ -24,7 +24,7 @@ const SOURCE: &str = "\
 .fuel 4096
 .max_wait 600.0
 
-.rig \"greet.rig\"
+.rig \"greet.rig.json\"
 
 .group brows = brow_l
 
@@ -113,7 +113,7 @@ fn expected_image(manifest: &str) -> Image {
 fn a_source_is_assembled_into_the_requested_file() {
     let dir = scratch("output");
     let source = write_source(&dir, "greet.csa", SOURCE);
-    write_manifest(&dir, "greet.rig", MANIFEST);
+    write_manifest(&dir, "greet.rig.json", MANIFEST);
     let target = dir.join("greet.csp");
 
     let output = run(vec![
@@ -140,7 +140,7 @@ fn a_source_is_assembled_into_the_requested_file() {
     );
     assert_eq!(
         entries(&dir),
-        vec!["greet.csa", "greet.csp", "greet.rig"],
+        vec!["greet.csa", "greet.csp", "greet.rig.json"],
         "no temporary file is left"
     );
 }
@@ -149,20 +149,23 @@ fn a_source_is_assembled_into_the_requested_file() {
 fn the_default_output_replaces_the_extension() {
     let dir = scratch("default-output");
     let source = write_source(&dir, "greet.csa", SOURCE);
-    write_manifest(&dir, "greet.rig", MANIFEST);
+    write_manifest(&dir, "greet.rig.json", MANIFEST);
 
     let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(dir.join("greet.csp").exists());
-    assert_eq!(entries(&dir), vec!["greet.csa", "greet.csp", "greet.rig"]);
+    assert_eq!(
+        entries(&dir),
+        vec!["greet.csa", "greet.csp", "greet.rig.json"]
+    );
 }
 
 #[test]
 fn a_bare_output_name_lands_in_the_working_directory() {
     let dir = scratch("relative-output");
     let source = write_source(&dir, "greet.csa", SOURCE);
-    write_manifest(&dir, "greet.rig", MANIFEST);
+    write_manifest(&dir, "greet.rig.json", MANIFEST);
 
     // `-o out.csp` has no parent directory at all, which is the one path where
     // the temporary file's parent has to default to `.`.
@@ -179,7 +182,10 @@ fn a_bare_output_name_lands_in_the_working_directory() {
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(dir.join("out.csp").exists());
-    assert_eq!(entries(&dir), vec!["greet.csa", "greet.rig", "out.csp"]);
+    assert_eq!(
+        entries(&dir),
+        vec!["greet.csa", "greet.rig.json", "out.csp"]
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -191,7 +197,7 @@ fn a_bare_output_name_lands_in_the_working_directory() {
 fn a_relative_manifest_is_resolved_against_the_source_not_the_cwd() {
     let dir = scratch("relative-manifest");
     let source = write_source(&dir, "greet.csa", SOURCE);
-    write_manifest(&dir, "greet.rig", MANIFEST);
+    write_manifest(&dir, "greet.rig.json", MANIFEST);
     let elsewhere = scratch("relative-manifest-cwd");
 
     let output = Command::new(env!("CARGO_BIN_EXE_cyinea"))
@@ -209,8 +215,8 @@ fn a_relative_manifest_is_resolved_against_the_source_not_the_cwd() {
 fn the_rig_flag_overrides_the_directive() {
     let dir = scratch("rig-override");
     let source = write_source(&dir, "greet.csa", SOURCE);
-    write_manifest(&dir, "greet.rig", MANIFEST);
-    let other = write_manifest(&dir, "other.rig", MANIFEST_OTHER);
+    write_manifest(&dir, "greet.rig.json", MANIFEST);
+    let other = write_manifest(&dir, "other.rig.json", MANIFEST_OTHER);
     let target = dir.join("greet.csp");
 
     let output = run(vec![
@@ -287,18 +293,18 @@ fn a_missing_manifest_file_is_reported() {
 fn a_broken_manifest_is_reported_against_its_own_path() {
     let dir = scratch("broken-manifest");
     let source = write_source(&dir, "greet.csa", SOURCE);
-    write_manifest(&dir, "greet.rig", "{\"rig\": {\"name\": \"g\"}}");
+    write_manifest(&dir, "greet.rig.json", "{\"rig\": {\"name\": \"g\"}}");
 
     let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
 
     assert_eq!(output.status.code(), Some(1));
     assert!(
-        stderr(&output).contains("greet.rig"),
+        stderr(&output).contains("greet.rig.json"),
         "the manifest path is named, not the source: {}",
         stderr(&output)
     );
     assert!(!dir.join("greet.csp").exists(), "nothing is written");
-    assert_eq!(entries(&dir), vec!["greet.csa", "greet.rig"]);
+    assert_eq!(entries(&dir), vec!["greet.csa", "greet.rig.json"]);
 }
 
 // ---------------------------------------------------------------------------
@@ -335,14 +341,14 @@ fn a_generation_error_produces_no_file() {
 .clock hz = 60
 .fuel 4096
 .max_wait 600.0
-.rig \"greet.rig\"
+.rig \"greet.rig.json\"
 .text
     FMOVI   f1, 1.0
     FEXCITE brow_l, f1
     HALT
 ",
     );
-    write_manifest(&dir, "greet.rig", MANIFEST);
+    write_manifest(&dir, "greet.rig.json", MANIFEST);
 
     let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
 
@@ -353,14 +359,14 @@ fn a_generation_error_produces_no_file() {
         stderr(&output)
     );
     assert!(!dir.join("pending.csp").exists(), "nothing is written");
-    assert_eq!(entries(&dir), vec!["greet.rig", "pending.csa"]);
+    assert_eq!(entries(&dir), vec!["greet.rig.json", "pending.csa"]);
 }
 
 #[test]
 fn an_unwritable_destination_is_reported() {
     let dir = scratch("unwritable");
     let source = write_source(&dir, "greet.csa", SOURCE);
-    write_manifest(&dir, "greet.rig", MANIFEST);
+    write_manifest(&dir, "greet.rig.json", MANIFEST);
     let target = dir.join("no-such-dir").join("greet.csp");
 
     let output = run(vec![
@@ -379,7 +385,7 @@ fn an_unwritable_destination_is_reported() {
     assert!(!target.exists());
     assert_eq!(
         entries(&dir),
-        vec!["greet.csa", "greet.rig"],
+        vec!["greet.csa", "greet.rig.json"],
         "no temporary file is left"
     );
 }
@@ -388,7 +394,7 @@ fn an_unwritable_destination_is_reported() {
 fn an_existing_output_is_replaced() {
     let dir = scratch("replace");
     let source = write_source(&dir, "greet.csa", SOURCE);
-    write_manifest(&dir, "greet.rig", MANIFEST);
+    write_manifest(&dir, "greet.rig.json", MANIFEST);
     let target = dir.join("greet.csp");
     fs::write(&target, b"stale bytes").expect("seed the old output");
 
@@ -410,7 +416,7 @@ fn an_existing_output_is_replaced() {
 fn the_source_file_is_never_overwritten() {
     let dir = scratch("source-guard");
     let source = write_source(&dir, "greet.csa", SOURCE);
-    write_manifest(&dir, "greet.rig", MANIFEST);
+    write_manifest(&dir, "greet.rig.json", MANIFEST);
     let before = fs::read(&source).expect("read the source");
 
     let output = run(vec![
@@ -427,7 +433,7 @@ fn the_source_file_is_never_overwritten() {
         stderr(&output)
     );
     assert_eq!(fs::read(&source).expect("read the source"), before);
-    assert_eq!(entries(&dir), vec!["greet.csa", "greet.rig"]);
+    assert_eq!(entries(&dir), vec!["greet.csa", "greet.rig.json"]);
 }
 
 #[test]

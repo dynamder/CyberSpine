@@ -10,7 +10,7 @@
 - `@` → 停下
 
 动作程序是 [`maze.csa`](maze.csa)，身体是 [`src/backend.rs`](src/backend.rs) 里的 `MazeBackend`，
-两者共享的名字表是 [`maze.rig`](maze.rig)。
+两者共享的名字表是 [`maze.rig.json`](maze.rig.json)。
 
 ## 这个 demo 展示的工作方式
 

@@ -3,7 +3,7 @@
 //! The host asks this type for three things per tick: a snapshot of what the
 //! runner senses, the commands the program published, and one step of the
 //! world. The grid, the walls and the position never leave this side; the
-//! program only sees the names in `maze.rig`.
+//! program only sees the names in `maze.rig.json`.
 
 use cyberspine_core::rig::{Fingerprint, Rig};
 use cyberspine_vm::{Backend, Snapshot};
@@ -100,8 +100,8 @@ impl SensorI {
     }
 }
 
-/// The backend's declaration of the body. `maze.rig` is the assembler's copy;
-/// the two are hashed independently and the host refuses a mismatch.
+/// The backend's declaration of the body. `maze.rig.json` is the assembler's
+/// copy; the two are hashed independently and the host refuses a mismatch.
 pub fn rig() -> Rig {
     let mut rig = Rig::new(RIG_NAME, RIG_VERSION);
     for muscle in Muscle::ALL {

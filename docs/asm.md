@@ -62,7 +62,7 @@ instr  ::= mnemonic operand ("," operand)*
 ### 3.2 rig 与名字
 
 ```asm
-.rig "rigs/live2d-standard.rig"      # JSON manifest，路径相对本文件
+.rig "rigs/live2d-standard.rig.json" # JSON manifest，路径相对本文件
 
 .group   brows = brow_l, brow_r      # 汇编期展开；只在 FEXCITE 位置可用
 .var_f   phase = 0.0                 # 实例变量，f32
@@ -70,7 +70,7 @@ instr  ::= mnemonic operand ("," operand)*
 ```
 
 - **肌肉和可观测量的声明不在源码里**。它们由 manifest 提供（[`rig.md`](rig.md)）；源码只引用名字。
-- `.rig` 给出 manifest 路径（相对**本文件所在目录**）；`cyinea --rig <path>` 可覆盖它，同样相对本文件。两者都没有时汇编失败。
+- `.rig` 给出 manifest 路径（相对**本文件所在目录**）；`cyinea --rig <path>` 可覆盖它，同样相对本文件。两者都没有时汇编失败。文件按惯例命名为 `<name>.rig.json`：`.rig` 是汇编指令，`.json` 后缀只影响编辑器的语法高亮，汇编器把路径原样使用。
 - 旧伪指令 `.muscle` / `.sensor_f` / `.sensor_i` 已删除，源码里出现即 `unknown directive` —— 名字只来自 manifest。
 - `dt` / `tick` 由语言内置，不在 manifest 里，也不能被声明。
 - `.group` v1 **不嵌套**；成员必须是 manifest 里存在的肌肉名。
@@ -218,7 +218,7 @@ cyinea -a greet.csa -o out.csp   # 指定输出路径
 
 ```
 # greet.csa — 打招呼：抬眉 → 微笑 → 保持 → 复位
-.rig            "rigs/live2d-standard.rig"
+.rig            "rigs/live2d-standard.rig.json"
 
 .layer          10
 .clock          hz = 60

@@ -15,7 +15,7 @@ pub use backend::{MazeBackend, Muscle, RIG_NAME, RIG_VERSION, SensorF, SensorI, 
 pub use grid::{Cell, DEFAULT_LAYOUT, Grid, GridError, Heading};
 
 pub const SOURCE: &str = include_str!("../maze.csa");
-pub const MANIFEST: &str = include_str!("../maze.rig");
+pub const MANIFEST: &str = include_str!("../maze.rig.json");
 pub const MAX_TICKS: u64 = 600;
 
 #[derive(Debug, thiserror::Error)]

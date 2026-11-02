@@ -87,7 +87,7 @@ const FULL: &[&str] = &[
     ".clock hz = 60",
     ".fuel 4096",
     ".max_wait 600.0",
-    ".rig \"rigs/live2d.rig\"",
+    ".rig \"rigs/live2d.rig.json\"",
     ".group brows = brow_l, brow_r",
     ".var_f phase = 0.0",
     ".var_i state = 0",
@@ -102,7 +102,7 @@ fn expected_full() -> AsmHeader {
             fuel: 4096,
             max_wait: 600.0,
         },
-        rig: Some(SmolStr::new("rigs/live2d.rig")),
+        rig: Some(SmolStr::new("rigs/live2d.rig.json")),
         muscle_groups: vec![GroupDef {
             name: SmolStr::new("brows"),
             members: vec![SmolStr::new("brow_l"), SmolStr::new("brow_r")],
@@ -532,11 +532,11 @@ fn a_rig_path_is_a_quoted_string_with_two_escapes() {
         ".clock hz = 60",
         ".fuel 1",
         ".max_wait 1.0",
-        ".rig \"rigs\\\\a\\\"b.rig\"",
+        ".rig \"rigs\\\\a\\\"b.rig.json\"",
         ".text",
     ]);
     let got = parse_ok(&src);
-    assert_eq!(got.rig.as_deref(), Some("rigs\\a\"b.rig"));
+    assert_eq!(got.rig.as_deref(), Some("rigs\\a\"b.rig.json"));
 }
 
 #[test]
@@ -546,8 +546,8 @@ fn a_second_rig_directive_is_rejected() {
         ".clock hz = 60",
         ".fuel 1",
         ".max_wait 1.0",
-        ".rig \"a.rig\"",
-        ".rig \"b.rig\"",
+        ".rig \"a.rig.json\"",
+        ".rig \"b.rig.json\"",
         ".text",
     ]);
     let errors = parse_errors(&src);
@@ -564,7 +564,7 @@ fn an_unterminated_rig_path_is_rejected() {
         ".clock hz = 60",
         ".fuel 1",
         ".max_wait 1.0",
-        ".rig \"a.rig",
+        ".rig \"a.rig.json",
         ".text",
     ]);
     parse_rejected(&src);

@@ -268,7 +268,7 @@ fn the_documented_example_assembles_and_reloads() {
 .fuel 4096
 .max_wait 600.0
 
-.rig \"rigs/live2d-standard.rig\"
+.rig \"rigs/live2d-standard.rig.json\"
 
 .group brows = brow_l, brow_r
 .group corners = mouth_corner_l, mouth_corner_r
