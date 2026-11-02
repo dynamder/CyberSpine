@@ -189,7 +189,7 @@ pub struct Vars {
 
 **G6 算术不 trap。** 整数运算回绕（二进制补码）。浮点运算产生 NaN/±Inf 并继续传播。算术本身永远不产生 fault。
 
-**G7 sensor 快照。** 全部 sensor 在每个 tick 开始时**由宿主一次性采样**，整 tick 冻结：同一 tick 内所有实例看到同一份快照，重复读同一 sensor 结果相同。首个 tick 全为 0。
+**G7 sensor 快照。** 全部 sensor 在每个 tick 开始时**由宿主一次性采样**，整 tick 冻结：同一 tick 内所有实例看到同一份快照，重复读同一 sensor 结果相同。**第一个 tick 也采样**：装载后后端尚未 `step`，报的就是装载态，不需要「首 tick 全 0」这类特例。冷启动「全 0」是后端初始状态的性质，不是快照规则。
 
 快照只在 tick 边界采样。host 可能在一个显示帧内推进多次 tick（§6.6），因此一个 tick 内发生的多次恢复，看到的仍是同一份快照。
 
@@ -541,7 +541,7 @@ clock   hz        # tick 率，默认 60
 
 
 
-### 6.6 两层时间模型
+### 6.6 三层时间模型
 
 真实时间**只存在于 VM 之外**，抖动在这里被吸收：
 
@@ -660,7 +660,7 @@ VM 是一个**纯执行器**：它不持有身份、层、顺序或任何调度�
 
 ```rust
 struct Instance {
-    pc: u32,
+    pc: usize,                     // 指令下标；程序按调用传入，不是字段
     regs_f: [f32; 64],
     regs_i: [i32; 64],
     vars:  Vars,
@@ -669,7 +669,7 @@ struct Instance {
     published_values:Box<[f32]>,   // b2：已发布命令向量
     published_mask:  BitVec,
     wake_at: u64,                  // 挂起请求："到 now+k 再跑"
-    status: Status,                // Running | Halted | Faulted
+    status: Status,                // Suspended | Halted | Faulted
 }
 ```
 
@@ -702,13 +702,13 @@ struct Instance {
 fn tick(instances: &mut [Instance], sensors: &Sensors, backend: &mut dyn Backend, now: &mut u64) {
     let dt = 1.0 / f32::from(hz);        // hz 来自头段，装载时校验所有实例一致
 
-    // 1. 采样 sensor，整 tick 冻结（G7）
+    // 1. 采样 sensor，整 tick 冻结（G7）。第一个 tick 也采样
     let snapshot = sample(sensors);
 
     // 2. 按装载顺序恢复到期的实例
     for inst in instances.iter_mut() {
         if inst.wake_at <= *now {
-            resume(inst, &snapshot);     // 推进到挂起 / HALT / fault / fuel 耗尽
+            resume(inst, &prog, &snapshot, *now);  // 推进到挂起 / HALT / fault / fuel 耗尽
         }
     }
 
@@ -723,11 +723,12 @@ fn tick(instances: &mut [Instance], sensors: &Sensors, backend: &mut dyn Backend
         }
     }
 
-    // 4. 交付后端：flush + step
-    backend.flush(&merged, dt);          // 整帧、扁平、只搬
+    // 4. 交付后端：commit + step
+    backend.commit(&merged, dt);         // 整帧、扁平、只搬
     backend.step(dt);                    // 跨肌肉可行性 + 推进
 
     *now += 1;
+    // 5. 移除 Halted / Faulted 的实例（它们本 tick 的贡献已经合并过）
 }
 ```
 
@@ -746,15 +747,24 @@ VM 里没有：调度器、实例树、`spawn`、`await`、fork/join、优先级
 
 ### 9.1 边界是参数向量
 
-VM 与后端之间**只有激发值和外加的来源信息**。后端持有全部被控对象状态、全部约束、全部合成逻辑。
+**宿主与后端之间只有合并后的命令向量和 `dt`。** VM 与后端之间没有边：VM 只看到 sensor 快照，只吐出命令。后端持有全部被控对象状态、全部约束、全部合成逻辑。
 
 ### 9.2 后端 trait
 
 ```rust
 pub trait Backend {
+    /// 本 rig 的规模：传感器、肌肉。装载时用它校验镜像，不符直接拒绝。
+    fn layout(&self) -> RigLayout;
+
+    /// 每个 tick 调用一次，**先于任何实例运行**：填充本 tick 的快照。
+    fn sample(&mut self, out: &mut SensorValues<'_>);
+
+    /// `SensorSource::Muscle` 的回读：身体**当前**值，不是上一条命令。
+    fn muscle(&self, index: usize) -> f32;
+
     /// 每个 tick 调用一次：本 tick 合并后的命令向量，可含 `None`（该肌肉无命令）。
     /// 契约：整块原子、不得步进、不得推进时间。
-    fn flush(&mut self, commands: &[Option<f32>], dt: f32);
+    fn commit(&mut self, commands: &[Option<f32>], dt: f32);
 
     /// 用已锁存命令 + 自身物理状态，做跨肌肉约束求解并推进。唯一能改物理状态处。
     fn step(&mut self, dt: f32);   // dt = 1/hz 常数
@@ -771,7 +781,7 @@ pub trait Backend {
 
 | 设施 | 说明 |
 |---|---|
-| 约束求解器 | XPBD / 顺序冲量等，供后端在 `flush` 之后调用 |
+| 约束求解器 | XPBD / 顺序冲量等，供后端在 `commit` 之后调用 |
 | 净化助手 | 范围钳制、NaN/Inf 拒绝的标准写法 |
 | 帧内插值 | 两次 tick 之间的 `FLERP` 平滑 |
 
@@ -812,7 +822,7 @@ pub trait Backend {
 - 在 CI 里加浮点契约测试：对若干组输入断言 `a*b+c` 未被融合、`sin` 的位模式与参考值一致。
 - **把后端库的内容哈希写进重放记录**。这不能防止漂移，但能让"这份回放是用哪个版本的动力学产生的"变成可查的事实。
 - **插值不得反馈进 VM。** 插值只用于出画面；一旦把插值后的值写回任何 VM 可见的状态，层 3 就污染了层 1。
-- **物理修正不得回写命令向量。** 约束求解/钳制后的值只存在于后端内部，不得写回 `flush` 收到的命令向量（§9.2）。
+- **物理修正不得回写命令向量。** 约束求解/钳制后的值只存在于后端内部，不得写回 `commit` 收到的命令向量（§9.2）。
 - 后端必须实现**固定步进**：`excite` 拿到的是常数 `dt`，因此后端不能假设"两次调用之间真实经过了 `dt` 秒"。
 
 ### 9.5 信任模型

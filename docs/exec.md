@@ -33,16 +33,14 @@
 2. `WAIT` 不睡眠，只算一个数写进 `wake_at` 然后返回。
 3. `FEXCITE` 只写实例自己的缓冲区，不触碰任何人。
 4. 一条镜像的执行可以在没有后端、没有物理世界的 PC 上完整重放。
-5. 「实例之间除了命令贡献和 sensor 之外没有交互通道」（`isa.md` §2.4）在实现上是**结构性的**：`Instance` 没有除 `&Program` 之外的共享引用。
+5. 「实例之间除了命令贡献和 sensor 之外没有交互通道」（`isa.md` §2.4）在实现上是**结构性的**：`Instance` 不持有任何引用，程序按调用传入，实例之间没有共享的可变状态。
 
 ---
 
 ## 2. 状态布局
 
 ```rust
-pub struct Instance<'p> {
-    prog: &'p Program,        // 已通过 C/M/I 校验；借用而非 Arc（thumbv6m 无 CAS）
-
+pub struct Instance {
     pc: usize,                // 指令下标，不是字节偏移
     regs: Registers,          // [f32; 64] + [i32; 64]
 
@@ -61,6 +59,8 @@ pub struct Instance<'p> {
 
 pub enum Status { Suspended, Halted, Faulted }
 ```
+
+`Program` **不是字段**，而是 `resume` 的参数。实例只拥有状态；宿主因此可以把「镜像 + 实例」并排持有，不需要 arena、`unsafe` 或 `Arc`（thumbv6m 没有 CAS）。
 
 **内存账**（30 肌肉 / 8 浮点变量 / 4 整数变量）：寄存器 512 B + 变量 48 B + 命令 240 B + 掩码 16 B ≈ **816 B/实例**。
 
@@ -103,26 +103,25 @@ pub enum Fault {
 ## 4. 执行循环
 
 ```rust
-impl<'p> Instance<'p> {
-    pub fn resume(&mut self, sensors: &Sensors<'_>, now: u64) -> Step {
-        assert!(sensors.f.len() >= self.prog.sensor_f_count);   // 宿主违约，不是程序 bug
-        assert!(sensors.i.len() >= self.prog.sensor_i_count);
+impl Instance {
+    pub fn resume(&mut self, prog: &Program, sensors: &Sensors<'_>, now: u64) -> Step {
+        assert!(sensors.f.len() >= prog.sensor_f_count());   // 宿主违约，不是程序 bug
+        assert!(sensors.i.len() >= prog.sensor_i_count());
         if self.status != Status::Suspended { return Step::Dead; }
 
-        let mut fuel = self.prog.fuel;          // 每次恢复重新装满（§7.1 按恢复计量）
+        let mut fuel = prog.fuel();             // 每次恢复重新装满（§7.1 按恢复计量）
         loop {
             if fuel == 0 { return self.fault(Fault::FuelExhausted { pc: self.pc }); }
             fuel -= 1;
 
-            let insn = self.prog.code[self.pc as usize];
-            match self.exec(insn, sensors, now) {
+            let insn = prog.code()[self.pc];
+            match self.exec(prog, insn, sensors, now) {
                 Flow::Next         => self.pc += 1,
-                Flow::Jump(target) => self.pc = target as u32,
+                Flow::Jump(target) => self.pc = target,
                 Flow::Yield        => { self.pc += 1; self.status = Status::Suspended; return Step::Yielded; }
                 Flow::Wait(at)     => { self.pc += 1; self.wake_at = at; self.status = Status::Suspended;
                                         return Step::Waited { until: at }; }
                 Flow::Halt         => { self.status = Status::Halted; return Step::Halted; }
-                Flow::Fault(f)     => return self.fault(f),
             }
         }
     }
