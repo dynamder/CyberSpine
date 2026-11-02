@@ -122,7 +122,7 @@ fn check_arithmetic() {
     ]);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
-    assert_eq!(instance.resume(&Sensors::new(&[], &[]), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &Sensors::new(&[], &[]), 0), Step::Halted);
 
     let regs = instance.registers();
     assert_eq!(regs.get_f(reg(3)), 5.5);
@@ -157,7 +157,7 @@ fn check_control() {
     ]);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
-    assert_eq!(instance.resume(&Sensors::new(&[], &[]), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &Sensors::new(&[], &[]), 0), Step::Halted);
     assert_eq!(instance.registers().get_i(reg(1)), 0);
 }
 
@@ -177,7 +177,7 @@ fn check_commands() {
     let mut instance = Instance::new(&program);
 
     let sensed = [0.0];
-    assert_eq!(instance.resume(&Sensors::new(&sensed, &[]), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &Sensors::new(&sensed, &[]), 0), Step::Halted);
     assert_eq!(instance.muscle_count(), 1);
     assert_eq!(instance.published(0), Some(0.5));
 }
@@ -187,19 +187,19 @@ fn check_suspend() {
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
-    assert_eq!(instance.resume(&Sensors::new(&[], &[]), 100), Step::Yielded);
+    assert_eq!(instance.resume(&program, &Sensors::new(&[], &[]), 100), Step::Yielded);
     assert_eq!(
         instance.registers().get_i(reg(1)),
         9,
         "registers survive a suspend"
     );
 
-    match instance.resume(&Sensors::new(&[], &[]), 100) {
+    match instance.resume(&program, &Sensors::new(&[], &[]), 100) {
         Step::Waited { until } => assert_eq!(until, 119, "f32(0.3) at 60 Hz is 19 ticks"),
         other => panic!("expected a wait, got {other:?}"),
     }
 
-    assert_eq!(instance.resume(&Sensors::new(&[], &[]), 119), Step::Halted);
+    assert_eq!(instance.resume(&program, &Sensors::new(&[], &[]), 119), Step::Halted);
 }
 
 fn check_fuel() {
@@ -213,7 +213,7 @@ fn check_fuel() {
     let mut instance = Instance::new(&program);
 
     assert_eq!(
-        instance.resume(&Sensors::new(&[], &[]), 0),
+        instance.resume(&program, &Sensors::new(&[], &[]), 0),
         Step::Faulted(Fault::FuelExhausted { pc: 2 })
     );
 }

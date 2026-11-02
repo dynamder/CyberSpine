@@ -113,9 +113,9 @@ fn halt_terminates_and_a_second_resume_is_dead() {
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Halted);
     assert_eq!(instance.status(), Status::Halted);
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Dead);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Dead);
     assert_eq!(instance.status(), Status::Halted, "Dead must not change the status");
 }
 
@@ -126,11 +126,11 @@ fn a_faulted_instance_stays_faulted() {
     let mut instance = Instance::new(&program);
 
     assert_eq!(
-        instance.resume(&no_sensors(), 0),
+        instance.resume(&program, &no_sensors(), 0),
         Step::Faulted(Fault::FuelExhausted { pc: 1 })
     );
     assert_eq!(instance.status(), Status::Faulted);
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Dead);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Dead);
 }
 
 #[test]
@@ -139,12 +139,12 @@ fn yield_suspends_at_the_next_instruction_and_keeps_state() {
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Yielded);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Yielded);
     assert_eq!(instance.status(), Status::Suspended);
     assert_eq!(instance.pc(), 2, "the resume point is the instruction after YIELD");
     assert_eq!(instance.registers().get_i(reg(1)), 42);
 
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Halted);
 }
 
 #[test]
@@ -160,11 +160,11 @@ fn the_whole_register_file_survives_a_suspend() {
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Yielded);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Yielded);
     assert_eq!(instance.registers().get_f(reg(1)), 1.5);
     assert_eq!(instance.registers().get_i(reg(2)), -7);
 
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Halted);
     assert_eq!(instance.registers().get_f(reg(63)), 2.5);
     assert_eq!(instance.registers().get_i(reg(63)), 2);
 }
@@ -175,7 +175,7 @@ fn writes_to_f0_and_i0_are_dropped_by_every_instruction() {
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Halted);
     assert_eq!(instance.registers().get_f(RegId::ZERO).to_bits(), 0);
     assert_eq!(instance.registers().get_i(RegId::ZERO), 0);
 }
@@ -196,7 +196,7 @@ fn moves_and_immediates() {
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Halted);
     assert_eq!(instance.registers().get_f(reg(3)), 1.5);
     assert_eq!(instance.registers().get_i(reg(4)), -3);
 }
@@ -215,7 +215,7 @@ fn float_arithmetic_is_ieee_binary32() {
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Halted);
     assert_eq!(instance.registers().get_f(reg(3)), 6.0);
     assert_eq!(instance.registers().get_f(reg(4)), 2.0);
     assert_eq!(instance.registers().get_f(reg(5)), 8.0);
@@ -236,7 +236,7 @@ fn integer_arithmetic_wraps_instead_of_trapping() {
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Halted);
     assert_eq!(instance.registers().get_i(reg(3)), i32::MIN);
     assert_eq!(instance.registers().get_i(reg(4)), i32::MAX - 1);
     assert_eq!(instance.registers().get_i(reg(6)), i32::MIN);
@@ -263,7 +263,7 @@ fn min_and_max_follow_ieee_754_2019_minimum_and_maximum() {
         let program = Program::new(&image);
         let mut instance = Instance::new(&program);
 
-        assert_eq!(instance.resume(&no_sensors(), 0), Step::Halted);
+        assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Halted);
         assert_eq!(
             instance.registers().get_f(reg(1)).to_bits(),
             min.to_bits(),
@@ -291,7 +291,7 @@ fn neg_and_abs_are_bit_operations() {
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Halted);
     assert_eq!(instance.registers().get_f(reg(2)), -2.5);
     assert_eq!(instance.registers().get_f(reg(3)), 2.5);
     assert!(instance.registers().get_f(reg(5)).is_nan());
@@ -315,7 +315,7 @@ fn sqrt_sin_cos_and_frac_use_the_frozen_kernel() {
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Halted);
     assert_eq!(instance.registers().get_f(reg(2)), 2.0);
     assert_eq!(instance.registers().get_f(reg(4)).to_bits(), 0);
     assert_eq!(instance.registers().get_f(reg(5)), 1.0);
@@ -343,7 +343,7 @@ fn madd_rounds_twice_and_is_never_fused() {
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Halted);
     assert_eq!(
         instance.registers().get_f(reg(4)).to_bits(),
         0,
@@ -372,7 +372,7 @@ fn lerp_follows_the_specified_order_and_clamp_is_a_composition() {
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Halted);
     assert_eq!(instance.registers().get_f(reg(4)), 1.5);
     assert_eq!(
         instance.registers().get_f(reg(8)),
@@ -402,7 +402,7 @@ fn conversions_saturate_and_round_to_nearest_even() {
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Halted);
     assert_eq!(instance.registers().get_i(reg(2)), 2);
     assert_eq!(instance.registers().get_i(reg(4)), -2);
     assert_eq!(instance.registers().get_i(reg(6)), i32::MAX);
@@ -439,7 +439,7 @@ fn condition_taken(setup: Vec<Insn>, condition: Insn) -> bool {
     let image = image(code);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Halted);
     assert_eq!(instance.pc(), p + 4);
     instance.registers().get_i(reg(20)) == 1
 }
@@ -514,7 +514,7 @@ fn a_backward_jump_drives_a_counted_loop() {
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Halted);
     assert_eq!(instance.registers().get_i(reg(1)), 0);
 }
 
@@ -548,7 +548,7 @@ fn senses_read_the_frozen_snapshot() {
     let mut instance = Instance::new(&program);
 
     let sensors = Sensors::new(&floats, &ints);
-    assert_eq!(instance.resume(&sensors, 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &sensors, 0), Step::Halted);
     assert_eq!(instance.registers().get_f(reg(1)), 1.5);
     assert_eq!(instance.registers().get_f(reg(2)), -2.5);
     assert_eq!(instance.registers().get_i(reg(3)), -9);
@@ -576,7 +576,7 @@ fn an_instance_cannot_read_back_its_own_excitation() {
 
     let floats = [0.0];
     let sensors = Sensors::new(&floats, &[]);
-    assert_eq!(instance.resume(&sensors, 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &sensors, 0), Step::Halted);
     assert_eq!(
         instance.registers().get_f(reg(2)).to_bits(),
         0,
@@ -612,7 +612,7 @@ fn variables_take_their_initial_value_from_the_image() {
     let mut instance = Instance::new(&program);
     assert_eq!(instance.vars_f(), [2.5]);
     assert_eq!(instance.vars_i(), [-4]);
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Halted);
     assert_eq!(instance.registers().get_f(reg(1)), 2.5);
     assert_eq!(instance.registers().get_i(reg(2)), -4);
 }
@@ -641,8 +641,8 @@ fn variables_survive_a_suspend() {
 
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Yielded);
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Yielded);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Halted);
     assert_eq!(instance.vars_f(), [8.0]);
     assert_eq!(instance.registers().get_f(reg(2)), 8.0);
 }
@@ -663,7 +663,7 @@ fn excite_alone_publishes_nothing() {
     let mut instance = Instance::new(&program);
 
     let zeros = [0.0];
-    assert_eq!(instance.resume(&Sensors::new(&zeros, &[]), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &Sensors::new(&zeros, &[]), 0), Step::Halted);
     assert_eq!(instance.published(0), None);
     assert_eq!(instance.muscle_count(), 1);
 }
@@ -692,7 +692,7 @@ fn flush_publishes_only_what_was_pending_and_keeps_it_afterwards() {
     let mut instance = Instance::new(&program);
 
     let zeros = [0.0; 2];
-    assert_eq!(instance.resume(&Sensors::new(&zeros, &[]), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &Sensors::new(&zeros, &[]), 0), Step::Halted);
     assert_eq!(
         instance.published(0),
         Some(0.5),
@@ -728,11 +728,11 @@ fn a_published_value_stays_across_a_flush_of_another_muscle() {
 
     let zeros = [0.0; 2];
     let sensors = Sensors::new(&zeros, &[]);
-    assert_eq!(instance.resume(&sensors, 0), Step::Yielded);
+    assert_eq!(instance.resume(&program, &sensors, 0), Step::Yielded);
     assert_eq!(instance.published(0), Some(0.5));
     assert_eq!(instance.published(1), None);
 
-    assert_eq!(instance.resume(&sensors, 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &sensors, 0), Step::Halted);
     assert_eq!(instance.published(0), Some(0.5), "G10: a flushed value holds");
     assert_eq!(instance.published(1), Some(0.25));
 }
@@ -748,7 +748,7 @@ fn fuel_stops_exactly_before_the_next_instruction() {
     let mut instance = Instance::new(&program);
 
     assert_eq!(
-        instance.resume(&no_sensors(), 0),
+        instance.resume(&program, &no_sensors(), 0),
         Step::Faulted(Fault::FuelExhausted { pc: 2 })
     );
     assert_eq!(instance.fault(), Some(Fault::FuelExhausted { pc: 2 }));
@@ -761,7 +761,7 @@ fn zero_fuel_faults_at_the_entry_without_executing_anything() {
     let mut instance = Instance::new(&program);
 
     assert_eq!(
-        instance.resume(&no_sensors(), 0),
+        instance.resume(&program, &no_sensors(), 0),
         Step::Faulted(Fault::FuelExhausted { pc: 0 })
     );
     assert_eq!(instance.registers().get_i(reg(1)), 0, "no instruction ran");
@@ -774,7 +774,7 @@ fn a_self_jump_burns_fuel_at_the_same_pc() {
     let mut instance = Instance::new(&program);
 
     assert_eq!(
-        instance.resume(&no_sensors(), 0),
+        instance.resume(&program, &no_sensors(), 0),
         Step::Faulted(Fault::FuelExhausted { pc: 0 })
     );
 }
@@ -794,7 +794,7 @@ fn every_executed_instruction_costs_one_including_jumps() {
     let mut instance = Instance::new(&program);
 
     assert_eq!(
-        instance.resume(&no_sensors(), 0),
+        instance.resume(&program, &no_sensors(), 0),
         Step::Faulted(Fault::FuelExhausted { pc: 2 })
     );
     assert_eq!(instance.registers().get_i(reg(1)), 3);
@@ -809,8 +809,8 @@ fn fuel_is_refilled_on_every_resume() {
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Yielded);
-    assert_eq!(instance.resume(&no_sensors(), 0), Step::Halted);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Yielded);
+    assert_eq!(instance.resume(&program, &no_sensors(), 0), Step::Halted);
 }
 
 // ---------------------------------------------------------------------------
@@ -822,7 +822,7 @@ fn waited_at(seconds: f32, hz: u32, now: u64) -> u64 {
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
-    match instance.resume(&no_sensors(), now) {
+    match instance.resume(&program, &no_sensors(), now) {
         Step::Waited { until } => until,
         other => panic!("expected a wait, got {other:?}"),
     }
@@ -860,7 +860,7 @@ fn a_waited_instance_runs_again_when_the_host_decides() {
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
-    let Step::Waited { until } = instance.resume(&no_sensors(), 10) else {
+    let Step::Waited { until } = instance.resume(&program, &no_sensors(), 10) else {
         panic!("expected a wait");
     };
     assert_eq!(until, 25);
@@ -868,7 +868,7 @@ fn a_waited_instance_runs_again_when_the_host_decides() {
     assert_eq!(instance.status(), Status::Suspended);
     assert_eq!(instance.pc(), 1, "resume point is the instruction after WAIT");
 
-    assert_eq!(instance.resume(&no_sensors(), 25), Step::Halted);
+    assert_eq!(instance.resume(&program, &no_sensors(), 25), Step::Halted);
     assert_eq!(instance.registers().get_f(reg(1)), 1.0);
 }
 
@@ -906,7 +906,7 @@ fn the_same_inputs_produce_bit_identical_commands() {
         let mut steps = Vec::new();
         let mut published = Vec::new();
         loop {
-            let step = instance.resume(&sensors, 0);
+            let step = instance.resume(&program, &sensors, 0);
             published.push(instance.published(0).map(f32::to_bits));
             steps.push(step);
             if !matches!(step, Step::Yielded) {
@@ -931,7 +931,7 @@ fn a_short_float_snapshot_is_a_host_violation() {
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
-    let _ = instance.resume(&no_sensors(), 0);
+    let _ = instance.resume(&program, &no_sensors(), 0);
 }
 
 #[test]
@@ -945,5 +945,5 @@ fn a_short_integer_snapshot_is_a_host_violation() {
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
-    let _ = instance.resume(&no_sensors(), 0);
+    let _ = instance.resume(&program, &no_sensors(), 0);
 }

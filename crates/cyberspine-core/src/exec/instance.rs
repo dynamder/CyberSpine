@@ -49,9 +49,12 @@ pub enum Fault {
     FuelExhausted { pc: usize },
 }
 
-/// A coroutine over one [`Program`], advanced by [`Instance::resume`].
-pub struct Instance<'p> {
-    prog: &'p Program<'p>,
+/// One coroutine's state.
+///
+/// The program is a parameter of [`Instance::resume`] rather than a field, so a
+/// host can keep an instance next to the image it runs without a
+/// self-reference.
+pub struct Instance {
     pc: usize,
     regs: Registers,
     vars_f: Box<[f32]>,
@@ -65,11 +68,10 @@ pub struct Instance<'p> {
     fault: Option<Fault>,
 }
 
-impl<'p> Instance<'p> {
-    pub fn new(prog: &'p Program<'p>) -> Self {
+impl Instance {
+    pub fn new(prog: &Program<'_>) -> Self {
         let muscles = prog.muscle_count();
         Self {
-            prog,
             pc: 0,
             regs: Registers::new(),
             vars_f: prog.vars_f().iter().map(|var| var.init).collect(),
@@ -86,32 +88,32 @@ impl<'p> Instance<'p> {
 
     /// Run until the instance yields, waits, halts or faults — or until the fuel
     /// for this resume is spent (`docs/exec.md` §4).
-    pub fn resume(&mut self, sensors: &Sensors<'_>, now: u64) -> Step {
+    pub fn resume(&mut self, prog: &Program<'_>, sensors: &Sensors<'_>, now: u64) -> Step {
         assert!(
-            sensors.f.len() >= self.prog.sensor_f_count(),
+            sensors.f.len() >= prog.sensor_f_count(),
             "host contract: {} float sensors sampled, {} declared",
             sensors.f.len(),
-            self.prog.sensor_f_count()
+            prog.sensor_f_count()
         );
         assert!(
-            sensors.i.len() >= self.prog.sensor_i_count(),
+            sensors.i.len() >= prog.sensor_i_count(),
             "host contract: {} integer sensors sampled, {} declared",
             sensors.i.len(),
-            self.prog.sensor_i_count()
+            prog.sensor_i_count()
         );
         if self.status != Status::Suspended {
             return Step::Dead;
         }
 
-        let mut fuel = self.prog.fuel();
+        let mut fuel = prog.fuel();
         loop {
             if fuel == 0 {
                 return self.fail(Fault::FuelExhausted { pc: self.pc });
             }
             fuel -= 1;
 
-            let insn = self.prog.code()[self.pc];
-            match self.exec(insn, sensors, now) {
+            let insn = prog.code()[self.pc];
+            match self.exec(prog, insn, sensors, now) {
                 Flow::Next => self.pc += 1,
                 Flow::Jump(target) => self.pc = target,
                 Flow::Yield => {
@@ -209,7 +211,7 @@ impl<'p> Instance<'p> {
         }
     }
 
-    fn exec(&mut self, insn: Insn, sensors: &Sensors<'_>, now: u64) -> Flow {
+    fn exec(&mut self, prog: &Program<'_>, insn: Insn, sensors: &Sensors<'_>, now: u64) -> Flow {
         match insn.op {
             OpCode::Fmovi => {
                 self.wf(insn.rd, f32::from_bits(insn.imm));
@@ -342,7 +344,7 @@ impl<'p> Instance<'p> {
 
             OpCode::Yield => Flow::Yield,
             OpCode::Wait => {
-                let ticks = ceil_ticks(insn.imm_f32(), self.prog.hz());
+                let ticks = ceil_ticks(insn.imm_f32(), prog.hz());
                 Flow::Wait(now.saturating_add(ticks))
             }
 
