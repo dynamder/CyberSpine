@@ -6,7 +6,7 @@ use alloc::vec;
 
 use crate::exec::program::Program;
 use crate::exec::registers::Registers;
-use crate::isa::clock::Hz;
+use crate::isa::clock::{Hz, Seconds};
 use crate::isa::jump::jump_target_unchecked;
 use crate::isa::math;
 use crate::isa::register::RegId;
@@ -346,7 +346,8 @@ impl Instance {
 
             OpCode::Yield => Flow::Yield,
             OpCode::Wait => {
-                let ticks = ceil_ticks(insn.imm_f32(), prog.hz());
+                let seconds = Seconds::new(insn.imm_f32()).expect("the loader validated WAIT");
+                let ticks = ceil_ticks(seconds, prog.hz());
                 Flow::Wait(now.saturating_add(ticks))
             }
 
@@ -433,11 +434,8 @@ impl Mask {
 
 /// `ceil(seconds × hz)`, in f64 because a 1e-7 relative error becomes a whole
 /// tick on the wrong side of the ceiling (`docs/exec.md` §7.3–§7.4).
-fn ceil_ticks(seconds: f32, hz: Hz) -> u64 {
-    let ticks = f64::from(seconds) * f64::from(hz.get());
-    if ticks.is_nan() || ticks <= 0.0 {
-        return 0;
-    }
+fn ceil_ticks(seconds: Seconds, hz: Hz) -> u64 {
+    let ticks = f64::from(seconds.get()) * f64::from(hz.get());
     let whole = ticks as u64;
     if ticks > whole as f64 {
         whole.saturating_add(1)

@@ -22,7 +22,7 @@ use core::fmt;
 
 use thiserror::Error;
 
-use crate::isa::clock::Hz;
+use crate::isa::clock::{Hz, Seconds};
 use crate::isa::jump::jump_target;
 use crate::isa::{DecodeError, Insn, OpCode};
 
@@ -254,7 +254,11 @@ impl VerifiedImage {
                 layer: raw.layer,
                 hz: Hz::new(raw.hz).ok_or(LoadError::ZeroHz)?,
                 fuel: raw.fuel,
-                max_wait: f32::from_bits(raw.max_wait_bits),
+                max_wait: Seconds::new(f32::from_bits(raw.max_wait_bits)).ok_or(
+                    LoadError::InvalidMaxWait {
+                        bits: raw.max_wait_bits,
+                    },
+                )?,
                 rig: Fingerprint(raw.rig),
             },
             code,
@@ -301,12 +305,6 @@ impl Image {
     /// [`VerifiedImage::verify`] runs it on its own. One implementation, so a
     /// rule cannot pass on the disk path and fail on the in-memory one.
     pub fn validate(&self) -> Result<(), LoadError> {
-        if !self.header.max_wait.is_finite() || self.header.max_wait < 0.0 {
-            return Err(LoadError::InvalidMaxWait {
-                bits: self.header.max_wait.to_bits(),
-            });
-        }
-
         // ----- M, then I, the order §9 fixes -----
         check_metadata(self)?;
         check_code(self)?;
@@ -734,15 +732,16 @@ fn check_code(image: &Image) -> Result<(), LoadError> {
             // (`docs/isa.md` §6.4). NaN fails `is_finite`; -0.0 is zero, not
             // negative, and is accepted.
             OpCode::Wait => {
-                let seconds = insn.imm_f32();
-                if !seconds.is_finite() || seconds < 0.0 {
-                    return Err(LoadError::WaitNotFiniteOrNegative { index, seconds });
-                }
+                let seconds =
+                    Seconds::new(insn.imm_f32()).ok_or(LoadError::WaitNotFiniteOrNegative {
+                        index,
+                        seconds: insn.imm_f32(),
+                    })?;
                 if seconds > image.header.max_wait {
                     return Err(LoadError::WaitExceedsMaxWait {
                         index,
-                        seconds,
-                        max: image.header.max_wait,
+                        seconds: seconds.get(),
+                        max: image.header.max_wait.get(),
                     });
                 }
             }

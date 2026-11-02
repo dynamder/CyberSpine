@@ -8,7 +8,7 @@ use cyberspine_core::binfmt::image::{
     FORMAT_VERSION, FixedHeader as ImageFixedHeader, ISA_VERSION, Image, Muscle, Sensor,
     SensorSource, VarF, VarI,
 };
-use cyberspine_core::isa::clock::Hz;
+use cyberspine_core::isa::clock::{Hz, Seconds};
 use cyberspine_core::isa::jump::{jump_offset, jump_target};
 use cyberspine_core::isa::{ImmType, Insn, OpCode, RegName};
 use cyberspine_core::rig::{Name, Rig, RigError, is_reserved as is_reserved_name};
@@ -161,7 +161,7 @@ pub fn generate_image(asm: &Asm, rig: &Rig) -> Result<Image, ImageGenError> {
 
     check_labels(&layout.labels, code.len())?;
     check_jumps(&code)?;
-    check_waits(&code, asm.header.fixed.max_wait)?;
+    check_waits(&code, max_wait(&asm.header)?)?;
     check_pending(&code)?;
 
     Ok(Image {
@@ -171,7 +171,7 @@ pub fn generate_image(asm: &Asm, rig: &Rig) -> Result<Image, ImageGenError> {
             layer: asm.header.fixed.layer,
             hz: clock_hz(&asm.header)?,
             fuel: asm.header.fixed.fuel,
-            max_wait: asm.header.fixed.max_wait,
+            max_wait: max_wait(&asm.header)?,
             rig: rig.fingerprint(),
         },
         code,
@@ -190,11 +190,12 @@ fn clock_hz(header: &AsmHeader) -> Result<Hz, ImageGenError> {
 
 fn check_header(header: &AsmHeader) -> Result<(), ImageGenError> {
     clock_hz(header)?;
-    let max_wait = header.fixed.max_wait;
-    if !max_wait.is_finite() || max_wait < 0.0 {
-        return Err(ImageGenError::InvalidMaxWait);
-    }
+    max_wait(header)?;
     Ok(())
+}
+
+fn max_wait(header: &AsmHeader) -> Result<Seconds, ImageGenError> {
+    Seconds::new(header.fixed.max_wait).ok_or(ImageGenError::InvalidMaxWait)
 }
 
 /// The rig-level rules themselves live in `core::rig::Rig::validate`; this only
@@ -562,14 +563,15 @@ fn check_jumps(code: &[Insn]) -> Result<(), ImageGenError> {
 
 /// `docs/isa.md` §4.8 / §10.7: `WAIT` is a non-negative finite duration no
 /// greater than the header's `max_wait`.
-fn check_waits(code: &[Insn], max_wait: f32) -> Result<(), ImageGenError> {
+fn check_waits(code: &[Insn], max_wait: Seconds) -> Result<(), ImageGenError> {
     for (pc, insn) in code.iter().enumerate() {
         if insn.op != OpCode::Wait {
             continue;
         }
         let seconds = f32::from_bits(insn.imm);
-        if !seconds.is_finite() || seconds < 0.0 || seconds > max_wait {
-            return Err(ImageGenError::InvalidWait { pc, seconds });
+        match Seconds::new(seconds) {
+            Some(seconds) if seconds <= max_wait => {}
+            _ => return Err(ImageGenError::InvalidWait { pc, seconds }),
         }
     }
     Ok(())

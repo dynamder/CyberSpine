@@ -15,7 +15,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::isa::clock::Hz;
+use crate::isa::clock::{Hz, Seconds};
 use crate::isa::{Insn, OpCode};
 use crate::rig::{Fingerprint, Name};
 
@@ -66,7 +66,7 @@ pub use crate::isa::clock::DEFAULT_HZ;
 pub const DEFAULT_FUEL: u32 = 4096;
 
 /// `max_wait` default (`docs/isa.md` §6.4): 600 virtual seconds.
-pub const DEFAULT_MAX_WAIT: f32 = 600.0;
+pub use crate::isa::clock::DEFAULT_MAX_WAIT;
 
 /// The scalar half of the fixed header (§4).
 ///
@@ -84,7 +84,7 @@ pub struct FixedHeader {
     pub layer: u16,
     pub hz: Hz,
     pub fuel: u32,
-    pub max_wait: f32,
+    pub max_wait: Seconds,
     /// The rig this image was assembled against (`docs/isa.md` §13). Lives in
     /// the header's last 32 bytes, which used to be reserved zeros.
     pub rig: Fingerprint,
@@ -98,7 +98,7 @@ impl Default for FixedHeader {
             layer: 0,
             hz: Hz::DEFAULT,
             fuel: DEFAULT_FUEL,
-            max_wait: DEFAULT_MAX_WAIT,
+            max_wait: Seconds::DEFAULT_MAX_WAIT,
             rig: Fingerprint::UNBOUND,
         }
     }
@@ -305,7 +305,7 @@ impl Image {
         out.extend_from_slice(&self.header.hz.get().to_le_bytes());
         out.extend_from_slice(&0u32.to_le_bytes()); // reserved_b: must be 0 (§9.1 C3)
         out.extend_from_slice(&self.header.fuel.to_le_bytes());
-        out.extend_from_slice(&self.header.max_wait.to_bits().to_le_bytes());
+        out.extend_from_slice(&self.header.max_wait.get().to_bits().to_le_bytes());
         out.extend_from_slice(&0u32.to_le_bytes()); // reserved1: must be 0
         out.extend_from_slice(&self.header.rig.0); // rig fingerprint (§4)
         debug_assert_eq!(
