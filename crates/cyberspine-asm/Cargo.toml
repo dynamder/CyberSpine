@@ -19,4 +19,5 @@ name = "cyinea"
 path = "src/main.rs"
 
 [dev-dependencies]
+cyberspine-testkit = { path = "../cyberspine-testkit" }
 cyberspine-vm = { path = "../cyberspine-vm" }

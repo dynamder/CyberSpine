@@ -200,6 +200,7 @@ dependencies = [
  "cyberspine-core",
  "cyberspine-rig",
  "cyberspine-store",
+ "cyberspine-testkit",
  "cyberspine-vm",
  "smol_str",
  "thiserror",

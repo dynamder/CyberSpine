@@ -15,10 +15,7 @@ use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::isa::jump::jump_target;
 use cyberspine_core::isa::{ImmType, Insn, OpCode};
 use cyberspine_core::rig::{Name, Rig, RigError};
-
-fn n(text: &str) -> Name {
-    Name::new(text).expect("test fixture name")
-}
+use cyberspine_testkit::name as n;
 
 /// The scalar header is currently mandatory (see `tests/header.rs`).
 const HEADER: &str = ".layer 10\n.clock hz = 60\n.fuel 4096\n.max_wait 600.0\n";

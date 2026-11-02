@@ -3,12 +3,9 @@
 
 use cyberspine_asm::assembler::{generate_image, parse};
 use cyberspine_core::binfmt::load::VerifiedImage;
-use cyberspine_core::rig::{Name, Rig};
+use cyberspine_core::rig::Rig;
+use cyberspine_testkit::name as n;
 use cyberspine_vm::{DummyBackend, Host};
-
-fn n(text: &str) -> Name {
-    Name::new(text).expect("test fixture name")
-}
 
 const SOURCE: &str = r#"
 .layer 0
