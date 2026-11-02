@@ -87,12 +87,12 @@ fn a_minimal_program_gets_the_implicit_halt_and_the_header() {
     let rig = empty_rig();
     let image = assemble_with(".text\nNOP\n", &rig);
 
-    assert_eq!(image.header.layer, 10);
-    assert_eq!(image.header.hz.get(), 60);
-    assert_eq!(image.header.fuel, 4096);
-    assert_eq!(image.header.max_wait.get(), 600.0);
+    assert_eq!(image.header().layer, 10);
+    assert_eq!(image.header().hz.get(), 60);
+    assert_eq!(image.header().fuel, 4096);
+    assert_eq!(image.header().max_wait.get(), 600.0);
     assert_eq!(
-        image.header.rig,
+        image.header().rig,
         rig.fingerprint(),
         "the image is bound to the rig it was assembled for"
     );
@@ -349,7 +349,7 @@ L_done:
     assert_eq!(image.muscles.len(), 4);
     assert_eq!(image.sensors_f.len(), 7);
     assert_eq!(image.sensors_i.len(), 2);
-    assert_eq!(image.header.rig, rig.fingerprint());
+    assert_eq!(image.header().rig, rig.fingerprint());
     assert_eq!(image.code.last().expect("non-empty").op, OpCode::Halt);
 
     assert_eq!(jump_target(1, image.code[1].imm as i32), Some(27));

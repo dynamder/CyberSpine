@@ -206,7 +206,7 @@ impl<B: Backend> Host<B> {
         // bound check, and it is checked once, here, where the image is admitted.
         debug_assert_eq!(image.muscles.len(), scale.muscles);
 
-        let hz = image.header.hz;
+        let hz = image.header().hz;
         match self.hz {
             None => {
                 self.hz = Some(hz);
@@ -233,7 +233,7 @@ impl<B: Backend> Host<B> {
 
         self.slots.push(Slot {
             id,
-            layer: image.header.layer,
+            layer: image.header().layer,
             sensors_f: vec![0.0; image.sensors_f.len()],
             sensors_i: vec![0; image.sensors_i.len()],
             image,
@@ -372,7 +372,7 @@ impl<B: Backend> Host<B> {
     /// different failure from a mismatch — it says "unbound", not "another
     /// body", and only an explicit opt-out lets it through.
     fn check_rig(&self, image: &VerifiedImage) -> Result<(), LoadError> {
-        let declared = image.header.rig;
+        let declared = image.header().rig;
         // A backend's fingerprint is bound by its type, so this can never be the
         // UNBOUND value: "both unbound" cannot pass for a match.
         let backend = self.backend.fingerprint();

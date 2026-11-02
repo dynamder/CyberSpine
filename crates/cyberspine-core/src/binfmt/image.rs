@@ -175,7 +175,7 @@ pub struct VarI {
 /// the program's meaning (§6.2), not an implementation choice.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Image {
-    pub header: FixedHeader,
+    pub(crate) header: FixedHeader,
     pub code: Vec<Insn>,
     pub muscles: Vec<Muscle>,
     pub sensors_f: Vec<Sensor>,
@@ -236,6 +236,24 @@ impl Image {
 
     pub fn push_var_i(&mut self, var: VarI) {
         self.vars_i.push(var);
+    }
+
+    /// The fixed header: the clocks, the budget and the fingerprint.
+    ///
+    /// Read-only outside the crate: its fields are values with invariants
+    /// (`Hz` cannot be zero, `Seconds` is finite and non-negative), so they are
+    /// built where the header is decoded and replaced whole — never poked one
+    /// field at a time from a caller.
+    pub fn header(&self) -> &FixedHeader {
+        &self.header
+    }
+
+    /// The header, for the one legitimate caller that assembles an image.
+    ///
+    /// `generate_image` is the producer: it decides every field from the
+    /// source's declarations. Everything else reads.
+    pub fn header_mut(&mut self) -> &mut FixedHeader {
+        &mut self.header
     }
 
     /// The metadata tables, laid out back to back with no gaps and no length

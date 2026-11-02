@@ -143,7 +143,7 @@ fn a_fault_is_recorded_and_outlives_the_instance() {
     let mut host = Host::new(backend(&rig));
 
     let mut faulty = action(vec![nop(), nop(), yield_()], &rig);
-    faulty.header.fuel = 1;
+    faulty.header_mut().fuel = 1;
     let id = host.load(verified(faulty)).expect("faulty");
 
     host.tick();
@@ -176,7 +176,7 @@ fn a_faulted_instance_contributes_nothing_that_tick() {
     );
     // Three instructions of fuel: `FLUSH` publishes, then the fuel runs out
     // before `NOP` can run.
-    faulty.header.fuel = 3;
+    faulty.header_mut().fuel = 3;
     let id = host.load(verified(faulty)).expect("faulty");
 
     host.tick();
@@ -269,11 +269,11 @@ fn a_higher_layer_wins_even_when_it_was_loaded_first() {
     let mut host = Host::new(backend(&rig));
 
     let mut high = publish_then_idle(0, 0.75, &rig);
-    high.header.layer = 2;
+    high.header_mut().layer = 2;
     host.load(verified(high)).expect("high layer");
 
     let mut low = publish_then_idle(0, 0.25, &rig);
-    low.header.layer = 1;
+    low.header_mut().layer = 1;
     host.load(verified(low)).expect("low layer");
 
     host.tick();
@@ -287,11 +287,11 @@ fn a_higher_layer_that_publishes_nothing_does_not_shadow_a_lower_one() {
     let mut host = Host::new(backend(&rig));
 
     let mut high = action(vec![yield_(), jump(-2)], &rig);
-    high.header.layer = 2;
+    high.header_mut().layer = 2;
     host.load(verified(high)).expect("high layer, silent");
 
     let mut low = publish_then_idle(0, 0.25, &rig);
-    low.header.layer = 1;
+    low.header_mut().layer = 1;
     host.load(verified(low)).expect("low layer, publishing");
 
     host.tick();
@@ -331,7 +331,7 @@ fn a_waiting_instance_is_not_resumed_early() {
     let rig = rig(0);
     let mut host = Host::new(backend(&rig));
     let mut image = action(vec![wait(0.25), imovi(1, 1), yield_(), jump(-2)], &rig);
-    image.header.hz = Hz::new(64).expect("64 Hz");
+    image.header_mut().hz = Hz::new(64).expect("64 Hz");
     let id = host.load(verified(image)).expect("64 Hz image");
 
     host.tick();
@@ -452,7 +452,7 @@ fn a_fault_removes_only_the_faulting_instance() {
     let mut host = Host::new(backend(&rig));
 
     let mut faulty = action(vec![nop(), nop(), yield_()], &rig);
-    faulty.header.fuel = 1;
+    faulty.header_mut().fuel = 1;
     let faulty_id = host.load(verified(faulty)).expect("faulty");
 
     let healthy_id = host
@@ -541,7 +541,7 @@ fn an_image_assembled_for_another_rig_is_refused() {
 fn an_unbound_image_is_refused_unless_allowed() {
     let rig = rig(1);
     let mut unbound = action(vec![yield_(), jump(-2)], &rig);
-    unbound.header.rig = Fingerprint::UNBOUND;
+    unbound.header_mut().rig = Fingerprint::UNBOUND;
 
     let mut host = Host::new(backend(&rig));
     let error = host
@@ -552,7 +552,7 @@ fn an_unbound_image_is_refused_unless_allowed() {
     let mut host = Host::new(backend(&rig));
     host.allow_unbound();
     let mut unbound = action(vec![yield_(), jump(-2)], &rig);
-    unbound.header.rig = Fingerprint::UNBOUND;
+    unbound.header_mut().rig = Fingerprint::UNBOUND;
     host.load(verified(unbound))
         .expect("an unbound image is allowed when the host opts out");
 }
@@ -563,12 +563,12 @@ fn an_unbound_image_still_has_to_fit_the_hosts_shape() {
     host.allow_unbound();
 
     let mut first = action(vec![yield_(), jump(-2)], &rig(1));
-    first.header.rig = Fingerprint::UNBOUND;
+    first.header_mut().rig = Fingerprint::UNBOUND;
     host.load(verified(first))
         .expect("the first image fixes the shape");
 
     let mut wider = action(vec![yield_(), jump(-2)], &rig(2));
-    wider.header.rig = Fingerprint::UNBOUND;
+    wider.header_mut().rig = Fingerprint::UNBOUND;
     let error = host
         .load(verified(wider))
         .expect_err("two muscles where the host holds one");
@@ -592,11 +592,11 @@ fn images_with_different_clocks_are_refused() {
     let mut host = Host::new(backend(&rig));
 
     let mut first = action(vec![yield_(), jump(-2)], &rig);
-    first.header.hz = Hz::new(60).expect("60 Hz");
+    first.header_mut().hz = Hz::new(60).expect("60 Hz");
     host.load(verified(first)).expect("first clock");
 
     let mut second = action(vec![yield_(), jump(-2)], &rig);
-    second.header.hz = Hz::new(30).expect("30 Hz");
+    second.header_mut().hz = Hz::new(30).expect("30 Hz");
     let error = host.load(verified(second)).expect_err("clock mismatch");
 
     assert!(

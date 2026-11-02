@@ -239,23 +239,32 @@ pub fn generate_image(asm: &Asm, rig: &Rig) -> Result<Image, ImageGenError> {
     check_waits(&code, &locations, max_wait(&asm.header)?)?;
     check_pending(&code, &locations)?;
 
-    Ok(Image {
-        header: ImageFixedHeader {
-            format_version: FORMAT_VERSION,
-            isa_version: ISA_VERSION,
-            layer: asm.header.fixed.layer,
-            hz: clock_hz(&asm.header)?,
-            fuel: asm.header.fixed.fuel,
-            max_wait: max_wait(&asm.header)?,
-            rig: rig.fingerprint(),
-        },
-        code,
-        muscles: symbols.image_muscles,
-        sensors_f: symbols.image_sensors_f,
-        sensors_i: symbols.image_sensors_i,
-        vars_f: symbols.image_vars_f,
-        vars_i: symbols.image_vars_i,
-    })
+    let mut image = Image::new(code);
+    *image.header_mut() = ImageFixedHeader {
+        format_version: FORMAT_VERSION,
+        isa_version: ISA_VERSION,
+        layer: asm.header.fixed.layer,
+        hz: clock_hz(&asm.header)?,
+        fuel: asm.header.fixed.fuel,
+        max_wait: max_wait(&asm.header)?,
+        rig: rig.fingerprint(),
+    };
+    for muscle in symbols.image_muscles {
+        image.muscles.push(muscle);
+    }
+    for sensor in symbols.image_sensors_f {
+        image.sensors_f.push(sensor);
+    }
+    for sensor in symbols.image_sensors_i {
+        image.sensors_i.push(sensor);
+    }
+    for var in symbols.image_vars_f {
+        image.vars_f.push(var);
+    }
+    for var in symbols.image_vars_i {
+        image.vars_i.push(var);
+    }
+    Ok(image)
 }
 
 /// A readability problem the source can fix but that is not an error.

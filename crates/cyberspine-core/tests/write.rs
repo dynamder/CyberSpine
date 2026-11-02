@@ -268,7 +268,7 @@ fn the_hash_covers_the_whole_file_not_just_the_header() {
     let base = Image::halt_only().to_bytes();
 
     let mut fuel_changed = Image::halt_only();
-    fuel_changed.header.fuel = DEFAULT_FUEL - 1; // header, offset 52
+    fuel_changed.header_mut().fuel = DEFAULT_FUEL - 1; // header, offset 52
     let fuel_changed = fuel_changed.to_bytes();
 
     let mut code_changed = Image::halt_only();

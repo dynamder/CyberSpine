@@ -183,7 +183,7 @@ pub fn action(mut code: Vec<Insn>, rig: &Rig) -> Image {
     }
 
     let mut image = Image::new(code);
-    image.header.rig = rig.fingerprint();
+    image.header_mut().rig = rig.fingerprint();
 
     for muscle in &rig.muscles {
         image.push_muscle(muscle.clone());

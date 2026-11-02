@@ -384,11 +384,11 @@ fn golden_valid_all_loads_and_decodes() {
     let image = VerifiedImage::from_bytes(&fixture_bytes(VALID)).expect("the golden file is valid");
 
     // Header: every scalar non-default.
-    assert_eq!(image.header.layer, 3);
-    assert_eq!(image.header.isa_version, 1);
-    assert_eq!(image.header.hz.get(), 120);
-    assert_eq!(image.header.fuel, 8192);
-    assert_eq!(image.header.max_wait.get(), 12.5);
+    assert_eq!(image.header().layer, 3);
+    assert_eq!(image.header().isa_version, 1);
+    assert_eq!(image.header().hz.get(), 120);
+    assert_eq!(image.header().fuel, 8192);
+    assert_eq!(image.header().max_wait.get(), 12.5);
 
     // Code, spot-checked at the points where an operand reading could go wrong.
     assert_eq!(image.code.len(), CODE_LEN);

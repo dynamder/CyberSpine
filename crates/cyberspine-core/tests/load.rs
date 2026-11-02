@@ -150,8 +150,8 @@ fn a_populated_image_round_trips() {
         name: n("count"),
         init: -7,
     });
-    image.header.layer = 3;
-    image.header.fuel = 1234;
+    image.header_mut().layer = 3;
+    image.header_mut().fuel = 1234;
 
     let loaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("a well-formed image");
     assert_eq!(loaded.image(), &image);
@@ -307,7 +307,7 @@ fn a_rig_fingerprint_survives_the_round_trip() {
     let fingerprint = rig.fingerprint();
 
     let mut image = Image::halt_only();
-    image.header.rig = fingerprint;
+    image.header_mut().rig = fingerprint;
     let bytes = image.to_bytes();
 
     assert_eq!(
@@ -317,8 +317,8 @@ fn a_rig_fingerprint_survives_the_round_trip() {
     );
 
     let loaded = VerifiedImage::from_bytes(&bytes).expect("a fingerprinted image loads");
-    assert_eq!(loaded.header.rig, fingerprint);
-    assert!(!loaded.header.rig.is_unbound());
+    assert_eq!(loaded.header().rig, fingerprint);
+    assert!(!loaded.header().rig.is_unbound());
 }
 
 #[test]

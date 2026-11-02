@@ -235,13 +235,13 @@ fn the_rig_flag_overrides_the_directive() {
     let written = VerifiedImage::from_bytes(&fs::read(&target).expect("read the file"))
         .expect("the loader accepts the file");
     assert_eq!(
-        written.header.rig,
+        written.header().rig,
         rig_of(MANIFEST_OTHER).fingerprint(),
         "`--rig` wins over the source's `.rig`"
     );
     assert_ne!(
-        written.header.rig,
-        expected_image(MANIFEST).header.rig,
+        written.header().rig,
+        expected_image(MANIFEST).header().rig,
         "the directive was not used"
     );
 }

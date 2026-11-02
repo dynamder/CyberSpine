@@ -18,13 +18,13 @@ fn n(text: &str) -> Name {
 
 fn fed(code: Vec<Insn>, fuel: u32) -> Image {
     let mut image = Image::new(code);
-    image.header.fuel = fuel;
+    image.header_mut().fuel = fuel;
     image
 }
 
 fn clocked(code: Vec<Insn>, hz: u32) -> Image {
     let mut image = Image::new(code);
-    image.header.hz = Hz::new(hz).expect("test fixture rate");
+    image.header_mut().hz = Hz::new(hz).expect("test fixture rate");
     image
 }
 
