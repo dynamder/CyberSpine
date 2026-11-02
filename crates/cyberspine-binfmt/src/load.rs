@@ -22,15 +22,15 @@ use core::fmt;
 
 use thiserror::Error;
 
-use crate::isa::clock::{Hz, Seconds};
-use crate::isa::jump::jump_target;
-use crate::isa::{DecodeError, Insn, OpCode};
+use cyberspine_isa::clock::{Hz, Seconds};
+use cyberspine_isa::jump::jump_target;
+use cyberspine_isa::{DecodeError, Insn, OpCode};
 
 use super::image::{
     FORMAT_MAJOR, FORMAT_MINOR, FixedHeader, HASH_LEN, HEADER_LEN, INSN_LEN, ISA_VERSION, Image,
     MAGIC, MIN_FILE_LEN, Muscle, Sensor, SensorSource, VarF, VarI,
 };
-use crate::rig::{Fingerprint, Name, NameError};
+use cyberspine_rig::{Fingerprint, Name, NameError};
 
 /// Which metadata table an error refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

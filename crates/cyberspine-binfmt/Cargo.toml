@@ -1,0 +1,14 @@
+[package]
+name = "cyberspine-binfmt"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license.workspace = true
+
+[dependencies]
+cyberspine-isa = { path = "../cyberspine-isa" }
+cyberspine-rig = { path = "../cyberspine-rig" }
+# `default-features = false` keeps blake3 on `core`: the content hash has to be
+# computable on a bare-metal target.
+blake3 = { version = "1.8.7", default-features = false }
+thiserror = { version = "2.0.21", default-features = false }

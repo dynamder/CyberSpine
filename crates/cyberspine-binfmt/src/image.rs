@@ -15,9 +15,9 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::isa::clock::{Hz, Seconds};
-use crate::isa::{Insn, OpCode};
-use crate::rig::{Fingerprint, Name};
+use cyberspine_isa::clock::{Hz, Seconds};
+use cyberspine_isa::{Insn, OpCode};
+use cyberspine_rig::{Fingerprint, Name};
 
 /// `b"CSPX"` (`docs/binfmt.md` §4). A big-endian reader sees `"XPSC"`, which is
 /// a byte-order check for free.
@@ -60,13 +60,13 @@ pub const ISA_VERSION: u16 = 1;
 ///
 /// Re-exported so a caller does not have to name `isa::clock` for the one
 /// constant the format's header documents.
-pub use crate::isa::clock::DEFAULT_HZ;
+pub use cyberspine_isa::clock::DEFAULT_HZ;
 
 /// `fuel` default (`docs/binfmt.md` §4): the per-resume instruction budget.
 pub const DEFAULT_FUEL: u32 = 4096;
 
 /// `max_wait` default (`docs/isa.md` §6.4): 600 virtual seconds.
-pub use crate::isa::clock::DEFAULT_MAX_WAIT;
+pub use cyberspine_isa::clock::DEFAULT_MAX_WAIT;
 
 /// The scalar half of the fixed header (§4).
 ///

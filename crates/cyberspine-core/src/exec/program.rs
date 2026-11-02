@@ -31,8 +31,8 @@ impl<'p> Program<'p> {
             sensor_f_count: image.sensors_f().len(),
             sensor_i_count: image.sensors_i().len(),
             muscle_count: image.muscles().len(),
-            hz: image.header.hz,
-            fuel: image.header.fuel,
+            hz: image.header().hz,
+            fuel: image.header().fuel,
         }
     }
 

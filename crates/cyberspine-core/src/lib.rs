@@ -30,12 +30,11 @@
 
 extern crate alloc;
 
-pub mod binfmt;
 pub mod exec;
 
-// The instruction set and the rig are their own crates so that a consumer which
-// only needs one of them does not pull in the image format. Re-exported here so
-// every existing `cyberspine_core::isa::…` / `cyberspine_core::rig::…` path
-// keeps working.
+// The format, the instruction set and the rig are their own crates. Re-exported
+// here so every existing `cyberspine_core::binfmt::…` / `::isa::…` / `::rig::…`
+// path keeps working (and so the fuzz targets and firmware keep compiling).
+pub use cyberspine_binfmt as binfmt;
 pub use cyberspine_isa as isa;
 pub use cyberspine_rig as rig;

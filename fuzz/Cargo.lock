@@ -213,10 +213,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "cyberspine-binfmt"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "cyberspine-isa",
+ "cyberspine-rig",
+ "thiserror",
+]
+
+[[package]]
 name = "cyberspine-core"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "cyberspine-binfmt",
  "cyberspine-isa",
  "cyberspine-rig",
  "thiserror",
