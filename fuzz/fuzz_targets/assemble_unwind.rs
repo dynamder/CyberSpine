@@ -20,7 +20,6 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Mutex, Once, OnceLock};
 
 use cyberspine_asm::assembler::{generate_image, parse};
-use cyberspine_core::binfmt::image::Image;
 use libfuzzer_sys::fuzz_target;
 use cyberspine_core::binfmt::load::VerifiedImage;
 
