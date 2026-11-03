@@ -1,0 +1,16 @@
+[package]
+name = "cyberspine-demo-maze-dylib"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# One artifact, and it is a shared library: there is no rlib here for a host to
+# link by accident, so `dylib:` can only mean a real dynamic library.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+cyberspine-backend = { path = "../../../crates/cyberspine-backend", default-features = false, features = ["export"] }
+cyberspine-demo-maze-world = { path = "../world" }

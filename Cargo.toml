@@ -1,6 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "demos/*"]
+members = [
+    "crates/*",
+    "demos/*",
+    "demos/maze/world",
+    "demos/maze/dylib",
+    "demos/maze/rpc",
+]
 default-members = ["crates/cyberspine-asm", "crates/cyberspine-runtime"]
 
 [workspace.package]

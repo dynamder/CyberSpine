@@ -73,7 +73,7 @@ fn self_library() -> Result<PathBuf, String> {
         .parent()
         .ok_or_else(|| "this binary has no directory".to_owned())?;
     let path = directory.join(format!(
-        "{}cyberspine_demo_maze{}",
+        "{}cyberspine_demo_maze_dylib{}",
         std::env::consts::DLL_PREFIX,
         std::env::consts::DLL_SUFFIX,
     ));
@@ -82,7 +82,7 @@ fn self_library() -> Result<PathBuf, String> {
         Ok(path)
     } else {
         Err(format!(
-            "`dylib:self` expects `{}`; build it with `cargo build -p cyberspine-demo-maze`",
+            "`dylib:self` expects `{}`; build it with `cargo build -p cyberspine-demo-maze-dylib`",
             path.display()
         ))
     }

@@ -18,18 +18,20 @@ program; the body is a Rust `Backend` implementation, and the two only meet
 through the rig's muscle and sensor names.
 
 The same body ships three ways — linked, as a shared library, and as a process
-speaking the wire protocol — and all three draw the same walk from the same rig:
+speaking the wire protocol — and all three draw the same walk from the same rig.
+The body, the two boundary packagings and the host are separate crates under
+`demos/maze`, and the library path loads a real `cdylib` at run time:
 
 ```bash
-cargo run -p cyberspine-demo-maze                         # linked
-cargo build -p cyberspine-demo-maze                       # emits the cdylib
+cargo run -p cyberspine-demo-maze                          # linked
+cargo build -p cyberspine-demo-maze-dylib                  # emits the cdylib
 cargo run -p cyberspine-demo-maze -- -b dylib:self         # dynamic library
-cargo run -p cyberspine-demo-maze --bin maze-serve         # terminal A
+cargo run -p cyberspine-demo-maze-rpc                      # terminal A
 cargo run -p cyberspine-demo-maze -- -b rpc:127.0.0.1:7777 # terminal B
 ```
 
-See [`demos/maze/README.md`](demos/maze/README.md) for what the demo
-demonstrates, how the viewer reads the body, and what to expect when it runs.
+See [`demos/maze/README.md`](demos/maze/README.md) for the crate layout, how the
+viewer reads the body, and what to expect when it runs.
 
 ## Toolchain
 

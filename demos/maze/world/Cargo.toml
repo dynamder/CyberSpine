@@ -1,0 +1,15 @@
+[package]
+name = "cyberspine-demo-maze-world"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+cyberspine-core = { path = "../../../crates/cyberspine-core" }
+cyberspine-vm = { path = "../../../crates/cyberspine-vm" }
+thiserror = "2.0.21"
+
+[dev-dependencies]
+cyberspine-manifest = { path = "../../../crates/cyberspine-manifest" }

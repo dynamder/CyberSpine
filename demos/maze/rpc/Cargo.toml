@@ -1,0 +1,16 @@
+[package]
+name = "cyberspine-demo-maze-rpc"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+cyberspine-backend = { path = "../../../crates/cyberspine-backend", default-features = false, features = ["rpc"] }
+cyberspine-demo-maze-world = { path = "../world" }
+
+[[bin]]
+name = "maze-serve"
+path = "src/main.rs"

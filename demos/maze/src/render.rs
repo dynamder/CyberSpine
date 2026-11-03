@@ -1,8 +1,8 @@
 use std::fmt::Write as _;
 
-use crate::Scene;
-use crate::backend::{RIG_NAME, RIG_VERSION};
-use crate::grid::{Cell, Grid, Heading};
+use cyberspine_demo_maze_world::{Cell, Grid, Heading, RIG_NAME, RIG_VERSION};
+
+use crate::session::Scene;
 
 const INDENT: &str = "  ";
 

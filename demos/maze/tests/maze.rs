@@ -1,18 +1,10 @@
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_demo_maze::{
     Body, Error, MANIFEST, MAX_TICKS, SOURCE, Session, assemble,
-    backend::{MazeBackend, rig},
-    grid::{Cell, DEFAULT_LAYOUT, Grid, GridError},
     render::{self, Charset, Style},
 };
+use cyberspine_demo_maze_world::{DEFAULT_LAYOUT, MazeBackend};
 use cyberspine_vm::{Host, LoadError};
-
-#[test]
-fn the_manifest_and_the_code_declare_the_same_rig() {
-    let manifest = cyberspine_manifest::from_json(MANIFEST).expect("the shipped manifest parses");
-    assert_eq!(manifest, rig());
-    assert_eq!(manifest.fingerprint(), rig().fingerprint());
-}
 
 #[test]
 fn the_clock_comes_from_the_image() {
@@ -63,37 +55,6 @@ fn a_manifest_that_disagrees_with_the_backend_is_refused() {
         Err(error) => error,
     };
     assert!(matches!(error, Error::Load(LoadError::RigMismatch { .. })));
-}
-
-#[test]
-fn a_ragged_layout_is_refused() {
-    assert_eq!(
-        Grid::parse(&["###", "##"]),
-        Err(GridError::Ragged {
-            row: 1,
-            expected: 3,
-            found: 2,
-        }),
-    );
-}
-
-#[test]
-fn every_marker_sits_on_a_junction() {
-    let grid = Grid::parse(&DEFAULT_LAYOUT).expect("the shipped layout parses");
-    for y in 0..grid.height() as i32 {
-        for x in 0..grid.width() as i32 {
-            if matches!(grid.cell(x, y), Some(Cell::Red | Cell::Blue)) {
-                let open = [(-1, 0), (1, 0), (0, -1), (0, 1)]
-                    .iter()
-                    .filter(|(dx, dy)| grid.is_walkable(x + dx, y + dy))
-                    .count();
-                assert!(
-                    open >= 3,
-                    "the marker at ({x},{y}) has only {open} open sides"
-                );
-            }
-        }
-    }
 }
 
 #[test]

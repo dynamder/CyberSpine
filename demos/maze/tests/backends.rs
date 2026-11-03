@@ -5,13 +5,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-use cyberspine_backend::{BackendSpec, rpc};
+use cyberspine_backend::{BackendSpec, dylib, rpc};
+use cyberspine_core::rig::BoundFingerprint;
 use cyberspine_demo_maze::{
     Body, Error, MANIFEST, MAX_TICKS, SOURCE, Session,
-    backend::MazeBackend,
     render::{self, Charset, Style},
 };
-use cyberspine_vm::LoadError;
+use cyberspine_demo_maze_world::{MazeBackend, rig};
+use cyberspine_vm::{Backend, LoadError};
 
 use serde_json::Value;
 
@@ -116,10 +117,22 @@ fn a_library_walks_and_draws_the_same_maze() {
     same_walk(linked, loaded);
 }
 
-/// The cdylib half of this package, built on demand: `cargo test` builds the
-/// harness, not the shared library. The artifact path comes from
-/// `--message-format=json`, which keeps the test independent of the target
-/// directory, the profile and the platform's library suffix.
+#[test]
+fn the_dynamic_library_is_its_own_artifact() {
+    let body = dylib::open(library()).expect("the shared library loads");
+
+    assert_eq!(body.build_id(), "cyberspine-demo-maze-dylib/0.1.0");
+    assert_eq!(
+        body.fingerprint(),
+        BoundFingerprint::of(&rig()),
+        "the library embeds the body's manifest, not the host's"
+    );
+}
+
+/// The body's shared library, built on demand: `cargo test` builds the harness,
+/// not the cdylib. The artifact path comes from `--message-format=json`, which
+/// keeps the test independent of the target directory, the profile and the
+/// platform's library suffix.
 fn library() -> &'static Path {
     static PATH: OnceLock<PathBuf> = OnceLock::new();
 
@@ -128,7 +141,7 @@ fn library() -> &'static Path {
             .args([
                 "build",
                 "-p",
-                "cyberspine-demo-maze",
+                "cyberspine-demo-maze-dylib",
                 "--lib",
                 "--message-format=json",
                 "--offline",
@@ -153,7 +166,7 @@ fn library() -> &'static Path {
             if !record["package_id"]
                 .as_str()
                 .unwrap_or_default()
-                .contains("cyberspine-demo-maze")
+                .contains("cyberspine-demo-maze-dylib")
             {
                 continue;
             }

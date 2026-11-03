@@ -9,10 +9,8 @@
 
 use cyberspine_backend::BackendSpec;
 use cyberspine_core::rig::BoundFingerprint;
+use cyberspine_demo_maze_world::{DEFAULT_LAYOUT, Grid, Heading, MazeBackend, SensorF, SensorI};
 use cyberspine_vm::{Backend, BackendError, Shape, Snapshot};
-
-use crate::backend::{MazeBackend, SensorF, SensorI};
-use crate::grid::{DEFAULT_LAYOUT, Grid, Heading};
 
 /// How far the runner has travelled, as the body counts it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -9,7 +9,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use cyberspine_backend::rpc;
-use cyberspine_demo_maze::{MANIFEST, MazeBackend};
+use cyberspine_demo_maze_world::{MANIFEST, MazeBackend};
 
 #[derive(Debug, Parser)]
 #[command(name = "maze-serve", version, about = "Serve the maze body over TCP")]
