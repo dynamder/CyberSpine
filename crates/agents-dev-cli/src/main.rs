@@ -115,12 +115,13 @@ fn run_image(path: &Path, rig_path: &Path, ticks: u32) -> Result<(), Error> {
         source,
     })?;
 
-    let mut host = Host::new(DummyBackend::new(rig));
+    let (mut host, _) = Host::new(DummyBackend::new(rig))
+        .load(image)
+        .map_err(|(_, source)| Error::Load {
+            path: path.to_path_buf(),
+            source,
+        })?;
     host.set_tracing(true);
-    host.load(image).map_err(|source| Error::Load {
-        path: path.to_path_buf(),
-        source,
-    })?;
 
     for _ in 0..ticks {
         host.tick();

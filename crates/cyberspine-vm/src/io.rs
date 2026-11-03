@@ -14,15 +14,18 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use cyberspine_core::binfmt::image::MAX_IMAGE_LEN;
 use cyberspine_core::binfmt::load::{LoadError, VerifiedImage};
 use thiserror::Error;
 
 /// The largest file this loader will read, in bytes.
 ///
-/// This is a host policy, not a format rule: a 64 MiB `.csp` is already
-/// pathological (8 Mi instructions), and anything far beyond it is more likely a
-/// mistake than an action.
-pub const MAX_FILE_LEN: usize = 64 * 1024 * 1024;
+/// The format has its own cap ([`MAX_IMAGE_LEN`], §9.1 C0) and it is the smaller
+/// one: it exists because a decodable image expands to about four times its size,
+/// so the number that matters is the one checked before a byte is in memory. This
+/// constant restates it for the file path, where the gate can run on the file's
+/// metadata — a 64 MiB sparse file is refused without ever being read.
+pub const MAX_FILE_LEN: usize = MAX_IMAGE_LEN;
 
 /// Every way reading an image from disk can fail.
 ///

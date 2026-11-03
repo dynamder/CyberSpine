@@ -6,7 +6,7 @@
 //! program only sees the names in `maze.rig.json`.
 
 use cyberspine_core::rig::{BoundFingerprint, Name, Rig};
-use cyberspine_vm::{Backend, Snapshot};
+use cyberspine_vm::{Backend, Shape, Snapshot};
 
 use crate::grid::{Cell, DEFAULT_LAYOUT, Grid, Heading};
 
@@ -218,6 +218,16 @@ impl Default for MazeBackend {
 impl Backend for MazeBackend {
     fn fingerprint(&self) -> BoundFingerprint {
         self.fingerprint
+    }
+
+    /// The three counts the host sizes a snapshot with. They are the same rig the
+    /// fingerprint hashes, counted once.
+    fn shape(&self) -> Shape {
+        Shape {
+            muscles: Muscle::ALL.len(),
+            sensors_f: SensorF::ALL.len(),
+            sensors_i: SensorI::ALL.len(),
+        }
     }
 
     /// Report one instant: the cell underfoot, the wall in front, the goal and

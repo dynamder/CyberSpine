@@ -10,3 +10,8 @@ license.workspace = true
 # computable on a bare-metal target.
 blake3 = { version = "1.8.7", default-features = false }
 thiserror = { version = "2.0.21", default-features = false }
+
+[features]
+# Exposes `Name::new_unchecked`, which builds a name without validating it. Only
+# for tests that have to hand the loader a file no legal producer can write.
+unchecked-names = []

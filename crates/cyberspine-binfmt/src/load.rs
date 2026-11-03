@@ -22,14 +22,18 @@ use core::fmt;
 
 use thiserror::Error;
 
+use cyberspine_diag::Diagnostics;
 use cyberspine_isa::clock::{Hz, Seconds};
 use cyberspine_isa::jump::jump_target;
 use cyberspine_isa::{DecodeError, Insn, OpCode};
 
+use super::diag::Warning;
 use super::image::{
     FORMAT_MAJOR, FORMAT_MINOR, FixedHeader, HASH_LEN, HEADER_LEN, INSN_LEN, ISA_VERSION, Image,
-    MAGIC, MIN_FILE_LEN, Muscle, Sensor, SensorSource, VarF, VarI,
+    MAGIC, MAX_IMAGE_LEN, MIN_FILE_LEN, Muscle, NameRef, Names, Sensor, SensorSource, VarF, VarI,
+    format_parts,
 };
+use super::plan::{Plan, SensorFSource, SensorISource};
 use cyberspine_rig::{Fingerprint, Name, NameError};
 
 /// Which metadata table an error refers to.
@@ -42,16 +46,23 @@ pub enum Table {
     VarsI,
 }
 
-impl fmt::Display for Table {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = match self {
+impl Table {
+    /// The spelling §6 uses for the table, and the section name a
+    /// [`LoadError::Truncated`] reports while reading it.
+    pub const fn as_str(self) -> &'static str {
+        match self {
             Self::Muscles => "muscles",
             Self::SensorsF => "sensors_f",
             Self::SensorsI => "sensors_i",
             Self::VarsF => "vars_f",
             Self::VarsI => "vars_i",
-        };
-        f.write_str(name)
+        }
+    }
+}
+
+impl fmt::Display for Table {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -62,6 +73,8 @@ impl fmt::Display for Table {
 #[derive(Debug, Error)]
 pub enum LoadError {
     // ----- §9.1 container -----
+    #[error("file is {len} bytes; the format reads at most {max}")]
+    TooLarge { len: usize, max: usize }, // C0
     #[error("file is {len} bytes; the format needs at least {MIN_FILE_LEN}")]
     TooShort { len: usize }, // C1
     #[error("bad magic {found:?}; every image starts with {MAGIC:?}")]
@@ -93,8 +106,12 @@ pub enum LoadError {
     TrailingBytes { consumed: usize, expected: usize }, // C7
     #[error("the last instruction must be HALT")]
     MissingTrailingHalt, // C8 / I8
-    #[error("ran off the end of the section at byte {offset}: needed {needed} more byte(s)")]
-    Truncated { offset: usize, needed: usize },
+    #[error("ran off the end of the {section} section at byte {offset}: needed {needed} more byte(s)")]
+    Truncated {
+        section: &'static str,
+        offset: usize,
+        needed: usize,
+    },
 
     // ----- §9.2 metadata -----
     #[error("{table}[{index}]: a name must be at least one character")]
@@ -199,22 +216,40 @@ pub enum LoadError {
 /// (`docs/isa.md` §0.4).
 ///
 /// There is no `&mut` access: an action is immutable once it has loaded.
-#[derive(Debug, Clone, PartialEq)]
-pub struct VerifiedImage(Image);
+#[derive(Debug, Clone)]
+pub struct VerifiedImage(Image, Plan);
 
 impl VerifiedImage {
     /// Decode and verify an image from memory.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, LoadError> {
-        // ----- the container, before a single `Vec` is allocated (C5) -----
+        Self::from_bytes_with(bytes, &mut Diagnostics::default())
+    }
+
+    /// Decode and verify, collecting everything the loader noticed on the way.
+    ///
+    /// The diagnostics are *additional* to the `Result`: a warning here never
+    /// turns a refusal into a success, and a refusal never suppresses a warning
+    /// that explains why the image was odd.
+    pub fn from_bytes_with(
+        bytes: &[u8],
+        diagnostics: &mut Diagnostics,
+    ) -> Result<Self, LoadError> {
+        // ----- the container, before a single `Vec` is allocated (C0, C5) -----
+        if bytes.len() > MAX_IMAGE_LEN {
+            return Err(LoadError::TooLarge {
+                len: bytes.len(),
+                max: MAX_IMAGE_LEN,
+            });
+        }
         if bytes.len() < MIN_FILE_LEN {
             return Err(LoadError::TooShort { len: bytes.len() });
         }
 
         let raw = RawHeader::parse(&bytes[..HEADER_LEN])?;
-        check_container(&raw, bytes)?;
+        check_container(&raw, bytes, diagnostics)?;
 
         let body_end = bytes.len() - HASH_LEN;
-        let mut cursor = Cursor::new(&bytes[..body_end], HEADER_LEN);
+        let mut cursor = Cursor::new(&bytes[..body_end], HEADER_LEN, "code");
 
         // I1 happens here: a word that is not an instruction fails the decode.
         //
@@ -234,11 +269,20 @@ impl VerifiedImage {
             code.push(insn);
         }
 
-        let muscles = read_table::<Muscle>(&mut cursor, Table::Muscles, raw.muscle_count)?;
-        let sensors_f = read_table::<Sensor>(&mut cursor, Table::SensorsF, raw.sensor_f_count)?;
-        let sensors_i = read_table::<Sensor>(&mut cursor, Table::SensorsI, raw.sensor_i_count)?;
-        let vars_f = read_table::<VarF>(&mut cursor, Table::VarsF, raw.var_f_count)?;
-        let vars_i = read_table::<VarI>(&mut cursor, Table::VarsI, raw.var_i_count)?;
+        // The five tables are exactly what is left of the body after the code, so
+        // this is an exact upper bound on the names in them — C5 already proved
+        // the code section fits. One reservation, no growth, no per-name
+        // allocation.
+        let tables_span = body_end - HEADER_LEN - INSN_LEN * raw.code_len as usize;
+        let mut names = Names::with_capacity(tables_span);
+        let muscles =
+            read_table::<Muscle>(&mut cursor, &mut names, Table::Muscles, raw.muscle_count)?;
+        let sensors_f =
+            read_table::<Sensor>(&mut cursor, &mut names, Table::SensorsF, raw.sensor_f_count)?;
+        let sensors_i =
+            read_table::<Sensor>(&mut cursor, &mut names, Table::SensorsI, raw.sensor_i_count)?;
+        let vars_f = read_table::<VarF>(&mut cursor, &mut names, Table::VarsF, raw.var_f_count)?;
+        let vars_i = read_table::<VarI>(&mut cursor, &mut names, Table::VarsI, raw.var_i_count)?;
 
         if cursor.pos != body_end {
             return Err(LoadError::TrailingBytes {
@@ -262,6 +306,7 @@ impl VerifiedImage {
                 rig: Fingerprint(raw.rig),
             },
             code,
+            names,
             muscles,
             sensors_f,
             sensors_i,
@@ -275,13 +320,23 @@ impl VerifiedImage {
     /// This is the rule set [`VerifiedImage::from_bytes`] applies minus the
     /// container checks, which need the original bytes.
     pub fn verify(image: Image) -> Result<Self, LoadError> {
-        image.validate()?;
-        Ok(Self(image))
+        let plan = image.validate()?;
+        Ok(Self(image, plan))
     }
 
     /// The image itself. Mutable access is deliberately absent.
     pub fn image(&self) -> &Image {
         &self.0
+    }
+
+    /// What each sensor reads from, resolved by M3–M6.
+    ///
+    /// Deliberately not an `Image` method: the address form only exists once the
+    /// tables have been checked, and `Image` is the pre-verification state. As a
+    /// consequence `Image` must never grow a method named `plan` — `VerifiedImage`
+    /// derefs to it, and method resolution would silently prefer that one.
+    pub fn plan(&self) -> &Plan {
+        &self.1
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -304,11 +359,14 @@ impl Image {
     /// [`VerifiedImage::from_bytes`] runs this after the container checks;
     /// [`VerifiedImage::verify`] runs it on its own. One implementation, so a
     /// rule cannot pass on the disk path and fail on the in-memory one.
-    pub fn validate(&self) -> Result<(), LoadError> {
+    ///
+    /// The [`Plan`] is the M3–M6 product: the only thing execution reads that the
+    /// bytes do not spell out directly.
+    pub fn validate(&self) -> Result<Plan, LoadError> {
         // ----- M, then I, the order §9 fixes -----
-        check_metadata(self)?;
+        let plan = check_metadata(self)?;
         check_code(self)?;
-        Ok(())
+        Ok(plan)
     }
 
     /// Compute the content hash the way §7 defines it, for use as a cache key.
@@ -361,7 +419,7 @@ impl RawHeader {
     /// next to the magic. Reading in any other order silently transposes every
     /// later field.
     fn parse(header: &[u8]) -> Result<Self, LoadError> {
-        let mut c = Cursor::new(header, 0);
+        let mut c = Cursor::new(header, 0, "fixed header");
 
         let mut magic = [0u8; 4];
         magic.copy_from_slice(c.take(4)?);
@@ -422,7 +480,11 @@ impl RawHeader {
 /// C1–C6, in the order §9.1 recommends: the hash (C6) is checked *before* the
 /// count sanity bound (C5), because it vetoes most bad files without any parsing
 /// at all — and neither of them allocates.
-fn check_container(raw: &RawHeader, bytes: &[u8]) -> Result<(), LoadError> {
+fn check_container(
+    raw: &RawHeader,
+    bytes: &[u8],
+    diagnostics: &mut Diagnostics,
+) -> Result<(), LoadError> {
     // C1 — the declared length must be the actual length, so every later offset
     // computed from it is trustworthy.
     if raw.file_len as usize != bytes.len() {
@@ -432,15 +494,31 @@ fn check_container(raw: &RawHeader, bytes: &[u8]) -> Result<(), LoadError> {
         });
     }
 
-    // C2 — one supported version of each kind. "In the supported set" is a
-    // singleton set today; the comparison is written as membership so that adding
-    // a version is a change to the set, not to the shape of the check.
-    let major = (raw.format_version >> 8) as u8;
-    let minor = (raw.format_version & 0xFF) as u8;
-    if major != FORMAT_MAJOR || minor > FORMAT_MINOR {
+    // C2 — the major is a gate, the minor is a report, the patch is ignored.
+    //
+    // A major change is one that breaks parsing, so a loader that does not speak
+    // it has nothing to say. A minor change is one the format owner promised does
+    // not alter parsing: refusing it would reject a working image, so the loader
+    // notes it and lets the ordinary rules decide — an image that *does* change
+    // how the bytes are read fails on C7 or C3, right where it happens. A patch
+    // change is the same format, so there is nothing to say about it.
+    //
+    // Below 1.0 semver makes no compatibility promise at all, so a minor mismatch
+    // there is a gate too.
+    let (major, minor, _patch) = format_parts(raw.format_version);
+    if major != FORMAT_MAJOR || (FORMAT_MAJOR == 0 && minor != FORMAT_MINOR) {
         return Err(LoadError::UnsupportedFormatVersion {
             declared: raw.format_version,
         });
+    }
+    if minor != FORMAT_MINOR {
+        diagnostics.push(
+            &Warning::NewerMinor {
+                declared: minor,
+                known: FORMAT_MINOR,
+            },
+            None,
+        );
     }
     if raw.isa_version != ISA_VERSION {
         return Err(LoadError::UnsupportedIsaVersion {
@@ -494,11 +572,16 @@ fn check_container(raw: &RawHeader, bytes: &[u8]) -> Result<(), LoadError> {
         });
     }
 
-    // C5 — the anti-allocation-bomb bound, and the reason this whole function
-    // runs before step 2. Each instruction is 8 bytes and each metadata entry is
-    // at least 2 (a one-byte name and its NUL), so this is a lower bound on the
-    // file these counts imply. Computed in u64: counts are attacker-controlled
-    // u32 values, and `8 * 4e9` must not wrap.
+    // C5 — the count bound, and the reason this whole function runs before step 2.
+    // Each instruction is 8 bytes and each metadata entry is at least 2 (a
+    // one-byte name and its NUL), so this is a lower bound on the file these
+    // counts imply. Computed in u64: counts are attacker-controlled u32 values,
+    // and `8 * 4e9` must not wrap.
+    //
+    // C5 bounds the counts *relative to the file*; C0 bounds the file. Both are
+    // needed, because C5 alone still permits a linear blow-up: a table entry costs
+    // 2–3 bytes on disk and 8–24 in memory, an ~4× expansion on the tight end. C0
+    // is what turns "four times a file someone handed us" into "four times 4 MiB".
     //
     // The 2-bytes-per-entry figure is exact for a *valid* file, because §6.1
     // makes an empty name illegal. A file that does contain one is 1 byte short
@@ -525,9 +608,12 @@ fn check_container(raw: &RawHeader, bytes: &[u8]) -> Result<(), LoadError> {
 // §9.2 metadata
 // ---------------------------------------------------------------------------
 
-/// M3–M6. M1 (name validity) and the unknown-`src` half of M5 are enforced while
-/// reading, since that is where the bytes are in hand.
-fn check_metadata(image: &Image) -> Result<(), LoadError> {
+/// M3–M6, plus the [`Plan`] they imply. M1 (name validity) and the unknown-`src`
+/// half of M5 are enforced while reading, since that is where the bytes are in hand.
+///
+/// The plan is built inside the same loops that check the sources, so a plan can
+/// never disagree with the rules that admitted the image.
+fn check_metadata(image: &Image) -> Result<Plan, LoadError> {
     // M3 — the read-back invariant needs at least one float sensor per muscle.
     if image.sensors_f.len() < image.muscles.len() {
         return Err(LoadError::SensorFCountBelowMuscleCount {
@@ -542,11 +628,11 @@ fn check_metadata(image: &Image) -> Result<(), LoadError> {
     // (`docs/binfmt.md` §6.2).
     for (index, muscle) in image.muscles.iter().enumerate() {
         let sensor = &image.sensors_f[index];
-        if sensor.name != muscle.name {
+        if image.name(sensor.name) != image.name(muscle.name) {
             return Err(LoadError::ReadbackNameMismatch {
                 index,
-                muscle: muscle.name.to_string(),
-                sensor: sensor.name.to_string(),
+                muscle: image.name(muscle.name).to_string(),
+                sensor: image.name(sensor.name).to_string(),
             });
         }
         if sensor.source != SensorSource::Muscle {
@@ -557,12 +643,20 @@ fn check_metadata(image: &Image) -> Result<(), LoadError> {
         }
     }
 
-    // M5 / M6 — source placement, plus the at-most-one built-ins.
+    // M5 / M6 — source placement, plus the at-most-one built-ins. The two `k`
+    // counters are per table: a backend's `f` and `i` arrays are independent.
+    let mut plan = Plan {
+        f: Vec::with_capacity(image.sensors_f.len()),
+        i: Vec::with_capacity(image.sensors_i.len()),
+    };
     let mut seen_dt: Option<usize> = None;
     let mut seen_tick: Option<usize> = None;
+    let mut muscles = 0usize;
+    let mut backends_f = 0usize;
+    let mut backends_i = 0usize;
 
     for (index, sensor) in image.sensors_f.iter().enumerate() {
-        match sensor.source {
+        plan.f.push(match sensor.source {
             SensorSource::Muscle => {
                 if index >= image.muscles.len() {
                     return Err(LoadError::MuscleSourceNotAllowedHere {
@@ -570,15 +664,24 @@ fn check_metadata(image: &Image) -> Result<(), LoadError> {
                         index,
                     }); // M6
                 }
+                let muscle = muscles;
+                muscles += 1;
+                SensorFSource::Muscle(muscle)
             }
-            SensorSource::Backend => {}
+            SensorSource::Backend => {
+                let observable = backends_f;
+                backends_f += 1;
+                SensorFSource::Backend(observable)
+            }
             SensorSource::BuiltinDt => {
-                if seen_dt.is_some() {
+                if seen_dt.replace(index).is_some() {
                     return Err(LoadError::DuplicateBuiltinDt { index });
                 }
-                seen_dt = Some(index);
+                SensorFSource::Dt
             }
             // BUILTIN_TICK is legal only in sensors_i (`docs/binfmt.md` §6.3).
+            // Refusing it here is also what keeps a float `tick` unrepresentable
+            // in `SensorFSource`.
             SensorSource::BuiltinTick => {
                 return Err(LoadError::SensorSourceNotAllowedHere {
                     table: Table::SensorsF,
@@ -586,17 +689,21 @@ fn check_metadata(image: &Image) -> Result<(), LoadError> {
                     found: sensor.source,
                 });
             }
-        }
+        });
     }
 
     for (index, sensor) in image.sensors_i.iter().enumerate() {
-        match sensor.source {
-            SensorSource::Backend => {}
+        plan.i.push(match sensor.source {
+            SensorSource::Backend => {
+                let observable = backends_i;
+                backends_i += 1;
+                SensorISource::Backend(observable)
+            }
             SensorSource::BuiltinTick => {
-                if seen_tick.is_some() {
+                if seen_tick.replace(index).is_some() {
                     return Err(LoadError::DuplicateBuiltinTick { index });
                 }
-                seen_tick = Some(index);
+                SensorISource::Tick
             }
             // MUSCLE is float-only; the two built-ins are each single-table.
             _ => {
@@ -606,10 +713,10 @@ fn check_metadata(image: &Image) -> Result<(), LoadError> {
                     found: sensor.source,
                 });
             }
-        }
+        });
     }
 
-    Ok(())
+    Ok(plan)
 }
 
 // ---------------------------------------------------------------------------
@@ -764,14 +871,26 @@ fn check_code(image: &Image) -> Result<(), LoadError> {
 // ---------------------------------------------------------------------------
 
 /// A position in a byte string, bounded to one section.
+///
+/// `section` is what a [`LoadError::Truncated`] names, so the caller can tell
+/// a short code section from a short metadata table without decoding the offset.
 struct Cursor<'a> {
     bytes: &'a [u8],
     pos: usize,
+    section: &'static str,
 }
 
 impl<'a> Cursor<'a> {
-    const fn new(bytes: &'a [u8], pos: usize) -> Self {
-        Self { bytes, pos }
+    const fn new(bytes: &'a [u8], pos: usize, section: &'static str) -> Self {
+        Self {
+            bytes,
+            pos,
+            section,
+        }
+    }
+
+    fn enter(&mut self, section: &'static str) {
+        self.section = section;
     }
 
     fn take(&mut self, n: usize) -> Result<&'a [u8], LoadError> {
@@ -780,6 +899,7 @@ impl<'a> Cursor<'a> {
             .checked_add(n)
             .filter(|&end| end <= self.bytes.len())
             .ok_or(LoadError::Truncated {
+                section: self.section,
                 offset: self.pos,
                 needed: n,
             })?;
@@ -822,26 +942,41 @@ impl<'a> Cursor<'a> {
 /// One row of a metadata table: how to read it, and what to compare for the
 /// duplicate check (M2).
 trait Entry: Sized {
-    fn read(cursor: &mut Cursor<'_>, table: Table, index: usize) -> Result<Self, LoadError>;
+    fn read(
+        cursor: &mut Cursor<'_>,
+        names: &mut Names,
+        table: Table,
+        index: usize,
+    ) -> Result<Self, LoadError>;
 
-    fn name(&self) -> &Name;
+    fn name(&self) -> NameRef;
 }
 
 impl Entry for Muscle {
-    fn read(cursor: &mut Cursor<'_>, table: Table, index: usize) -> Result<Self, LoadError> {
+    fn read(
+        cursor: &mut Cursor<'_>,
+        names: &mut Names,
+        table: Table,
+        index: usize,
+    ) -> Result<Self, LoadError> {
         Ok(Self {
-            name: read_name(cursor, table, index)?,
+            name: read_name(cursor, names, table, index)?,
         })
     }
 
-    fn name(&self) -> &Name {
-        &self.name
+    fn name(&self) -> NameRef {
+        self.name
     }
 }
 
 impl Entry for Sensor {
-    fn read(cursor: &mut Cursor<'_>, table: Table, index: usize) -> Result<Self, LoadError> {
-        let name = read_name(cursor, table, index)?;
+    fn read(
+        cursor: &mut Cursor<'_>,
+        names: &mut Names,
+        table: Table,
+        index: usize,
+    ) -> Result<Self, LoadError> {
+        let name = read_name(cursor, names, table, index)?;
         let src = cursor.take(1)?[0];
         let source = SensorSource::from_u8(src).ok_or(LoadError::UnknownSensorSource {
             table,
@@ -851,57 +986,73 @@ impl Entry for Sensor {
         Ok(Self { name, source })
     }
 
-    fn name(&self) -> &Name {
-        &self.name
+    fn name(&self) -> NameRef {
+        self.name
     }
 }
 
 impl Entry for VarF {
-    fn read(cursor: &mut Cursor<'_>, table: Table, index: usize) -> Result<Self, LoadError> {
-        let name = read_name(cursor, table, index)?;
+    fn read(
+        cursor: &mut Cursor<'_>,
+        names: &mut Names,
+        table: Table,
+        index: usize,
+    ) -> Result<Self, LoadError> {
+        let name = read_name(cursor, names, table, index)?;
         // §6.4: the initial value is a bit pattern, so NaN and both zeros survive.
         let init = f32::from_bits(cursor.u32_le()?);
         Ok(Self { name, init })
     }
 
-    fn name(&self) -> &Name {
-        &self.name
+    fn name(&self) -> NameRef {
+        self.name
     }
 }
 
 impl Entry for VarI {
-    fn read(cursor: &mut Cursor<'_>, table: Table, index: usize) -> Result<Self, LoadError> {
-        let name = read_name(cursor, table, index)?;
+    fn read(
+        cursor: &mut Cursor<'_>,
+        names: &mut Names,
+        table: Table,
+        index: usize,
+    ) -> Result<Self, LoadError> {
+        let name = read_name(cursor, names, table, index)?;
         let init = cursor.u32_le()? as i32;
         Ok(Self { name, init })
     }
 
-    fn name(&self) -> &Name {
-        &self.name
+    fn name(&self) -> NameRef {
+        self.name
     }
 }
 
 /// Read `count` entries, enforcing M1 on each name and M2 across the table.
 fn read_table<T: Entry>(
     cursor: &mut Cursor<'_>,
+    names: &mut Names,
     table: Table,
     count: u32,
 ) -> Result<Vec<T>, LoadError> {
     // C5 already bounded `count` against the file length.
+    cursor.enter(table.as_str());
     let mut out = Vec::with_capacity(count as usize);
 
     for index in 0..count as usize {
-        let entry = T::read(cursor, table, index)?;
+        let entry = T::read(cursor, names, table, index)?;
         // O(n²) on purpose: the tables are tiny, and a `Vec` carries no iteration
         // order that could leak into anything. §9.2 M2 only needs equality.
+        //
+        // Compared as text, not as handles: two equal names can occupy two
+        // separate regions of the arena, so a handle comparison would let a
+        // duplicate through.
         if out
             .iter()
-            .any(|existing: &T| existing.name() == entry.name())
+            .any(|existing: &T| names.get(existing.name()) == names.get(entry.name()))
         {
             return Err(LoadError::DuplicateName {
                 table,
                 index,
-                name: entry.name().to_string(),
+                name: names.get(entry.name()).to_string(),
             });
         }
         out.push(entry);
@@ -910,12 +1061,17 @@ fn read_table<T: Entry>(
     Ok(out)
 }
 
-/// Read one name and enforce M1 on it.
+/// Read one name, enforce M1 on it, and intern it in the image's arena.
 ///
 /// §6.1 tightens names to ASCII identifiers in v1 — a deliberate choice, because
 /// binding compares names byte for byte and arbitrary UTF-8 would admit
 /// look-alikes that bind differently while reading the same.
-fn read_name(cursor: &mut Cursor<'_>, table: Table, index: usize) -> Result<Name, LoadError> {
+fn read_name(
+    cursor: &mut Cursor<'_>,
+    names: &mut Names,
+    table: Table,
+    index: usize,
+) -> Result<NameRef, LoadError> {
     let bytes = cursor.cstr(table, index)?;
 
     let text = core::str::from_utf8(bytes).map_err(|_| LoadError::NameNotAnIdentifier {
@@ -924,12 +1080,16 @@ fn read_name(cursor: &mut Cursor<'_>, table: Table, index: usize) -> Result<Name
         name: String::from_utf8_lossy(bytes).into_owned(),
     })?;
 
-    Name::new(text).map_err(|error| match error {
+    // M1, checked on the borrowed text: a `Name` here would be an allocation the
+    // arena immediately makes redundant.
+    Name::validate(text).map_err(|error| match error {
         NameError::Empty => LoadError::EmptyName { table, index },
         NameError::NotAnIdentifier => LoadError::NameNotAnIdentifier {
             table,
             index,
             name: String::from(text),
         },
-    })
+    })?;
+
+    Ok(names.push(text))
 }

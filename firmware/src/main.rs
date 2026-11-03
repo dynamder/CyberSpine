@@ -180,7 +180,7 @@ fn check_commands() {
         Insn::new(OpCode::Flush),
         halt(),
     ]);
-    image.push_muscle(muscle_name("m0"));
+    image.push_muscle(&muscle_name("m0"));
     let image = VerifiedImage::verify(image).expect("the fixture is a legal image");
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);

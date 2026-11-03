@@ -3,7 +3,7 @@
 状态：v1
 依赖：[`isa.md`](isa.md) §13（rig、装配期绑定、指纹）、[`binfmt.md`](binfmt.md) §4（头段字段）、[`asm.md`](asm.md) §3.2（`.rig`）
 
-> **实现状态（2026-11）**：全部落地。`cyberspine-rig`（类型 + 指纹）、`cyberspine-manifest`（JSON 解析）、汇编器按 manifest 生成表并把指纹写进头段、`cyinea --rig`、宿主的 `Backend::fingerprint()` 与加载期比对（含 `Host::allow_unbound`）。本文件描述的就是现状。
+> **实现状态（2026-11）**：全部落地。`cyberspine-rig`（类型 + 指纹）、`cyberspine-manifest`（JSON 解析）、汇编器按 manifest 生成表并把指纹写进头段、`cyinea --rig`、宿主的 `Backend::fingerprint()` + `Backend::shape()` 与加载期比对（未绑定镜像由宿主的 `Host::permissive()` 决定）。本文件描述的就是现状。
 
 ---
 
@@ -79,7 +79,13 @@ le32(count) || (le32(len) || sensor_i_name)*
 ```
 
 - 后端实现 `Backend::fingerprint()`，结果应在构造时算好并缓存。
-- 未绑定镜像（头段指纹全 0，即装配时没有 rig）**默认拒绝**；只有测试、固件这类不经过宿主的路径可以显式放行，宿主侧是 `Host::allow_unbound`。
+- **`BoundFingerprint` 不会是全零。** 镜像侧的 `Fingerprint` 可以是全零（未绑定），后端的不能：
+  该类型字段私有、只有一个构造器 `of(&Rig)`，并且刻意没有 `From<Fingerprint>`/`Default`/`UNBOUND`
+  常量——所以"从设备读回 32 字节然后贴上这个类型"这件事写不出来。全零摘要的概率是 2⁻²⁵⁶，
+  构造处有一条 `debug_assert` 记着这件事。
+- 未绑定镜像（头段指纹全 0，即装配时没有 rig）**默认拒绝**；放行是**宿主类型的属性**，
+  不是后端字段：`Host<B, Strict>` 拒，`Host<B, Permissive>` 收（`Host::new(b).permissive()`，
+  单向，没有反向方法）。只有测试、固件这类不经过宿主的路径需要它。
 
 ## 5. 信任模型
 

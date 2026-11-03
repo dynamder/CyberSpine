@@ -31,11 +31,11 @@ fn an_image_survives_a_trip_through_the_filesystem() {
     let path = tmp_path("round_trip.csp");
 
     let mut image = Image::new(vec![Insn::new(OpCode::Yield), Insn::new(OpCode::Halt)]);
-    image.push_muscle(n("jaw"));
+    image.push_muscle(&n("jaw"));
     fs::write(&path, image.to_bytes()).expect("write the image");
 
     let loaded = read_image(&path).expect("read the image back");
-    assert_eq!(loaded.image(), &image);
+    assert_eq!(loaded.to_bytes(), image.to_bytes(), "the writer reproduces what the reader read");
 }
 
 #[test]

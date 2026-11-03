@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 
-use cyberspine_core::binfmt::image::{Image, Sensor, SensorSource};
+use cyberspine_core::binfmt::image::{Image, SensorSource};
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::exec::Sensors;
 use cyberspine_core::isa::register::RegId;
@@ -25,6 +25,14 @@ pub fn reg(id: u8) -> RegId {
 /// A name that is known to be legal, or a panic that names the fixture.
 pub fn name(text: &str) -> Name {
     Name::new(text).expect("test fixture names are identifiers")
+}
+
+/// A name built without validating it, for fixtures that have to be illegal.
+///
+/// The only caller of `Name::new_unchecked` in the workspace, which is what makes
+/// "no runtime path builds an invalid name" checkable by grep.
+pub fn raw_name(text: &str) -> Name {
+    Name::new_unchecked(text)
 }
 
 pub fn halt() -> Insn {
@@ -186,28 +194,16 @@ pub fn action(mut code: Vec<Insn>, rig: &Rig) -> Image {
     image.header_mut().rig = rig.fingerprint();
 
     for muscle in &rig.muscles {
-        image.push_muscle(muscle.clone());
+        image.push_muscle(&muscle.clone());
     }
     for sensor in &rig.sensors_f {
-        image.push_sensor_f(Sensor {
-            name: sensor.clone(),
-            source: SensorSource::Backend,
-        });
+        image.push_sensor_f(&sensor.clone(), SensorSource::Backend);
     }
-    image.push_sensor_f(Sensor {
-        name: name("dt"),
-        source: SensorSource::BuiltinDt,
-    });
+    image.push_sensor_f(&name("dt"), SensorSource::BuiltinDt);
     for sensor in &rig.sensors_i {
-        image.push_sensor_i(Sensor {
-            name: sensor.clone(),
-            source: SensorSource::Backend,
-        });
+        image.push_sensor_i(&sensor.clone(), SensorSource::Backend);
     }
-    image.push_sensor_i(Sensor {
-        name: name("tick"),
-        source: SensorSource::BuiltinTick,
-    });
+    image.push_sensor_i(&name("tick"), SensorSource::BuiltinTick);
     image
 }
 

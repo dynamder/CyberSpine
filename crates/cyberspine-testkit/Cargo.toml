@@ -8,3 +8,4 @@ publish = false
 
 [dependencies]
 cyberspine-core = { path = "../cyberspine-core" }
+cyberspine-rig = { path = "../cyberspine-rig", features = ["unchecked-names"] }

@@ -1,7 +1,7 @@
 //! The execution core against `docs/exec.md` §10: the 49 instruction bodies, fuel,
 //! `WAIT`, `FLUSH`, suspension and the pure-function guarantee.
 
-use cyberspine_core::binfmt::image::{Image, Sensor, SensorSource, VarF, VarI};
+use cyberspine_core::binfmt::image::{Image, SensorSource};
 use cyberspine_core::exec::{Fault, Instance, Program, Sensors, Status, Step};
 use cyberspine_core::isa::clock::Hz;
 use cyberspine_core::isa::register::RegId;
@@ -498,16 +498,10 @@ fn senses_read_the_frozen_snapshot() {
         halt(),
     ]);
     for name in ["a", "b"] {
-        image.push_sensor_f(Sensor {
-            name: n(name),
-            source: SensorSource::Backend,
-        });
+        image.push_sensor_f(&n(name), SensorSource::Backend);
     }
     for name in ["c", "d"] {
-        image.push_sensor_i(Sensor {
-            name: n(name),
-            source: SensorSource::Backend,
-        });
+        image.push_sensor_i(&n(name), SensorSource::Backend);
     }
     let image = verified(image);
     let program = Program::new(&image);
@@ -536,7 +530,7 @@ fn an_instance_cannot_read_back_its_own_excitation() {
         },
         halt(),
     ]);
-    image.push_muscle(n("m0"));
+    image.push_muscle(&n("m0"));
     let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
@@ -566,14 +560,8 @@ fn variables_take_their_initial_value_from_the_image() {
         },
         halt(),
     ]);
-    image.push_var_f(VarF {
-        name: n("height"),
-        init: 2.5,
-    });
-    image.push_var_i(VarI {
-        name: n("count"),
-        init: -4,
-    });
+    image.push_var_f(&n("height"), 2.5);
+    image.push_var_i(&n("count"), -4);
 
     let image = verified(image);
     let program = Program::new(&image);
@@ -602,10 +590,7 @@ fn variables_survive_a_suspend() {
         },
         halt(),
     ]);
-    image.push_var_f(VarF {
-        name: n("state"),
-        init: 0.0,
-    });
+    image.push_var_f(&n("state"), 0.0);
 
     let image = verified(image);
     let program = Program::new(&image);
@@ -627,7 +612,7 @@ fn excite_alone_publishes_nothing() {
         },
         halt(),
     ]);
-    image.push_muscle(n("m0"));
+    image.push_muscle(&n("m0"));
     let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
@@ -659,8 +644,8 @@ fn flush_publishes_only_what_was_pending_and_keeps_it_afterwards() {
         },
         halt(),
     ]);
-    image.push_muscle(n("m0"));
-    image.push_muscle(n("m1"));
+    image.push_muscle(&n("m0"));
+    image.push_muscle(&n("m1"));
     let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
@@ -698,8 +683,8 @@ fn a_published_value_stays_across_a_flush_of_another_muscle() {
         Insn::new(OpCode::Flush),
         halt(),
     ]);
-    image.push_muscle(n("m0"));
-    image.push_muscle(n("m1"));
+    image.push_muscle(&n("m0"));
+    image.push_muscle(&n("m1"));
     let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
@@ -883,7 +868,7 @@ fn the_same_inputs_produce_bit_identical_commands() {
         Insn::new(OpCode::Flush),
         halt(),
     ]);
-    image.push_muscle(n("m0"));
+    image.push_muscle(&n("m0"));
 
     let zeros = [0.0];
     let sensors = Sensors::new(&zeros, &[]);
@@ -915,7 +900,7 @@ fn the_same_inputs_produce_bit_identical_commands() {
 #[should_panic(expected = "host contract")]
 fn a_short_float_snapshot_is_a_host_violation() {
     let mut image = Image::new(vec![halt()]);
-    image.push_muscle(n("m0"));
+    image.push_muscle(&n("m0"));
     let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
@@ -927,10 +912,10 @@ fn a_short_float_snapshot_is_a_host_violation() {
 #[should_panic(expected = "host contract")]
 fn a_short_integer_snapshot_is_a_host_violation() {
     let mut image = Image::new(vec![halt()]);
-    image.push_sensor_i(cyberspine_core::binfmt::image::Sensor {
-        name: n("tick"),
-        source: cyberspine_core::binfmt::image::SensorSource::BuiltinTick,
-    });
+    image.push_sensor_i(
+        &n("tick"),
+        cyberspine_core::binfmt::image::SensorSource::BuiltinTick,
+    );
     let image = verified(image);
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);

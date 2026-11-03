@@ -5,10 +5,7 @@
 //! re-derives the bit layout: a test that asks the code what it wrote cannot tell
 //! you whether what it wrote is what the spec says.
 
-use cyberspine_core::binfmt::image::{
-    DEFAULT_FUEL, HASH_LEN, HEADER_LEN, INSN_LEN, Image, MIN_FILE_LEN, Muscle, Sensor,
-    SensorSource, VarF, VarI,
-};
+use cyberspine_core::binfmt::image::{DEFAULT_FUEL, HASH_LEN, HEADER_LEN, INSN_LEN, Image, MIN_FILE_LEN, SensorSource};
 use cyberspine_core::isa::register::RegId;
 use cyberspine_core::isa::{Insn, OpCode};
 use cyberspine_core::rig::{Name, NameError};
@@ -18,7 +15,7 @@ fn n(text: &str) -> Name {
 }
 
 fn raw_name(text: &str) -> Name {
-    Name::new_unchecked(text)
+    cyberspine_testkit::raw_name(text)
 }
 
 fn u32_at(bytes: &[u8], offset: usize) -> u32 {
@@ -60,7 +57,7 @@ fn a_halt_only_image_is_the_minimum_136_bytes() {
     // spec constant or derivable from a one-instruction, metadata-free image.
     let expected_header: [u8; 64] = [
         b'C', b'S', b'P', b'X', //  0  magic
-        0x01, 0x01, //  4  format_version = major 1, minor 1
+        0x00, 0x08, //  4  format_version = 1.0.0, packed 5/5/6
         0x01, 0x00, //  6  isa_version = 1 (FLUSH landed without stepping it)
         0x00, 0x00, //  8  reserved_a = 0
         0x00, 0x00, // 10  flags = 0
@@ -122,23 +119,11 @@ fn the_header_is_exactly_96_bytes() {
 #[test]
 fn the_tables_are_gap_free_and_in_the_order_section_6_fixes() {
     let mut image = Image::new(code(&[with_ra(OpCode::Fexcite, 1), insn(OpCode::Halt)]));
-    image.push_muscle(n("mouth"));
-    image.push_sensor_f(Sensor {
-        name: n("dt"),
-        source: SensorSource::BuiltinDt,
-    });
-    image.push_sensor_i(Sensor {
-        name: n("tick"),
-        source: SensorSource::BuiltinTick,
-    });
-    image.push_var_f(VarF {
-        name: n("gain"),
-        init: 0.5,
-    });
-    image.push_var_i(VarI {
-        name: n("count"),
-        init: -7,
-    });
+    image.push_muscle(&n("mouth"));
+    image.push_sensor_f(&n("dt"), SensorSource::BuiltinDt);
+    image.push_sensor_i(&n("tick"), SensorSource::BuiltinTick);
+    image.push_var_f(&n("gain"), 0.5);
+    image.push_var_i(&n("count"), -7);
 
     let bytes = image.to_bytes();
 
@@ -192,13 +177,8 @@ fn a_sensor_is_a_name_then_one_source_byte() {
     .into_iter()
     .enumerate()
     {
-        image.push_muscle_only(Muscle {
-            name: n(&format!("m{i}")),
-        });
-        image.push_sensor_f(Sensor {
-            name: n(&format!("m{i}")),
-            source,
-        });
+        image.push_muscle_only(&n(&format!("m{i}")));
+        image.push_sensor_f(&n(&format!("m{i}")), source);
     }
 
     let bytes = image.to_bytes();
@@ -297,11 +277,8 @@ fn writing_the_same_image_twice_gives_identical_bytes() {
     // choose, so there is nothing for a second run to decide differently.
     let build = || {
         let mut image = Image::new(code(&[insn(OpCode::Yield), insn(OpCode::Halt)]));
-        image.push_muscle(n("jaw"));
-        image.push_var_f(VarF {
-            name: n("k"),
-            init: f32::NAN,
-        });
+        image.push_muscle(&n("jaw"));
+        image.push_var_f(&n("k"), f32::NAN);
         image.to_bytes()
     };
     assert_eq!(build(), build());
@@ -316,8 +293,8 @@ fn push_muscle_keeps_the_readback_invariant() {
     // §6.2: sensors_f[m] must be muscles[m] read back. The helper makes that
     // impossible to forget for the common case.
     let mut image = Image::halt_only();
-    image.push_muscle(n("a"));
-    image.push_muscle(n("b"));
+    image.push_muscle(&n("a"));
+    image.push_muscle(&n("b"));
 
     assert_eq!(image.muscles().len(), 2);
     assert_eq!(image.sensors_f().len(), 2);
@@ -341,11 +318,8 @@ fn the_writer_emits_names_it_cannot_vouch_for() {
     // §9.2 M1 is the loader's rule. The writer has to be able to produce a bad
     // name, or `tests/load.rs` could not test that the loader rejects one.
     let mut image = Image::halt_only();
-    image.push_muscle_only(Muscle { name: raw_name("") });
-    image.push_sensor_f(Sensor {
-        name: raw_name("9bad"),
-        source: SensorSource::Muscle,
-    });
+    image.push_muscle_only(&raw_name(""));
+    image.push_sensor_f(&raw_name("9bad"), SensorSource::Muscle);
 
     let bytes = image.to_bytes();
     let tables = &bytes[HEADER_LEN + INSN_LEN..bytes.len() - HASH_LEN];

@@ -31,7 +31,12 @@ pub enum NameError {
 pub struct Name(Box<str>);
 
 impl Name {
-    pub fn new(text: &str) -> Result<Self, NameError> {
+    /// The grammar §6.1 fixes, without building anything.
+    ///
+    /// The loader validates a name before interning its text, and it must not
+    /// allocate one `Name` per row just to throw it away; this is the half both
+    /// paths share.
+    pub fn validate(text: &str) -> Result<(), NameError> {
         let mut chars = text.chars();
         match chars.next() {
             None => return Err(NameError::Empty),
@@ -41,6 +46,11 @@ impl Name {
         if !chars.all(|character| character.is_ascii_alphanumeric() || character == '_') {
             return Err(NameError::NotAnIdentifier);
         }
+        Ok(())
+    }
+
+    pub fn new(text: &str) -> Result<Self, NameError> {
+        Self::validate(text)?;
         Ok(Self(text.into()))
     }
 
@@ -48,7 +58,13 @@ impl Name {
     ///
     /// Only for tests that have to hand the loader a file no legal producer can
     /// write (`docs/binfmt.md` §9.2 M1). Nothing in this workspace's runtime
-    /// path may call it.
+    /// path may call it, which is why it is behind a feature rather than merely
+    /// `#[doc(hidden)]`: a `Name` that is not an identifier would make `Rig`'s own
+    /// validation incomplete, and "please do not call this from production" is not
+    /// a guarantee.
+    ///
+    /// Enable `unchecked-names` (the testkit does) to use it.
+    #[cfg(any(test, feature = "unchecked-names"))]
     #[doc(hidden)]
     pub fn new_unchecked(text: &str) -> Self {
         Self(text.into())

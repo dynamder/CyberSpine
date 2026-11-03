@@ -133,6 +133,7 @@ name = "cyberspine-binfmt"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "cyberspine-diag",
  "cyberspine-isa",
  "cyberspine-rig",
  "thiserror",
@@ -149,6 +150,10 @@ dependencies = [
  "cyberspine-rig",
  "thiserror",
 ]
+
+[[package]]
+name = "cyberspine-diag"
+version = "0.1.0"
 
 [[package]]
 name = "cyberspine-exec"

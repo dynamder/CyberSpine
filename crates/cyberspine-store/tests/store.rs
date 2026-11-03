@@ -56,8 +56,9 @@ fn a_new_image_is_written_whole() {
     assert_eq!(
         VerifiedImage::from_bytes(&bytes)
             .expect("the loader accepts what we wrote")
-            .image(),
-        &image
+            .to_bytes(),
+        image.to_bytes(),
+        "the file round-trips through the loader byte for byte"
     );
     assert_eq!(entries(&dir), vec!["halt.csp"], "no temporary file is left");
 }

@@ -6,7 +6,7 @@
 
 use cyberspine_core::rig::{BoundFingerprint, Rig};
 
-use crate::backend::{Backend, Snapshot};
+use crate::backend::{Backend, Shape, Snapshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Call {
@@ -65,6 +65,14 @@ impl DummyBackend {
 impl Backend for DummyBackend {
     fn fingerprint(&self) -> BoundFingerprint {
         self.fingerprint
+    }
+
+    fn shape(&self) -> Shape {
+        Shape {
+            muscles: self.muscles.len(),
+            sensors_f: self.sensors_f.len(),
+            sensors_i: self.sensors_i.len(),
+        }
     }
 
     fn sample(&mut self, out: &mut Snapshot<'_>) {

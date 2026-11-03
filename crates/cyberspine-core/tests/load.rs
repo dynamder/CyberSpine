@@ -13,8 +13,9 @@
 //! be measuring C6 instead of its own rule.
 
 use cyberspine_core::binfmt::image::{
-    HASH_LEN, HEADER_LEN, INSN_LEN, Image, Muscle, Sensor, SensorSource, VarF, VarI,
+    HASH_LEN, HEADER_LEN, INSN_LEN, Image, MAX_IMAGE_LEN, SensorSource,
 };
+use cyberspine_core::binfmt::{Diagnostics, Level};
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::binfmt::load::{LoadError, Table};
 use cyberspine_core::isa::register::RegId;
@@ -26,7 +27,7 @@ fn n(text: &str) -> Name {
 }
 
 fn raw_name(text: &str) -> Name {
-    Name::new_unchecked(text)
+    cyberspine_testkit::raw_name(text)
 }
 
 // ---------------------------------------------------------------------------
@@ -51,7 +52,7 @@ const OFF_RESERVED_B: usize = 48;
 const OFF_FUEL: usize = 52;
 const OFF_MAX_WAIT: usize = 56;
 const OFF_RESERVED1: usize = 60;
-const OFF_RESERVED2: usize = 64;
+const OFF_RIG: usize = 64;
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -114,7 +115,7 @@ fn reject(bytes: &[u8]) -> LoadError {
 fn a_minimal_image_round_trips() {
     let image = Image::halt_only();
     let loaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("the minimum legal file");
-    assert_eq!(loaded.image(), &image);
+    assert_eq!(loaded.to_bytes(), image.to_bytes(), "the writer reproduces what the reader read");
 }
 
 #[test]
@@ -125,36 +126,18 @@ fn a_populated_image_round_trips() {
         insn(OpCode::Yield, 0, 0, 0),
         insn(OpCode::Halt, 0, 0, 0),
     ]);
-    image.push_muscle(n("mouth_open"));
-    image.push_sensor_f(Sensor {
-        name: n("dt"),
-        source: SensorSource::BuiltinDt,
-    });
-    image.push_sensor_f(Sensor {
-        name: n("pressure"),
-        source: SensorSource::Backend,
-    });
-    image.push_sensor_i(Sensor {
-        name: n("tick"),
-        source: SensorSource::BuiltinTick,
-    });
-    image.push_sensor_i(Sensor {
-        name: n("errors"),
-        source: SensorSource::Backend,
-    });
-    image.push_var_f(VarF {
-        name: n("gain"),
-        init: 0.5,
-    });
-    image.push_var_i(VarI {
-        name: n("count"),
-        init: -7,
-    });
+    image.push_muscle(&n("mouth_open"));
+    image.push_sensor_f(&n("dt"), SensorSource::BuiltinDt);
+    image.push_sensor_f(&n("pressure"), SensorSource::Backend);
+    image.push_sensor_i(&n("tick"), SensorSource::BuiltinTick);
+    image.push_sensor_i(&n("errors"), SensorSource::Backend);
+    image.push_var_f(&n("gain"), 0.5);
+    image.push_var_i(&n("count"), -7);
     image.header_mut().layer = 3;
     image.header_mut().fuel = 1234;
 
     let loaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("a well-formed image");
-    assert_eq!(loaded.image(), &image);
+    assert_eq!(loaded.to_bytes(), image.to_bytes(), "the writer reproduces what the reader read");
 }
 
 #[test]
@@ -172,10 +155,7 @@ fn float_var_initial_values_round_trip_bit_for_bit() {
 
     let mut image = Image::halt_only();
     for (i, bits) in cases.iter().enumerate() {
-        image.push_var_f(VarF {
-            name: n(&format!("v{i}")),
-            init: f32::from_bits(*bits),
-        });
+        image.push_var_f(&n(&format!("v{i}")), f32::from_bits(*bits));
     }
 
     let loaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("a well-formed image");
@@ -231,23 +211,53 @@ fn c1_a_declared_length_that_disagrees_with_the_file_is_refused() {
 }
 
 #[test]
-fn c2_an_unsupported_format_version_is_refused() {
+fn c2_a_different_major_is_refused() {
     let image = Image::halt_only();
 
     // A different major is a different layout, so it must not be guessed at.
-    let wrong_major = forge(&image, &[(OFF_FORMAT_VERSION, &0x0200u16.to_le_bytes())]);
+    // 2.0.0 packs to `2 << 11`.
+    let wrong_major = forge(&image, &[(OFF_FORMAT_VERSION, &(2u16 << 11).to_le_bytes())]);
     assert!(matches!(
         reject(&wrong_major),
-        LoadError::UnsupportedFormatVersion { declared: 0x0200 }
+        LoadError::UnsupportedFormatVersion { declared } if declared == 2 << 11
     ));
+}
 
-    // A minor above this loader's is also refused: it may carry tables this
-    // loader does not know to expect.
-    let wrong_minor = forge(&image, &[(OFF_FORMAT_VERSION, &0x0001u16.to_le_bytes())]);
-    assert!(matches!(
-        reject(&wrong_minor),
-        LoadError::UnsupportedFormatVersion { declared: 0x0001 }
-    ));
+#[test]
+fn c2_a_newer_minor_is_reported_but_not_refused() {
+    let image = Image::halt_only();
+
+    // §10 promises a minor change does not alter parsing, so the loader notes the
+    // mismatch and lets the ordinary rules decide. An image that really did change
+    // how the bytes are read fails on its own rule (C7, C3) further down.
+    let mut diagnostics = Diagnostics::default();
+    let bytes = forge(
+        &image,
+        &[(OFF_FORMAT_VERSION, &((1u16 << 11) | (7u16 << 6)).to_le_bytes())],
+    );
+    let loaded = VerifiedImage::from_bytes_with(&bytes, &mut diagnostics)
+        .expect("a newer minor is readable");
+    assert_eq!(loaded.header().format_version & 0x7ff, 7 << 6);
+
+    assert_eq!(diagnostics.items().len(), 1);
+    let warning = &diagnostics.items()[0];
+    assert_eq!(warning.level, Level::Warning);
+    assert_eq!(warning.code, "C2");
+}
+
+#[test]
+fn c2_a_patch_bump_is_not_even_a_diagnostic() {
+    let image = Image::halt_only();
+
+    // A patch is the same format; there is nothing to report.
+    let mut diagnostics = Diagnostics::default();
+    let bytes = forge(&image, &[(OFF_FORMAT_VERSION, &((1u16 << 11) | 9).to_le_bytes())]);
+    VerifiedImage::from_bytes_with(&bytes, &mut diagnostics).expect("a patch bump is readable");
+    assert!(
+        diagnostics.items().is_empty(),
+        "a patch bump says nothing: {:?}",
+        diagnostics.items()
+    );
 }
 
 #[test]
@@ -311,7 +321,7 @@ fn a_rig_fingerprint_survives_the_round_trip() {
     let bytes = image.to_bytes();
 
     assert_eq!(
-        &bytes[OFF_RESERVED2..OFF_RESERVED2 + 32],
+        &bytes[OFF_RIG..OFF_RIG + 32],
         &fingerprint.0,
         "the fingerprint lives in the header's last 32 bytes"
     );
@@ -452,8 +462,8 @@ fn m1_an_empty_name_is_refused() {
     // for an empty one. A longer valid name supplies that slack; without it C5
     // fires and this test would be measuring the wrong rule.
     let mut image = Image::halt_only();
-    image.push_muscle(n("a_reasonably_long_name"));
-    image.push_muscle(raw_name(""));
+    image.push_muscle(&n("a_reasonably_long_name"));
+    image.push_muscle(&raw_name(""));
 
     assert!(matches!(
         reject(&image.to_bytes()),
@@ -470,9 +480,7 @@ fn m1_a_name_that_is_not_an_ascii_identifier_is_refused() {
     // that can look identical while differing is a hazard worth excluding.
     for bad in ["9lives", "with-dash", "with space", "café", "a.b"] {
         let mut image = Image::halt_only();
-        image.push_muscle_only(Muscle {
-            name: raw_name(bad),
-        });
+        image.push_muscle_only(&raw_name(bad));
         match reject(&image.to_bytes()) {
             LoadError::NameNotAnIdentifier { name, .. } => assert_eq!(name, bad),
             other => panic!("{bad:?} was not refused as a non-identifier: {other}"),
@@ -482,8 +490,8 @@ fn m1_a_name_that_is_not_an_ascii_identifier_is_refused() {
     // The legal edge of the same rule: `_` is a valid identifier on its own, and
     // digits are fine after the first character.
     let mut image = Image::halt_only();
-    image.push_muscle(n("_"));
-    image.push_muscle(n("_9x"));
+    image.push_muscle(&n("_"));
+    image.push_muscle(&n("_9x"));
     assert!(
         VerifiedImage::from_bytes(&image.to_bytes()).is_ok(),
         "'_' and '_9x' are valid identifiers"
@@ -494,8 +502,8 @@ fn m1_a_name_that_is_not_an_ascii_identifier_is_refused() {
 fn m2_a_repeated_name_within_one_table_is_refused() {
     // Ambiguity at bind time: two muscles called "jaw" cannot be told apart.
     let mut image = Image::halt_only();
-    image.push_muscle(n("jaw"));
-    image.push_muscle(n("jaw"));
+    image.push_muscle(&n("jaw"));
+    image.push_muscle(&n("jaw"));
 
     match reject(&image.to_bytes()) {
         LoadError::DuplicateName {
@@ -515,19 +523,10 @@ fn m2_names_are_only_unique_within_a_table() {
     // The five tables are five separate namespaces (§6.5), so the same name may
     // appear in two of them — and does, in the read-back invariant.
     let mut image = Image::halt_only();
-    image.push_muscle(n("shared"));
-    image.push_sensor_i(Sensor {
-        name: n("shared"),
-        source: SensorSource::Backend,
-    });
-    image.push_var_f(VarF {
-        name: n("shared"),
-        init: 0.0,
-    });
-    image.push_var_i(VarI {
-        name: n("shared"),
-        init: 0,
-    });
+    image.push_muscle(&n("shared"));
+    image.push_sensor_i(&n("shared"), SensorSource::Backend);
+    image.push_var_f(&n("shared"), 0.0);
+    image.push_var_i(&n("shared"), 0);
     assert!(VerifiedImage::from_bytes(&image.to_bytes()).is_ok());
 }
 
@@ -536,7 +535,7 @@ fn m3_sensor_f_count_must_cover_every_muscle() {
     // One muscle, no read-back sensor: the invariant in §6.2 has nothing to
     // point at.
     let mut image = Image::halt_only();
-    image.push_muscle_only(Muscle { name: n("jaw") });
+    image.push_muscle_only(&n("jaw"));
 
     assert!(matches!(
         reject(&image.to_bytes()),
@@ -550,11 +549,8 @@ fn m3_sensor_f_count_must_cover_every_muscle() {
 #[test]
 fn m4_a_readback_sensor_must_carry_the_same_name() {
     let mut image = Image::halt_only();
-    image.push_muscle_only(Muscle { name: n("jaw") });
-    image.push_sensor_f(Sensor {
-        name: n("jaw_"),
-        source: SensorSource::Muscle,
-    });
+    image.push_muscle_only(&n("jaw"));
+    image.push_sensor_f(&n("jaw_"), SensorSource::Muscle);
 
     match reject(&image.to_bytes()) {
         LoadError::ReadbackNameMismatch {
@@ -574,11 +570,8 @@ fn m4_a_readback_sensor_must_be_sourced_from_the_muscle() {
     // Same name, wrong channel: FSENSE and FEXCITE would then disagree about
     // which integer means "jaw".
     let mut image = Image::halt_only();
-    image.push_muscle_only(Muscle { name: n("jaw") });
-    image.push_sensor_f(Sensor {
-        name: n("jaw"),
-        source: SensorSource::Backend,
-    });
+    image.push_muscle_only(&n("jaw"));
+    image.push_sensor_f(&n("jaw"), SensorSource::Backend);
 
     assert!(matches!(
         reject(&image.to_bytes()),
@@ -592,7 +585,7 @@ fn m4_a_readback_sensor_must_be_sourced_from_the_muscle() {
 #[test]
 fn m5_an_undefined_source_byte_is_refused() {
     let mut image = Image::halt_only();
-    image.push_muscle(n("a"));
+    image.push_muscle(&n("a"));
     let mut bytes = image.to_bytes();
     // sensors_f[0]'s src byte: after the header, the code, and both names.
     let src = HEADER_LEN + INSN_LEN + 2 + 2;
@@ -615,10 +608,7 @@ fn m5_an_undefined_source_byte_is_refused() {
 fn m5_builtin_dt_and_tick_are_single_and_table_specific() {
     // BUILTIN_TICK in sensors_f: the integer tick cannot be read as a float.
     let mut image = Image::halt_only();
-    image.push_sensor_f(Sensor {
-        name: n("t"),
-        source: SensorSource::BuiltinTick,
-    });
+    image.push_sensor_f(&n("t"), SensorSource::BuiltinTick);
     assert!(matches!(
         reject(&image.to_bytes()),
         LoadError::SensorSourceNotAllowedHere {
@@ -630,10 +620,7 @@ fn m5_builtin_dt_and_tick_are_single_and_table_specific() {
 
     // BUILTIN_DT in sensors_i: the same rule the other way.
     let mut image = Image::halt_only();
-    image.push_sensor_i(Sensor {
-        name: n("d"),
-        source: SensorSource::BuiltinDt,
-    });
+    image.push_sensor_i(&n("d"), SensorSource::BuiltinDt);
     assert!(matches!(
         reject(&image.to_bytes()),
         LoadError::SensorSourceNotAllowedHere {
@@ -645,14 +632,8 @@ fn m5_builtin_dt_and_tick_are_single_and_table_specific() {
 
     // A second dt.
     let mut image = Image::halt_only();
-    image.push_sensor_f(Sensor {
-        name: n("d1"),
-        source: SensorSource::BuiltinDt,
-    });
-    image.push_sensor_f(Sensor {
-        name: n("d2"),
-        source: SensorSource::BuiltinDt,
-    });
+    image.push_sensor_f(&n("d1"), SensorSource::BuiltinDt);
+    image.push_sensor_f(&n("d2"), SensorSource::BuiltinDt);
     assert!(matches!(
         reject(&image.to_bytes()),
         LoadError::DuplicateBuiltinDt { index: 1 }
@@ -660,14 +641,8 @@ fn m5_builtin_dt_and_tick_are_single_and_table_specific() {
 
     // A second tick.
     let mut image = Image::halt_only();
-    image.push_sensor_i(Sensor {
-        name: n("t1"),
-        source: SensorSource::BuiltinTick,
-    });
-    image.push_sensor_i(Sensor {
-        name: n("t2"),
-        source: SensorSource::BuiltinTick,
-    });
+    image.push_sensor_i(&n("t1"), SensorSource::BuiltinTick);
+    image.push_sensor_i(&n("t2"), SensorSource::BuiltinTick);
     assert!(matches!(
         reject(&image.to_bytes()),
         LoadError::DuplicateBuiltinTick { index: 1 }
@@ -678,11 +653,8 @@ fn m5_builtin_dt_and_tick_are_single_and_table_specific() {
 fn m6_muscle_readback_is_only_legal_where_a_muscle_exists() {
     // One muscle but two MUSCLE sensors: the second has no muscle to read.
     let mut image = Image::halt_only();
-    image.push_muscle(n("a"));
-    image.push_sensor_f(Sensor {
-        name: n("b"),
-        source: SensorSource::Muscle,
-    });
+    image.push_muscle(&n("a"));
+    image.push_sensor_f(&n("b"), SensorSource::Muscle);
 
     assert!(matches!(
         reject(&image.to_bytes()),
@@ -691,6 +663,55 @@ fn m6_muscle_readback_is_only_legal_where_a_muscle_exists() {
             index: 1
         }
     ));
+}
+
+// ===========================================================================
+// The plan M3–M6 imply
+// ===========================================================================
+
+#[test]
+fn the_plan_resolves_every_sensor_to_its_source() {
+    use cyberspine_core::binfmt::plan::{SensorFSource, SensorISource};
+
+    // muscles: [a, b]; sensors_f: readback a, readback b, backend x, dt;
+    // sensors_i: backend n, tick. `push_muscle` appends the read-back itself.
+    let mut image = Image::halt_only();
+    image.push_muscle(&n("a"));
+    image.push_muscle(&n("b"));
+    image.push_sensor_f(&n("x"), SensorSource::Backend);
+    image.push_sensor_f(&n("dt"), SensorSource::BuiltinDt);
+    image.push_sensor_i(&n("n"), SensorSource::Backend);
+    image.push_sensor_i(&n("tick"), SensorSource::BuiltinTick);
+
+    let verified = VerifiedImage::from_bytes(&image.to_bytes()).expect("a full image loads");
+    let plan = verified.plan();
+
+    assert_eq!(
+        plan.f,
+        vec![
+            SensorFSource::Muscle(0),
+            SensorFSource::Muscle(1),
+            // The counter is per kind: this is the first backend observable, not
+            // sensor #2.
+            SensorFSource::Backend(0),
+            SensorFSource::Dt,
+        ]
+    );
+    assert_eq!(
+        plan.i,
+        vec![SensorISource::Backend(0), SensorISource::Tick]
+    );
+    assert_eq!(plan.backend_counts(), (1, 1));
+}
+
+#[test]
+fn a_builtin_free_image_has_a_plan_of_the_same_length_as_its_tables() {
+    let image = image_with(&[insn(OpCode::Halt, 0, 0, 0)]);
+    let verified = VerifiedImage::from_bytes(&image.to_bytes()).expect("a bare image loads");
+    let plan = verified.plan();
+    assert_eq!(plan.f.len(), verified.sensors_f().len());
+    assert_eq!(plan.i.len(), verified.sensors_i().len());
+    assert_eq!(plan.backend_counts(), (0, 0));
 }
 
 // ===========================================================================
@@ -894,3 +915,12 @@ fn i7_wait_must_not_exceed_the_headers_max_wait() {
 // ===========================================================================
 // The disk entry point lives in `cyberspine-vm`; see its `tests/io.rs`.
 // ===========================================================================
+
+#[test]
+fn an_oversized_image_is_refused_before_it_is_decoded() {
+    let bytes = vec![0u8; MAX_IMAGE_LEN + 1];
+    assert!(matches!(
+        VerifiedImage::from_bytes(&bytes),
+        Err(LoadError::TooLarge { .. })
+    ));
+}

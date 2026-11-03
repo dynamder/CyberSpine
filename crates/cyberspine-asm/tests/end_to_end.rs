@@ -33,10 +33,10 @@ fn an_assembled_source_runs_and_produces_the_expected_commands() {
     let bytes = image.to_bytes();
     let loaded = VerifiedImage::from_bytes(&bytes).expect("the assembler's own output loads");
 
-    let mut host = Host::new(DummyBackend::new(rig));
-    host.set_tracing(true);
-    host.load(loaded)
+    let (mut host, _) = Host::new(DummyBackend::new(rig))
+        .load(loaded)
         .expect("the backend implements the rig the image was assembled for");
+    host.set_tracing(true);
 
     for _ in 0..3 {
         host.tick();
@@ -44,8 +44,7 @@ fn an_assembled_source_runs_and_produces_the_expected_commands() {
 
     let commands: Vec<Vec<Option<f32>>> = host
         .trace()
-        .iter()
-        .map(|tick| tick.commands.clone())
+        .map(|tick| tick.commands.to_vec())
         .collect();
 
     assert_eq!(

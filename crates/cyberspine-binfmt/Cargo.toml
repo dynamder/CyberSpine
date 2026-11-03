@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
+cyberspine-diag = { path = "../cyberspine-diag" }
 cyberspine-isa = { path = "../cyberspine-isa" }
 cyberspine-rig = { path = "../cyberspine-rig" }
 # `default-features = false` keeps blake3 on `core`: the content hash has to be

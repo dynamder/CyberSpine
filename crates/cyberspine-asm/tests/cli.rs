@@ -122,8 +122,9 @@ fn a_source_is_assembled_into_the_requested_file() {
     assert_eq!(
         VerifiedImage::from_bytes(&written)
             .expect("the loader accepts the file")
-            .image(),
-        &expected
+            .to_bytes(),
+        expected.to_bytes(),
+        "the file round-trips through the loader byte for byte"
     );
     assert_eq!(
         written,

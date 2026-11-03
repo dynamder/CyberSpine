@@ -198,6 +198,7 @@ dependencies = [
  "annotate-snippets",
  "clap",
  "cyberspine-core",
+ "cyberspine-diag",
  "cyberspine-manifest",
  "cyberspine-store",
  "cyberspine-testkit",
@@ -212,6 +213,7 @@ name = "cyberspine-binfmt"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "cyberspine-diag",
  "cyberspine-isa",
  "cyberspine-rig",
  "thiserror",
@@ -240,6 +242,10 @@ dependencies = [
  "cyberspine-vm",
  "thiserror",
 ]
+
+[[package]]
+name = "cyberspine-diag"
+version = "0.1.0"
 
 [[package]]
 name = "cyberspine-exec"
@@ -288,6 +294,7 @@ name = "cyberspine-testkit"
 version = "0.1.0"
 dependencies = [
  "cyberspine-core",
+ "cyberspine-rig",
 ]
 
 [[package]]

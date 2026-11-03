@@ -15,22 +15,17 @@
 use std::{fmt, ops::Range, path::Path};
 
 use annotate_snippets::{AnnotationKind, Level, Origin, Renderer, Snippet, renderer::DecorStyle};
+use cyberspine_diag::{DiagnosticKind, Level as DiagLevel};
 use smol_str::SmolStr;
 use thiserror::Error;
 use winnow::error::{ErrMode, ParserError};
 
 /// A 1-based source position. `line` counts `\n`, `column` counts characters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Location {
-    pub line: usize,
-    pub column: usize,
-}
-
-impl Location {
-    pub const fn new(line: usize, column: usize) -> Self {
-        Self { line, column }
-    }
-}
+///
+/// The shared type, not a copy of it: `cyberspine_diag` owns the vocabulary, and a
+/// warning from the lint pass has to be locatable exactly like an error from the
+/// parser.
+pub use cyberspine_diag::Location;
 
 /// Why a source was rejected.
 ///
@@ -141,6 +136,18 @@ impl fmt::Display for ParseError {
 }
 
 impl std::error::Error for ParseError {}
+
+impl DiagnosticKind for ParseError {
+    fn level(&self) -> DiagLevel {
+        DiagLevel::Error
+    }
+}
+
+impl DiagnosticKind for ParseErrorKind {
+    fn level(&self) -> DiagLevel {
+        DiagLevel::Error
+    }
+}
 
 /// Everything the parse stage rejected in one source file.
 ///

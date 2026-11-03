@@ -46,7 +46,7 @@ fn the_assembled_bytes_load_and_run() {
         .to_bytes();
     let loaded = VerifiedImage::from_bytes(&bytes).expect("the assembler's own output loads");
 
-    let mut host = Host::new(MazeBackend::new());
+    let host = Host::new(MazeBackend::new());
     host.load(loaded)
         .expect("the demo backend implements the rig the image declares");
 }

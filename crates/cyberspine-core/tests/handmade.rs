@@ -144,7 +144,7 @@ fn hand_header(file_len: usize, code_len: usize) -> [u8; HEADER_LEN] {
     let mut h = [0u8; HEADER_LEN];
 
     h[0..4].copy_from_slice(b"CSPX"); //  0  magic
-    h[4..6].copy_from_slice(&0x0100u16.to_le_bytes()); //  4  format 1.0
+    h[4..6].copy_from_slice(&0x0800u16.to_le_bytes()); //  4  format 1.0.0
     h[6..8].copy_from_slice(&1u16.to_le_bytes()); //  6  isa_version = 1
     h[8..10].copy_from_slice(&0u16.to_le_bytes()); //  8  reserved_a = 0
     h[10..12].copy_from_slice(&0u16.to_le_bytes()); // 10  flags = 0
@@ -312,7 +312,7 @@ fn the_hand_assembled_bytes_match_the_offset_table() {
 
     // §4, field by field, read straight out of the byte string.
     assert_eq!(&bytes[0..4], b"CSPX");
-    assert_eq!(u16::from_le_bytes(bytes[4..6].try_into().unwrap()), 0x0100);
+    assert_eq!(u16::from_le_bytes(bytes[4..6].try_into().unwrap()), 0x0800);
     assert_eq!(u16::from_le_bytes(bytes[6..8].try_into().unwrap()), 1);
     assert_eq!(
         u16::from_le_bytes(bytes[8..10].try_into().unwrap()),
@@ -419,21 +419,21 @@ fn golden_valid_all_loads_and_decodes() {
 
     // Metadata: every table populated, read-back invariant (M4) intact.
     assert_eq!(image.muscles().len(), 2);
-    assert_eq!(&*image.muscles()[0].name, "mouth");
-    assert_eq!(&*image.muscles()[1].name, "brow");
+    assert_eq!(image.name(image.muscles()[0].name), "mouth");
+    assert_eq!(image.name(image.muscles()[1].name), "brow");
 
     assert_eq!(image.sensors_f().len(), 4);
-    assert_eq!(&*image.sensors_f()[0].name, "mouth");
+    assert_eq!(image.name(image.sensors_f()[0].name), "mouth");
     assert_eq!(image.sensors_f()[0].source, SensorSource::Muscle);
-    assert_eq!(&*image.sensors_f()[1].name, "brow");
+    assert_eq!(image.name(image.sensors_f()[1].name), "brow");
     assert_eq!(image.sensors_f()[1].source, SensorSource::Muscle);
-    assert_eq!(&*image.sensors_f()[2].name, "dt");
+    assert_eq!(image.name(image.sensors_f()[2].name), "dt");
     assert_eq!(image.sensors_f()[2].source, SensorSource::BuiltinDt);
-    assert_eq!(&*image.sensors_f()[3].name, "pressure");
+    assert_eq!(image.name(image.sensors_f()[3].name), "pressure");
     assert_eq!(image.sensors_f()[3].source, SensorSource::Backend);
 
     assert_eq!(image.sensors_i().len(), 3);
-    assert_eq!(&*image.sensors_i()[0].name, "tick");
+    assert_eq!(image.name(image.sensors_i()[0].name), "tick");
     assert_eq!(image.sensors_i()[0].source, SensorSource::BuiltinTick);
     assert_eq!(image.sensors_i()[1].source, SensorSource::Backend);
 

@@ -27,7 +27,7 @@ fn source(body: &str) -> String {
 /// A name that may be illegal: the tests below need rigs the *validator* must
 /// refuse, which no checked constructor can build.
 fn loose_name(text: &str) -> Name {
-    Name::new(text).unwrap_or_else(|_| Name::new_unchecked(text))
+    Name::new(text).unwrap_or_else(|_| cyberspine_testkit::raw_name(text))
 }
 
 fn rig(muscles: &[&str], sensors_f: &[&str], sensors_i: &[&str]) -> Rig {
@@ -101,7 +101,7 @@ fn a_minimal_program_gets_the_implicit_halt_and_the_header() {
     assert_eq!(image.code()[1].op, OpCode::Halt);
 
     let reloaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("the loader must accept it");
-    assert_eq!(reloaded.image(), &image);
+    assert_eq!(reloaded.to_bytes(), image.to_bytes(), "the writer reproduces what the reader read");
 }
 
 #[test]
@@ -156,21 +156,21 @@ HALT
     );
 
     assert_eq!(image.muscles().len(), 2);
-    assert_eq!(&*image.muscles()[0].name, "brow_l");
-    assert_eq!(&*image.muscles()[1].name, "brow_r");
+    assert_eq!(image.name(image.muscles()[0].name), "brow_l");
+    assert_eq!(image.name(image.muscles()[1].name), "brow_r");
 
     assert_eq!(image.sensors_f().len(), 4);
-    assert_eq!(&*image.sensors_f()[0].name, "brow_l");
+    assert_eq!(image.name(image.sensors_f()[0].name), "brow_l");
     assert_eq!(image.sensors_f()[0].source, SensorSource::Muscle);
-    assert_eq!(&*image.sensors_f()[1].name, "brow_r");
-    assert_eq!(&*image.sensors_f()[2].name, "smile");
+    assert_eq!(image.name(image.sensors_f()[1].name), "brow_r");
+    assert_eq!(image.name(image.sensors_f()[2].name), "smile");
     assert_eq!(image.sensors_f()[2].source, SensorSource::Backend);
-    assert_eq!(&*image.sensors_f()[3].name, "dt");
+    assert_eq!(image.name(image.sensors_f()[3].name), "dt");
     assert_eq!(image.sensors_f()[3].source, SensorSource::BuiltinDt);
 
     assert_eq!(image.sensors_i().len(), 2);
-    assert_eq!(&*image.sensors_i()[0].name, "gaze_lock");
-    assert_eq!(&*image.sensors_i()[1].name, "tick");
+    assert_eq!(image.name(image.sensors_i()[0].name), "gaze_lock");
+    assert_eq!(image.name(image.sensors_i()[1].name), "tick");
     assert_eq!(image.sensors_i()[1].source, SensorSource::BuiltinTick);
 
     assert_eq!(image.vars_f().len(), 1);
@@ -183,7 +183,7 @@ HALT
     assert_eq!(imm, vec![0, 2, 3, 0, 1, 0, 0, 1, 0, 1, 0, 0]);
 
     let reloaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("the loader must accept it");
-    assert_eq!(reloaded.image(), &image);
+    assert_eq!(reloaded.to_bytes(), image.to_bytes(), "the writer reproduces what the reader read");
 }
 
 /// The table order is the rig's order, not the source's: swapping two names in
@@ -196,8 +196,8 @@ fn the_rig_order_decides_the_indices() {
         &rig,
     );
 
-    assert_eq!(&*image.muscles()[0].name, "b_second");
-    assert_eq!(&*image.muscles()[1].name, "a_first");
+    assert_eq!(image.name(image.muscles()[0].name), "b_second");
+    assert_eq!(image.name(image.muscles()[1].name), "a_first");
     assert_eq!(image.code()[0].imm, 0);
     assert_eq!(image.code()[2].imm, 1);
 }
@@ -359,7 +359,7 @@ L_done:
     assert_eq!(jump_target(19, image.code()[19].imm as i32), Some(16));
 
     let reloaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("the loader must accept it");
-    assert_eq!(reloaded.image(), &image);
+    assert_eq!(reloaded.to_bytes(), image.to_bytes(), "the writer reproduces what the reader read");
 }
 
 // ---------------------------------------------------------------------------

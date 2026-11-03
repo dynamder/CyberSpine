@@ -3,18 +3,40 @@
 //! This is the only place that owns `now`, load order and the command merge.
 //! The VM executes one instance at a time and never sees any of it.
 //!
-//! Before any of that, [`Host::load`] is where an image meets the body it was
-//! assembled for: the fingerprints are compared, and a mismatch is refused
+//! Before any of that, loading is where an image meets the body it was assembled
+//! for: the fingerprints are compared, and a mismatch is refused
 //! (`docs/isa.md` §13.3). Nothing here compares names — they became indices at
 //! assembly time.
+//!
+//! # Two types, because a clock needs an image
+//!
+//! A [`Host`] holds a backend and nothing else: it has no clock, so it cannot
+//! tick, and the "tick before any image" state is not representable. [`Host::load`]
+//! consumes it and yields a [`Session`], which is the ticking type. A session never
+//! has zero images, and its `hz`/`dt`/`shape` are plain values rather than options.
+//!
+//! # The tick loop is the body's lifeline
+//!
+//! Ticking is what drives the body. An action that has halted stops *publishing*,
+//! but its effect on the body does not vanish: the merged vector becomes all
+//! `None`, and `None` means "no instance published this muscle" — the backend
+//! keeps the last commanded value (`docs/isa.md` §9.2). That is what makes "raise
+//! a hand and hold it" a real state rather than a program that has to keep running.
+//! So `tick` never short-circuits: a host with no instances still samples, commits
+//! and steps, and only the per-instance work disappears.
 
-use cyberspine_core::binfmt::image::{Sensor, SensorSource};
+use core::marker::PhantomData;
+
 use cyberspine_core::binfmt::load::VerifiedImage;
+use cyberspine_core::binfmt::plan::{SensorFSource, SensorISource};
 use cyberspine_core::exec::{Fault, Instance, Program, Sensors, Status};
 use cyberspine_core::isa::clock::Hz;
 use cyberspine_core::rig::{BoundFingerprint, Fingerprint};
 
-use crate::backend::{Backend, Snapshot};
+use crate::backend::{Backend, Shape, Snapshot};
+
+/// How many one-tick command vectors a fresh trace holds.
+pub const DEFAULT_TRACE_CAPACITY: usize = 4096;
 
 /// A stable handle on a loaded instance. Ids are never reused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -37,14 +59,14 @@ pub struct FaultRecord {
     pub fault: Fault,
 }
 
-/// One tick's merged command vector, kept when tracing is on.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Tick {
+/// One tick's merged command vector, borrowed out of the trace ring.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TickRef<'t> {
     pub now: u64,
-    pub commands: Vec<Option<f32>>,
+    pub commands: &'t [Option<f32>],
 }
 
-/// The host own refusals, all of them about compatibility rather than validity:
+/// The host's own refusals, all of them about compatibility rather than validity:
 /// a `VerifiedImage` is a legal action, but it may still be an action for another
 /// body, another clock, or another shape.
 #[derive(Debug, thiserror::Error)]
@@ -54,62 +76,177 @@ pub enum LoadError {
         declared: Fingerprint,
         backend: BoundFingerprint,
     },
-    #[error("the image carries no rig fingerprint; call `Host::allow_unbound` to load it anyway")]
+    #[error(
+        "the image carries no rig fingerprint; load it with a permissive host (`Host::permissive`) to run it anyway"
+    )]
     Unbound,
     #[error(
-        "the image's {table} table has {declared} entries, the host is already sized for {host}"
+        "the image's {table} table has {declared} entries, the backend reports {host}"
     )]
     ShapeMismatch {
         table: &'static str,
         declared: usize,
         host: usize,
     },
-    #[error("image declares {declared} Hz, the host is already ticking at {host} Hz")]
+    #[error("image declares {declared} Hz, the session is already ticking at {host} Hz")]
     Hz { declared: u32, host: u32 },
 }
 
-/// How big the loaded image is, in the numbers the host needs: the merge
-/// vector, the two observable buffers, and the muscle table a backend fills.
+/// What a host demands of an image's identity.
 ///
-/// A backend does not declare these (`docs/isa.md` §9.2) — the image does, and
-/// every image loaded here shares one fingerprint, so it declares the same
-/// shape every time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Scale {
-    muscles: usize,
-    sensors_f: usize,
-    sensors_i: usize,
+/// The fingerprint proves the image was assembled for *this* body; it does not
+/// and cannot prove anything about the body's honesty (`docs/isa.md` §13.3). The
+/// policy decides what to do when the only thing on offer is "no identity at all".
+pub trait RigPolicy {
+    fn check(declared: Fingerprint, backend: BoundFingerprint) -> Result<(), LoadError>;
 }
 
-impl Scale {
-    /// The image's own counts. M3/M4/M6 already guarantee that the read-backs
-    /// match the muscles, so "how many back-end observables" is all that is left
-    /// to count.
-    fn of(image: &VerifiedImage) -> Self {
-        let backend = |sensor: &&Sensor| sensor.source == SensorSource::Backend;
+/// The default: the image must name this body, and a body-less image is refused.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Strict;
+
+/// Accepts an image that names no body.
+///
+/// For paths that legitimately have no rig: tests, and firmware that runs
+/// hand-built images. A real host must not use this — under [`Strict`] the
+/// question "was this action built for this body" is a machine check.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Permissive;
+
+impl RigPolicy for Strict {
+    fn check(declared: Fingerprint, backend: BoundFingerprint) -> Result<(), LoadError> {
+        if declared == backend.fingerprint() {
+            return Ok(());
+        }
+        if declared.is_unbound() {
+            return Err(LoadError::Unbound);
+        }
+        Err(LoadError::RigMismatch { declared, backend })
+    }
+}
+
+impl RigPolicy for Permissive {
+    fn check(_declared: Fingerprint, _backend: BoundFingerprint) -> Result<(), LoadError> {
+        Ok(())
+    }
+}
+
+/// A backend and the policy it will load images under: no images, no clock, no
+/// `tick`. The only thing it can do is [`Host::load`].
+pub struct Host<B: Backend, P: RigPolicy = Strict> {
+    backend: B,
+    _policy: PhantomData<P>,
+}
+
+/// Hand-written so a caller can `expect` on a load result without the backend
+/// having to be printable: a host is nothing but a backend and a policy.
+impl<B: Backend, P: RigPolicy> core::fmt::Debug for Host<B, P> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Host").finish_non_exhaustive()
+    }
+}
+
+impl<B: Backend> Host<B, Strict> {
+    pub fn new(backend: B) -> Self {
         Self {
-            muscles: image.muscles().len(),
-            sensors_f: image.sensors_f().iter().filter(backend).count(),
-            sensors_i: image.sensors_i().iter().filter(backend).count(),
+            backend,
+            _policy: PhantomData,
+        }
+    }
+
+    /// Accept images assembled without a rig, and keep everything else strict.
+    ///
+    /// One-way on purpose: once a host has loaded a body-less image, "the host
+    /// only ever ran images for this body" is no longer a fact, and un-saying it
+    /// would not make it true.
+    pub fn permissive(self) -> Host<B, Permissive> {
+        Host {
+            backend: self.backend,
+            _policy: PhantomData,
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum SourceF {
-    /// The k-th `SensorSource::Backend` entry in `sensors_f`.
-    Backend(usize),
-    /// The k-th `SensorSource::Muscle` entry: that muscle's read-back.
-    Muscle(usize),
-    Dt,
-    Tick,
+impl<B: Backend, P: RigPolicy> Host<B, P> {
+    /// Load the first action, turning the host into a ticking [`Session`].
+    ///
+    /// The instance id comes back alongside the session — it is the handle the
+    /// caller has on the action it just started, and there is no other way to
+    /// name it.
+    ///
+    /// On failure the host comes back untouched: the image was wrong, the host
+    /// was not, and a caller that wants to try another image should not have to
+    /// rebuild the backend to do it.
+    pub fn load(
+        self,
+        image: VerifiedImage,
+    ) -> Result<(Session<B, P>, InstanceId), (Self, LoadError)> {
+        let shape = self.backend.shape();
+        if let Err(error) = admit::<B, P>(&self.backend, shape, &image) {
+            return Err((self, error));
+        }
+
+        let hz = image.header().hz;
+        let mut session = Session {
+            backend: self.backend,
+            shape,
+            hz,
+            dt: hz.dt(),
+            slots: Vec::new(),
+            merge_order: Vec::new(),
+            faults: Vec::new(),
+            rig_f: vec![0.0; shape.sensors_f],
+            rig_i: vec![0; shape.sensors_i],
+            rig_muscles: vec![0.0; shape.muscles],
+            merged: vec![None; shape.muscles],
+            now: 0,
+            accumulator: 0.0,
+            max_ticks_per_frame: 8,
+            overruns: 0,
+            next_id: 0,
+            tracing: false,
+            trace: Trace::new(0, shape.muscles),
+            _policy: PhantomData,
+        };
+        // `admit` already passed for this exact image, so the slot push cannot
+        // fail; it goes through the same private path a later `load` uses.
+        let id = session.push(image);
+        Ok((session, id))
+    }
 }
 
-#[derive(Debug, Clone, Copy)]
-enum SourceI {
-    /// The k-th `SensorSource::Backend` entry in `sensors_i`.
-    Backend(usize),
-    Tick,
+/// The identity and shape checks, in one place so a first load and a later load
+/// cannot disagree about what "fits" means.
+fn admit<B: Backend, P: RigPolicy>(
+    backend: &B,
+    host: Shape,
+    image: &VerifiedImage,
+) -> Result<(), LoadError> {
+    P::check(image.header().rig, backend.fingerprint())?;
+    let (sensors_f, sensors_i) = image.plan().backend_counts();
+    let image = Shape {
+        muscles: image.muscles().len(),
+        sensors_f,
+        sensors_i,
+    };
+    check_shape(host, image)
+}
+
+fn check_shape(host: Shape, image: Shape) -> Result<(), LoadError> {
+    for (table, declared, host) in [
+        ("muscles", image.muscles, host.muscles),
+        ("sensors_f", image.sensors_f, host.sensors_f),
+        ("sensors_i", image.sensors_i, host.sensors_i),
+    ] {
+        if declared != host {
+            return Err(LoadError::ShapeMismatch {
+                table,
+                declared,
+                host,
+            });
+        }
+    }
+    Ok(())
 }
 
 struct Slot {
@@ -119,111 +256,85 @@ struct Slot {
     instance: Instance,
     sensors_f: Vec<f32>,
     sensors_i: Vec<i32>,
-    plan_f: Vec<SourceF>,
-    plan_i: Vec<SourceI>,
 }
 
 impl Slot {
     fn fill(&mut self, rig_f: &[f32], rig_i: &[i32], rig_muscles: &[f32], now: u64, dt: f32) {
-        for (index, source) in self.plan_f.iter().enumerate() {
-            self.sensors_f[index] = match *source {
-                SourceF::Backend(observable) => rig_f[observable],
-                SourceF::Muscle(muscle) => rig_muscles[muscle],
-                SourceF::Dt => dt,
-                SourceF::Tick => now as i32 as f32,
+        let plan = self.image.plan();
+        // `zip` rather than indexing: if the plan and the buffers ever disagreed
+        // the fill would truncate instead of panicking, and the disagreement is
+        // already impossible because both come from the same table lengths.
+        for (slot, source) in self.sensors_f.iter_mut().zip(&plan.f) {
+            *slot = match *source {
+                SensorFSource::Backend(observable) => rig_f[observable],
+                SensorFSource::Muscle(muscle) => rig_muscles[muscle],
+                SensorFSource::Dt => dt,
             };
         }
-        for (index, source) in self.plan_i.iter().enumerate() {
-            self.sensors_i[index] = match *source {
-                SourceI::Backend(observable) => rig_i[observable],
-                SourceI::Tick => now as i32,
+        for (slot, source) in self.sensors_i.iter_mut().zip(&plan.i) {
+            *slot = match *source {
+                SensorISource::Backend(observable) => rig_i[observable],
+                SensorISource::Tick => now as i32,
             };
         }
     }
 }
 
 /// Several instances over one rig, advanced together.
-pub struct Host<B: Backend> {
+pub struct Session<B: Backend, P: RigPolicy = Strict> {
     backend: B,
-    scale: Option<Scale>,
+    shape: Shape,
+    hz: Hz,
+    dt: f32,
     slots: Vec<Slot>,
     merge_order: Vec<usize>,
     faults: Vec<FaultRecord>,
     rig_f: Vec<f32>,
     rig_i: Vec<i32>,
     rig_muscles: Vec<f32>,
-    allow_unbound: bool,
+    /// The tick's command vector, reused so the loop allocates nothing.
+    merged: Vec<Option<f32>>,
     now: u64,
-    hz: Option<Hz>,
-    dt: f32,
     accumulator: f64,
     max_ticks_per_frame: u32,
     overruns: u64,
     next_id: u64,
     tracing: bool,
-    trace: Vec<Tick>,
+    trace: Trace,
+    _policy: PhantomData<P>,
 }
 
-impl<B: Backend> Host<B> {
-    pub fn new(backend: B) -> Self {
-        Self {
-            backend,
-            scale: None,
-            slots: Vec::new(),
-            merge_order: Vec::new(),
-            faults: Vec::new(),
-            rig_f: Vec::new(),
-            rig_i: Vec::new(),
-            rig_muscles: Vec::new(),
-            allow_unbound: false,
-            now: 0,
-            hz: None,
-            dt: 0.0,
-            accumulator: 0.0,
-            max_ticks_per_frame: 8,
-            overruns: 0,
-            next_id: 0,
-            tracing: false,
-            trace: Vec::new(),
+impl<B: Backend, P: RigPolicy> core::fmt::Debug for Session<B, P> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Session")
+            .field("hz", &self.hz)
+            .field("shape", &self.shape)
+            .field("now", &self.now)
+            .field("instances", &self.slots.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl<B: Backend, P: RigPolicy> Session<B, P> {
+    /// Load another action into this session.
+    ///
+    /// The first image fixed the clock; every later image has to agree with it,
+    /// with the backend's shape and with the identity policy. Names became
+    /// indices at assembly time, so nothing here compares strings.
+    pub fn load(&mut self, image: VerifiedImage) -> Result<InstanceId, LoadError> {
+        admit::<B, P>(&self.backend, self.shape, &image)?;
+        let hz = image.header().hz;
+        if hz != self.hz {
+            return Err(LoadError::Hz {
+                declared: hz.get(),
+                host: self.hz.get(),
+            });
         }
+        Ok(self.push(image))
     }
 
-    /// Load one action.
-    ///
-    /// The image must have been assembled for this backend's rig: equal
-    /// fingerprints, hence equal shape and clock. Names became indices at
-    /// assembly time; nothing here compares strings.
-    ///
-    /// An image assembled without a rig carries [`Fingerprint::UNBOUND`] and is
-    /// refused, because nothing ties it to this body. Tests and firmware that
-    /// never see a host may opt out with [`Host::allow_unbound`].
-    pub fn load(&mut self, image: VerifiedImage) -> Result<InstanceId, LoadError> {
-        self.check_rig(&image)?;
-        let scale = Scale::of(&image);
-        let scale = self.fit_scale(scale)?;
-        // The whole host is sized by one scale, so every slot's muscle table is
-        // the host's. That is what lets `Instance::published` index without a
-        // bound check, and it is checked once, here, where the image is admitted.
-        debug_assert_eq!(image.muscles().len(), scale.muscles);
-
-        let hz = image.header().hz;
-        match self.hz {
-            None => {
-                self.hz = Some(hz);
-                self.dt = hz.dt();
-            }
-            Some(host) if host != hz => {
-                return Err(LoadError::Hz {
-                    declared: hz.get(),
-                    host: host.get(),
-                });
-            }
-            Some(_) => {}
-        }
-
-        let plan_f = float_plan(image.sensors_f());
-        let plan_i = int_plan(image.sensors_i());
-
+    /// Admit an image whose checks have already passed.
+    fn push(&mut self, image: VerifiedImage) -> InstanceId {
         let instance = {
             let program = Program::new(&image);
             Instance::new(&program)
@@ -238,40 +349,26 @@ impl<B: Backend> Host<B> {
             sensors_i: vec![0; image.sensors_i().len()],
             image,
             instance,
-            plan_f,
-            plan_i,
         });
         self.rebuild_merge_order();
-        Ok(id)
-    }
-
-    /// Accept an image that was assembled without a rig.
-    ///
-    /// Only for paths that legitimately have no rig: tests, and firmware that
-    /// runs hand-built images. A real host must not call this — it is what makes
-    /// "this action was built for this body" a machine check.
-    pub fn allow_unbound(&mut self) {
-        self.allow_unbound = true;
+        id
     }
 
     /// One tick: sample, resume everything due, merge, hand over, step.
+    ///
+    /// Never short-circuits, not even with no instances: the last three calls are
+    /// how the body keeps holding what it was last told.
     pub fn tick(&mut self) {
-        if self.hz.is_none() {
-            return;
-        }
-
         self.sample();
         self.resume_due();
 
-        let merged = self.merge();
-        self.backend.commit(&merged, self.dt);
+        self.merge();
+        self.backend.commit(&self.merged, self.dt);
         self.backend.step(self.dt);
 
         if self.tracing {
-            self.trace.push(Tick {
-                now: self.now,
-                commands: merged,
-            });
+            let now = self.now;
+            self.trace.push(now, &self.merged);
         }
 
         self.now += 1;
@@ -281,13 +378,10 @@ impl<B: Backend> Host<B> {
     /// Consume wall-clock seconds and run the whole ticks they contain.
     ///
     /// The remainder stays here: it is host timing, and it never enters a tick.
-    /// A frame that asks for more than [`Host::set_max_ticks_per_frame`] ticks
+    /// A frame that asks for more than [`Session::set_max_ticks_per_frame`] ticks
     /// drops its remainder and counts one overrun, so a slow frame can never
     /// spiral.
     pub fn advance(&mut self, seconds: f64) {
-        if self.hz.is_none() {
-            return;
-        }
         self.accumulator += seconds.max(0.0);
         let dt = f64::from(self.dt);
         let mut ticks = 0;
@@ -311,8 +405,13 @@ impl<B: Backend> Host<B> {
         self.dt
     }
 
-    pub fn hz(&self) -> Option<Hz> {
+    pub fn hz(&self) -> Hz {
         self.hz
+    }
+
+    /// The shape every image in this session had to agree with.
+    pub fn shape(&self) -> Shape {
+        self.shape
     }
 
     pub fn overruns(&self) -> u64 {
@@ -321,6 +420,15 @@ impl<B: Backend> Host<B> {
 
     pub fn instances(&self) -> usize {
         self.slots.len()
+    }
+
+    /// No instances at all — everything halted or faulted.
+    ///
+    /// Observation only: an idle session still ticks, because the body still
+    /// needs driving. A caller uses this to decide whether to keep a frame loop
+    /// running, not to skip [`Session::tick`].
+    pub fn is_idle(&self) -> bool {
+        self.slots.is_empty()
     }
 
     pub fn instance(&self, id: InstanceId) -> Option<&Instance> {
@@ -338,18 +446,47 @@ impl<B: Backend> Host<B> {
         &mut self.backend
     }
 
+    /// Start or stop recording the per-tick command vector.
+    ///
+    /// Turning tracing on allocates the ring ([`DEFAULT_TRACE_CAPACITY`] ticks,
+    /// or whatever [`Session::set_trace_capacity`] last asked for); turning it off
+    /// clears it and keeps the allocation.
     pub fn set_tracing(&mut self, tracing: bool) {
         self.tracing = tracing;
-        if !tracing {
+        if tracing {
+            if self.trace.capacity() == 0 {
+                self.trace = Trace::new(DEFAULT_TRACE_CAPACITY, self.shape.muscles);
+            }
+        } else {
             self.trace.clear();
         }
     }
 
-    pub fn trace(&self) -> &[Tick] {
-        &self.trace
+    pub fn tracing(&self) -> bool {
+        self.tracing
     }
 
-    /// Every fault since the last [`Host::take_faults`], oldest first.
+    /// Resize the ring. Zero turns recording into a no-op that still counts
+    /// [`Session::trace_dropped`].
+    pub fn set_trace_capacity(&mut self, ticks: usize) {
+        self.trace = Trace::new(ticks, self.shape.muscles);
+    }
+
+    /// The recorded ticks, oldest first.
+    pub fn trace(&self) -> TraceIter<'_> {
+        self.trace.iter()
+    }
+
+    /// How many tick records were overwritten by later ones.
+    ///
+    /// The ring is a sample, not a log: a consumer that does not drain it will
+    /// see this number grow, and that is the honest signal that its window is
+    /// shorter than the run.
+    pub fn trace_dropped(&self) -> u64 {
+        self.trace.dropped()
+    }
+
+    /// Every fault since the last [`Session::take_faults`], oldest first.
     pub fn faults(&self) -> &[FaultRecord] {
         &self.faults
     }
@@ -357,69 +494,14 @@ impl<B: Backend> Host<B> {
     /// Drain the fault log: the records the caller has not been told about yet.
     ///
     /// Drained rather than capped — a fault is rare, and dropping the oldest
-    /// record would be exactly the silence this log exists to rule out.
+    /// record would be exactly the silence this log exists to rule out. A caller
+    /// that never drains it therefore grows without bound.
     pub fn take_faults(&mut self) -> Vec<FaultRecord> {
         core::mem::take(&mut self.faults)
     }
 
     pub fn set_max_ticks_per_frame(&mut self, ticks: u32) {
         self.max_ticks_per_frame = ticks.max(1);
-    }
-
-    /// The image's fingerprint against the backend's: equal, or refused.
-    ///
-    /// An all-zero fingerprint means the image has no rig at all, which is a
-    /// different failure from a mismatch — it says "unbound", not "another
-    /// body", and only an explicit opt-out lets it through.
-    fn check_rig(&self, image: &VerifiedImage) -> Result<(), LoadError> {
-        let declared = image.header().rig;
-        // A backend's fingerprint is bound by its type, so this can never be the
-        // UNBOUND value: "both unbound" cannot pass for a match.
-        let backend = self.backend.fingerprint();
-        if declared == backend.fingerprint() {
-            return Ok(());
-        }
-        if declared.is_unbound() {
-            return if self.allow_unbound {
-                Ok(())
-            } else {
-                Err(LoadError::Unbound)
-            };
-        }
-        Err(LoadError::RigMismatch { declared, backend })
-    }
-
-    /// The first image fixes the shape of everything the host allocates.
-    ///
-    /// Later images only have to agree with it. With equal fingerprints they
-    /// always do; this check is what an unbound image (which proves nothing
-    /// about its shape) is measured against.
-    fn fit_scale(&mut self, scale: Scale) -> Result<Scale, LoadError> {
-        match self.scale {
-            None => {
-                self.rig_f = vec![0.0; scale.sensors_f];
-                self.rig_i = vec![0; scale.sensors_i];
-                self.rig_muscles = vec![0.0; scale.muscles];
-                self.scale = Some(scale);
-                Ok(scale)
-            }
-            Some(host) if scale.sensors_f != host.sensors_f => Err(LoadError::ShapeMismatch {
-                table: "sensors_f",
-                declared: scale.sensors_f,
-                host: host.sensors_f,
-            }),
-            Some(host) if scale.sensors_i != host.sensors_i => Err(LoadError::ShapeMismatch {
-                table: "sensors_i",
-                declared: scale.sensors_i,
-                host: host.sensors_i,
-            }),
-            Some(host) if scale.muscles != host.muscles => Err(LoadError::ShapeMismatch {
-                table: "muscles",
-                declared: scale.muscles,
-                host: host.muscles,
-            }),
-            Some(_) => Ok(scale),
-        }
     }
 
     fn sample(&mut self) {
@@ -456,22 +538,22 @@ impl<B: Backend> Host<B> {
         }
     }
 
-    fn merge(&self) -> Vec<Option<f32>> {
-        let muscles = self.scale.map_or(0, |scale| scale.muscles);
-        let mut merged = vec![None; muscles];
+    /// Rebuild this tick's command vector in place: `None` for every muscle no
+    /// instance published, and nothing allocated.
+    fn merge(&mut self) {
+        self.merged.fill(None);
         for &index in &self.merge_order {
             let instance = &self.slots[index].instance;
             // G12: a fault takes its contributions with it, in the same tick.
             if instance.status() == Status::Faulted {
                 continue;
             }
-            for (muscle, slot) in merged.iter_mut().enumerate() {
+            for (muscle, slot) in self.merged.iter_mut().enumerate() {
                 if let Some(value) = instance.published(muscle) {
                     *slot = Some(value);
                 }
             }
         }
-        merged
     }
 
     /// Drop the instances that ended this tick, keeping their reasons.
@@ -508,41 +590,103 @@ impl<B: Backend> Host<B> {
     }
 }
 
-/// The k-th `Backend` entry of `sensors_f` is the backend's k-th observable
-/// (`docs/isa.md` §9.2), whatever the read-back and built-in entries around it.
-fn float_plan(sensors: &[Sensor]) -> Vec<SourceF> {
-    let mut backends = 0usize;
-    let mut muscles = 0usize;
-    sensors
-        .iter()
-        .map(|sensor| match sensor.source {
-            SensorSource::Muscle => {
-                let muscle = muscles;
-                muscles += 1;
-                SourceF::Muscle(muscle)
-            }
-            SensorSource::Backend => {
-                let observable = backends;
-                backends += 1;
-                SourceF::Backend(observable)
-            }
-            SensorSource::BuiltinDt => SourceF::Dt,
-            SensorSource::BuiltinTick => SourceF::Tick,
-        })
-        .collect()
+/// A fixed-capacity ring of tick records.
+///
+/// Commands live in one flat arena rather than a `Vec` per tick, so recording a
+/// tick copies bytes and never allocates.
+struct Trace {
+    now: Vec<u64>,
+    commands: Vec<Option<f32>>,
+    muscles: usize,
+    len: usize,
+    head: usize,
+    dropped: u64,
 }
 
-fn int_plan(sensors: &[Sensor]) -> Vec<SourceI> {
-    let mut backends = 0usize;
-    sensors
-        .iter()
-        .map(|sensor| match sensor.source {
-            SensorSource::BuiltinTick => SourceI::Tick,
-            _ => {
-                let observable = backends;
-                backends += 1;
-                SourceI::Backend(observable)
-            }
-        })
-        .collect()
+impl Trace {
+    fn new(capacity: usize, muscles: usize) -> Self {
+        Self {
+            now: vec![0; capacity],
+            commands: vec![None; capacity * muscles],
+            muscles,
+            len: 0,
+            head: 0,
+            dropped: 0,
+        }
+    }
+
+    fn capacity(&self) -> usize {
+        self.now.len()
+    }
+
+    fn dropped(&self) -> u64 {
+        self.dropped
+    }
+
+    fn clear(&mut self) {
+        self.len = 0;
+        self.head = 0;
+        self.dropped = 0;
+    }
+
+    fn push(&mut self, now: u64, commands: &[Option<f32>]) {
+        let capacity = self.capacity();
+        if capacity == 0 {
+            self.dropped += 1;
+            return;
+        }
+        let start = self.head * self.muscles;
+        self.now[self.head] = now;
+        self.commands[start..start + self.muscles].copy_from_slice(commands);
+        if self.len == capacity {
+            self.dropped += 1;
+        } else {
+            self.len += 1;
+        }
+        self.head = (self.head + 1) % capacity;
+    }
+
+    fn iter(&self) -> TraceIter<'_> {
+        TraceIter {
+            trace: self,
+            index: 0,
+        }
+    }
+
+    fn get(&self, index: usize) -> TickRef<'_> {
+        let capacity = self.capacity();
+        let oldest = (self.head + capacity - self.len) % capacity;
+        let physical = (oldest + index) % capacity;
+        let start = physical * self.muscles;
+        TickRef {
+            now: self.now[physical],
+            commands: &self.commands[start..start + self.muscles],
+        }
+    }
 }
+
+/// The recorded ticks, oldest first.
+pub struct TraceIter<'t> {
+    trace: &'t Trace,
+    index: usize,
+}
+
+impl<'t> Iterator for TraceIter<'t> {
+    type Item = TickRef<'t>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.trace.len {
+            return None;
+        }
+        let tick = self.trace.get(self.index);
+        self.index += 1;
+        Some(tick)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.trace.len - self.index;
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for TraceIter<'_> {}

@@ -63,12 +63,32 @@ impl core::fmt::Debug for Fingerprint {
 /// an identity to report. Splitting the two types removes the case where an
 /// unbound image and an unbound backend "match" and slip past the host's check
 /// (`docs/rig.md` §4).
+///
+/// The invariant is "never [`Fingerprint::UNBOUND`]", and it is upheld by three
+/// things together: the field is private, [`BoundFingerprint::of`] is the only
+/// constructor, and there is deliberately no `From<Fingerprint>`, no `Default`
+/// and no `UNBOUND` constant. A `[u8; 32]` read back from a device therefore
+/// cannot be promoted to a body identity by painting it with this type.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BoundFingerprint(Fingerprint);
 
 impl BoundFingerprint {
+    /// The identity of a validated rig.
+    ///
+    /// Validation is the caller's, not this function's: a rig that failed
+    /// [`Rig::validate`] is not a body, and hashing it would mint an identity for
+    /// something that does not exist.
     pub fn of(rig: &Rig) -> Self {
-        Self(rig.fingerprint())
+        let digest = rig.fingerprint();
+        // blake3 over a non-empty, fixed-prefix encoding: the digest is all zeros
+        // with probability 2^-256, and such a digest would be indistinguishable
+        // from UNBOUND. Nothing else can produce a zero here, so this is the whole
+        // of the invariant's runtime half.
+        debug_assert!(
+            !digest.is_unbound(),
+            "a body's fingerprint must never read as UNBOUND"
+        );
+        Self(digest)
     }
 
     pub fn fingerprint(self) -> Fingerprint {

@@ -1,13 +1,11 @@
 pub mod diagnostic;
 pub mod header;
+pub mod lint;
 pub mod text;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
-use cyberspine_core::binfmt::image::{
-    FORMAT_VERSION, FixedHeader as ImageFixedHeader, ISA_VERSION, Image, Muscle, Sensor,
-    SensorSource, VarF, VarI,
-};
+use cyberspine_core::binfmt::image::{FORMAT_VERSION, FixedHeader as ImageFixedHeader, ISA_VERSION, Image, SensorSource};
 use cyberspine_core::isa::clock::{Hz, Seconds};
 use cyberspine_core::isa::jump::{jump_offset, jump_target};
 use cyberspine_core::isa::{ImmType, Insn, OpCode, RegName};
@@ -18,6 +16,7 @@ use winnow::{Parser, combinator::trace, token::take_while};
 
 use diagnostic::PResult;
 pub use diagnostic::{AsmParseErrors, Location, ParseError, ParseErrorKind};
+pub use lint::{Warning, WarningKind, lint};
 use header::{AsmHeader, header as header_section};
 use text::{AsmInsn, AsmOperand, Located, TextItem, text as text_section};
 
@@ -250,94 +249,21 @@ pub fn generate_image(asm: &Asm, rig: &Rig) -> Result<Image, ImageGenError> {
         rig: rig.fingerprint(),
     };
     for muscle in symbols.image_muscles {
-        image.push_muscle_only(muscle);
+        image.push_muscle_only(&muscle);
     }
-    for sensor in symbols.image_sensors_f {
-        image.push_sensor_f(sensor);
+    for (sensor, source) in symbols.image_sensors_f {
+        image.push_sensor_f(&sensor, source);
     }
-    for sensor in symbols.image_sensors_i {
-        image.push_sensor_i(sensor);
+    for (sensor, source) in symbols.image_sensors_i {
+        image.push_sensor_i(&sensor, source);
     }
-    for var in symbols.image_vars_f {
-        image.push_var_f(var);
+    for (var, init) in symbols.image_vars_f {
+        image.push_var_f(&var, init);
     }
-    for var in symbols.image_vars_i {
-        image.push_var_i(var);
+    for (var, init) in symbols.image_vars_i {
+        image.push_var_i(&var, init);
     }
     Ok(image)
-}
-
-/// A readability problem the source can fix but that is not an error.
-///
-/// Same shape as a [`ParseError`]: a stable kind for tools, a [`Location`] for a
-/// human. They are reported by the CLI at warning level and never stop an
-/// assembly unless `--deny-warnings` asks for it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Warning {
-    pub location: Location,
-    pub kind: WarningKind,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum WarningKind {
-    #[error("label `{0}` is never a jump target")]
-    UnusedLabel(SmolStr),
-    #[error("group `{0}` has a single member; name the muscle directly")]
-    SingleMemberGroup(SmolStr),
-}
-
-/// Readability diagnostics over a parsed source: no codegen, no rig.
-///
-/// Scope is deliberately narrow — only what can be decided from the instruction
-/// section's own text, and therefore located exactly.
-pub fn lint(asm: &Asm) -> Vec<Warning> {
-    let mut labels: Vec<(&SmolStr, Location)> = Vec::new();
-    let mut targeted: Vec<&str> = Vec::new();
-    let mut groups: Vec<(&str, usize)> = asm
-        .header
-        .muscle_groups
-        .iter()
-        .map(|group| (group.name.as_str(), group.members.len()))
-        .collect();
-    let mut warnings = Vec::new();
-
-    for located in &asm.text {
-        match &located.item {
-            TextItem::Label(name) => labels.push((name, located.location)),
-            TextItem::Insn(insn) => {
-                for operand in &insn.operands {
-                    match operand {
-                        AsmOperand::Target(name) => targeted.push(name.as_str()),
-                        AsmOperand::Index(name) if insn.op == OpCode::Fexcite => {
-                            if let Some((_, members)) =
-                                groups.iter().find(|(group, _)| *group == name.as_str())
-                                && *members == 1
-                            {
-                                warnings.push(Warning {
-                                    location: located.location,
-                                    kind: WarningKind::SingleMemberGroup(name.clone()),
-                                });
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
-
-    for (name, location) in labels {
-        if !targeted.iter().any(|target| *target == name.as_str()) {
-            warnings.push(Warning {
-                location,
-                kind: WarningKind::UnusedLabel(name.clone()),
-            });
-        }
-    }
-
-    groups.clear();
-    warnings.sort_by_key(|warning| (warning.location.line, warning.location.column));
-    warnings
 }
 
 /// The clock rate the header declares, as the type every consumer divides by.
@@ -366,6 +292,10 @@ fn check_rig(rig: &Rig) -> Result<(), ImageGenError> {
 /// (`docs/binfmt.md` §3 / §6, `docs/asm.md` §3.3): `muscles` from the rig,
 /// `sensors_f` = read-backs ++ rig observables ++ `dt`,
 /// `sensors_i` = rig observables ++ `tick`, then the two var tables.
+///
+/// The `image_*` rows are the same tables in file order, as the argument lists the
+/// image builder wants: a row's name lives in the image's arena, so it cannot be
+/// built here as a finished table entry.
 struct Symbols {
     muscles: HashMap<SmolStr, u32>,
     sensors_f: HashMap<SmolStr, u32>,
@@ -373,11 +303,11 @@ struct Symbols {
     vars_f: HashMap<SmolStr, u32>,
     vars_i: HashMap<SmolStr, u32>,
     groups: HashMap<SmolStr, Vec<u32>>,
-    image_muscles: Vec<Muscle>,
-    image_sensors_f: Vec<Sensor>,
-    image_sensors_i: Vec<Sensor>,
-    image_vars_f: Vec<VarF>,
-    image_vars_i: Vec<VarI>,
+    image_muscles: Vec<Name>,
+    image_sensors_f: Vec<(Name, SensorSource)>,
+    image_sensors_i: Vec<(Name, SensorSource)>,
+    image_vars_f: Vec<(Name, f32)>,
+    image_vars_i: Vec<(Name, i32)>,
 }
 
 impl Symbols {
@@ -401,11 +331,8 @@ impl Symbols {
             muscles.insert(key.clone(), index);
             // binfmt.md §6.2: every muscle is its own read-back float sensor, at the same index.
             sensors_f.insert(key, index);
-            image_muscles.push(Muscle { name: name.clone() });
-            image_sensors_f.push(Sensor {
-                name: name.clone(),
-                source: SensorSource::Muscle,
-            });
+            image_muscles.push(name.clone());
+            image_sensors_f.push((name.clone(), SensorSource::Muscle));
         }
 
         for group in &header.muscle_groups {
@@ -433,29 +360,17 @@ impl Symbols {
         let sensor_f_base = image_sensors_f.len() as u32;
         for (offset, name) in rig.sensors_f.iter().enumerate() {
             sensors_f.insert(SmolStr::new(name.as_str()), sensor_f_base + offset as u32);
-            image_sensors_f.push(Sensor {
-                name: name.clone(),
-                source: SensorSource::Backend,
-            });
+            image_sensors_f.push((name.clone(), SensorSource::Backend));
         }
         sensors_f.insert(SmolStr::new("dt"), image_sensors_f.len() as u32);
-        image_sensors_f.push(Sensor {
-            name: builtin("dt"),
-            source: SensorSource::BuiltinDt,
-        });
+        image_sensors_f.push((builtin("dt"), SensorSource::BuiltinDt));
 
         for (index, name) in rig.sensors_i.iter().enumerate() {
             sensors_i.insert(SmolStr::new(name.as_str()), index as u32);
-            image_sensors_i.push(Sensor {
-                name: name.clone(),
-                source: SensorSource::Backend,
-            });
+            image_sensors_i.push((name.clone(), SensorSource::Backend));
         }
         sensors_i.insert(SmolStr::new("tick"), image_sensors_i.len() as u32);
-        image_sensors_i.push(Sensor {
-            name: builtin("tick"),
-            source: SensorSource::BuiltinTick,
-        });
+        image_sensors_i.push((builtin("tick"), SensorSource::BuiltinTick));
 
         for (index, (name, init)) in header.vars_f.iter().enumerate() {
             check_declarable(name)?;
@@ -463,10 +378,10 @@ impl Symbols {
                 return Err(ImageGenError::DuplicateName(name.clone()));
             }
             vars_f.insert(name.clone(), index as u32);
-            image_vars_f.push(VarF {
-                name: Name::new(name.as_str()).expect("the ident parser only produces identifiers"),
-                init: *init,
-            });
+            image_vars_f.push((
+                Name::new(name.as_str()).expect("the ident parser only produces identifiers"),
+                *init,
+            ));
         }
 
         for (index, (name, init)) in header.vars_i.iter().enumerate() {
@@ -475,10 +390,10 @@ impl Symbols {
                 return Err(ImageGenError::DuplicateName(name.clone()));
             }
             vars_i.insert(name.clone(), index as u32);
-            image_vars_i.push(VarI {
-                name: Name::new(name.as_str()).expect("the ident parser only produces identifiers"),
-                init: *init,
-            });
+            image_vars_i.push((
+                Name::new(name.as_str()).expect("the ident parser only produces identifiers"),
+                *init,
+            ));
         }
 
         Ok(Self {

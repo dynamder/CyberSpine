@@ -10,6 +10,7 @@ use cyberspine_asm::{
     cli::CliArgs,
 };
 use cyberspine_core::rig::Rig;
+use cyberspine_diag::Diagnostics;
 use cyberspine_store::{self as store, WriteError};
 
 fn main() -> ExitCode {
@@ -35,22 +36,29 @@ fn run(cli_args: &CliArgs) -> Result<(), String> {
     let asm =
         assembler::parse(&asm_str).map_err(|errors| errors.render(&cli_args.asm_file, &asm_str))?;
 
-    let warnings = assembler::lint(&asm);
-    for warning in &warnings {
-        eprint!(
-            "{}",
-            diagnostic::render_warning(
-                &warning.kind.to_string(),
-                warning.location,
-                &cli_args.asm_file,
-                &asm_str,
-            )
-        );
+    // One sink for everything the run noticed, so "warnings exist" and "warnings
+    // are fatal" are the same question asked twice rather than two flags.
+    let mut diagnostics = Diagnostics::new(cli_args.deny_warnings);
+    for warning in assembler::lint(&asm) {
+        diagnostics.push(&warning, Some(warning.location));
     }
-    if cli_args.deny_warnings && !warnings.is_empty() {
+    for item in diagnostics.items() {
+        if let Some(location) = item.location {
+            eprint!(
+                "{}",
+                diagnostic::render_warning(
+                    &item.message,
+                    location,
+                    &cli_args.asm_file,
+                    &asm_str,
+                )
+            );
+        }
+    }
+    if diagnostics.denies_warnings() && diagnostics.has_warnings() {
         return Err(format!(
             "error: {} warning(s) treated as errors\n",
-            warnings.len()
+            diagnostics.items().len()
         ));
     }
 

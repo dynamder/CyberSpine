@@ -10,7 +10,7 @@ use cyberspine_asm::assembler::{self, AsmParseErrors, ImageGenError};
 use cyberspine_core::binfmt::image::Image;
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::rig::Rig;
-use cyberspine_vm::{FaultRecord, Host, LoadError};
+use cyberspine_vm::{FaultRecord, Host, LoadError, Session as EngineSession};
 
 pub use backend::{MazeBackend, Muscle, RIG_NAME, RIG_VERSION, SensorF, SensorI, rig};
 pub use grid::{Cell, DEFAULT_LAYOUT, Grid, GridError, Heading};
@@ -46,7 +46,7 @@ pub fn assemble(source: &str, rig: &Rig) -> Result<Image, Error> {
 /// type can step the machine one tick at a time, so an example cannot invent a
 /// second advance policy.
 pub struct Session {
-    host: Host<MazeBackend>,
+    host: EngineSession<MazeBackend>,
 }
 
 impl Session {
@@ -55,14 +55,15 @@ impl Session {
     }
 
     /// Assemble `source` against `manifest`, then load the image into a fresh
-    /// body. The fingerprints must agree or `Host::load` refuses the image.
+    /// body. The fingerprints must agree or loading refuses the image.
     pub fn open(source: &str, manifest: &str) -> Result<Self, Error> {
         let rig = cyberspine_manifest::from_json(manifest)?;
         let image = assemble(source, &rig)?;
 
-        let mut host = Host::new(MazeBackend::new());
+        let (mut host, _) = Host::new(MazeBackend::new())
+            .load(VerifiedImage::verify(image)?)
+            .map_err(|(_, error)| error)?;
         host.set_tracing(true);
-        host.load(VerifiedImage::verify(image)?)?;
         Ok(Self { host })
     }
 
@@ -89,7 +90,7 @@ impl Session {
         self.host.backend()
     }
 
-    pub fn host(&self) -> &Host<MazeBackend> {
+    pub fn host(&self) -> &EngineSession<MazeBackend> {
         &self.host
     }
 
