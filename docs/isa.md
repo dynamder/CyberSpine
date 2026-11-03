@@ -363,7 +363,7 @@ FEXCITE mouth_open, r1     # 写新的命令值
 
 `INTR` 把实例推进到 `Interrupted`：它不写 fault、不结束实例，也不参与 fuel 以外的任何计费。宿主拿到 `(实例, reason, pc)` 后必须显式回答 `Continue`（从 `pc + 1` 继续）或 `Stop`（卸载实例，状态丢弃，身体保持最后命令）。裁决前的任何 `resume` 都是无操作。这是**刻意的 fail-safe**：忘记回答的宿主只会让实例永远停着，而不会把它悄悄放回执行。
 
-`reason` 是镜像里一张文本模板表的下标（`binfmt.md` §6.6）；模板里的 `{fN}` / `{iN}` / `{vf:name}` / `{vi:name}` 在宿主侧按挂起瞬间的实例状态插值，因此中断原因可以携带上下文，而不需要把数字码表事先约定好。`INTR` 与 `YIELD` / `WAIT` / `HALT` 一样是挂起点：`FEXCITE` 之后没 `FLUSH` 就 `INTR` 是**汇编期硬错误**（`asm.md` §6）。
+`reason` 是镜像里一张文本模板表的下标（`binfmt.md` §6.6）；模板里的 `{fN}` / `{iN}` / `{vf:name}` / `{vi:name}` 在宿主侧按挂起瞬间的实例状态插值，因此中断原因可以携带上下文，而不需要把数字码表事先约定好。`INTR` 与 `YIELD` / `WAIT` / `HALT` 一样是挂起点：`FEXCITE` 之后没 `FLUSH` 就 `INTR` 是**汇编期硬错误**（`asm.md` §6）。完整设计（含仲裁器边界）见 [`interrupt.md`](interrupt.md)。
 
 `WAIT` 的时长按 `dt` 换算成 tick 数：
 

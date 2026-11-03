@@ -104,7 +104,8 @@ interrupt: instance 0 (actions/idle.csp) at pc 3 tick 12: obstacle: x=0.32 y=0.9
 ```
 
 退出码仍是 `0`：中断是程序与宿主之间的正常通信，不是错误。需要真正的仲裁器（让外部程序
-决定 Continue / Stop / Switch）属于宿主集成，不在本 CLI 的 v1 范围内。
+决定 Continue / Stop / Switch）属于宿主集成，不在本 CLI 的 v1 范围内；边界设计见
+[`interrupt.md`](interrupt.md)。
 
 Ctrl-C 由 `ctrlc` 捕获，设置停止标志；当前循环结束后进程以 `0` 退出。
 
