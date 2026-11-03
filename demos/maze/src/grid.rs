@@ -70,6 +70,17 @@ impl Heading {
         self as i32
     }
 
+    /// The inverse of [`Heading::index`], for a value read back from a body.
+    pub const fn from_index(index: i32) -> Option<Self> {
+        match index {
+            0 => Some(Self::North),
+            1 => Some(Self::East),
+            2 => Some(Self::South),
+            3 => Some(Self::West),
+            _ => None,
+        }
+    }
+
     pub const fn name(self) -> &'static str {
         match self {
             Self::North => "north",

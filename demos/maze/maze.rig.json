@@ -1,6 +1,6 @@
 {
-  "rig": { "name": "maze-runner", "version": 1 },
+  "rig": { "name": "maze-runner", "version": 2 },
   "muscles": ["forward", "backward", "turn_left", "turn_right"],
   "sensors_f": ["marker_red", "marker_blue", "at_goal", "wall_ahead"],
-  "sensors_i": ["x", "y", "heading"]
+  "sensors_i": ["x", "y", "heading", "moves", "turns", "bumps"]
 }

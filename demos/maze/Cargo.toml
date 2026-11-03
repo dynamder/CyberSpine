@@ -5,14 +5,29 @@ edition = "2024"
 rust-version.workspace = true
 license.workspace = true
 publish = false
+default-run = "maze"
+
+# The rlib half is the linked body the `maze` binary runs; the cdylib half is
+# the same body packaged for `-b dylib:`.
+[lib]
+crate-type = ["rlib", "cdylib"]
 
 [dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
 cyberspine-asm = { path = "../../crates/cyberspine-asm" }
+cyberspine-backend = { path = "../../crates/cyberspine-backend", features = ["dylib", "export", "rpc"] }
 cyberspine-core = { path = "../../crates/cyberspine-core" }
 cyberspine-manifest = { path = "../../crates/cyberspine-manifest" }
 cyberspine-vm = { path = "../../crates/cyberspine-vm" }
 thiserror = "2.0.21"
 
+[dev-dependencies]
+serde_json = "1"
+
 [[bin]]
 name = "maze"
 path = "src/main.rs"
+
+[[bin]]
+name = "maze-serve"
+path = "src/bin/maze-serve.rs"

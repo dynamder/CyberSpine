@@ -17,12 +17,19 @@ marked on the floor (red = turn left, blue = turn right). The action is a `.csa`
 program; the body is a Rust `Backend` implementation, and the two only meet
 through the rig's muscle and sensor names.
 
+The same body ships three ways — linked, as a shared library, and as a process
+speaking the wire protocol — and all three draw the same walk from the same rig:
+
 ```bash
-cargo run -p cyberspine-demo-maze
+cargo run -p cyberspine-demo-maze                         # linked
+cargo build -p cyberspine-demo-maze                       # emits the cdylib
+cargo run -p cyberspine-demo-maze -- -b dylib:self         # dynamic library
+cargo run -p cyberspine-demo-maze --bin maze-serve         # terminal A
+cargo run -p cyberspine-demo-maze -- -b rpc:127.0.0.1:7777 # terminal B
 ```
 
 See [`demos/maze/README.md`](demos/maze/README.md) for what the demo
-demonstrates and what to expect when it runs.
+demonstrates, how the viewer reads the body, and what to expect when it runs.
 
 ## Toolchain
 
@@ -64,7 +71,7 @@ be packaged three ways:
 The two boundary-crossing packagings share one wire protocol, and a body written
 for one is one `export!` away from the other; a linked body is a direct call.
 See [`docs/backend.md`](docs/backend.md); `cyinevm` runs an image against any of
-them:
+them, and `demos/maze` is one body written all three ways:
 
 ```bash
 cyinevm -i action.csp -b rpc:127.0.0.1:7777

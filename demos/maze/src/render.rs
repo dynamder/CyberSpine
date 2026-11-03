@@ -1,7 +1,8 @@
 use std::fmt::Write as _;
 
-use crate::backend::{MazeBackend, RIG_NAME, RIG_VERSION};
-use crate::grid::{Cell, Heading};
+use crate::Scene;
+use crate::backend::{RIG_NAME, RIG_VERSION};
+use crate::grid::{Cell, Grid, Heading};
 
 const INDENT: &str = "  ";
 
@@ -40,10 +41,11 @@ impl Style {
     }
 }
 
-/// Header, senses, board and legend. The tick lives in the host, not the body,
-/// so the caller passes it in.
-pub fn frame(backend: &MazeBackend, tick: u64, style: Style) -> String {
-    let (x, y) = backend.position();
+/// Header, senses, board and legend. Everything drawn here comes from the rig;
+/// the tick and the map come from the caller because the body publishes neither.
+pub fn frame(grid: &Grid, scene: &Scene, style: Style) -> String {
+    let observation = &scene.observation;
+    let (x, y) = (observation.x, observation.y);
     let separator = match style.charset {
         Charset::Unicode => "·",
         Charset::Ascii => "|",
@@ -52,22 +54,23 @@ pub fn frame(backend: &MazeBackend, tick: u64, style: Style) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "{INDENT}{RIG_NAME} v{RIG_VERSION}  {separator}  tick {tick:>3}  {separator}  ({x},{y}) {}  {separator}  {} moves  {} turns  {} bumps",
-        backend.heading().name(),
-        backend.moves(),
-        backend.turns(),
-        backend.bumps(),
+        "{INDENT}{RIG_NAME} v{RIG_VERSION}  {separator}  tick {:>3}  {separator}  ({x},{y}) {}  {separator}  {} moves  {} turns  {} bumps",
+        scene.tick,
+        observation.heading.name(),
+        observation.odometer.moves,
+        observation.odometer.turns,
+        observation.odometer.bumps,
     );
     let _ = writeln!(
         out,
         "{INDENT}senses  red {}  blue {}  goal {}  wall {}",
-        u8::from(backend.marker_red()),
-        u8::from(backend.marker_blue()),
-        u8::from(backend.at_goal()),
-        u8::from(backend.wall_ahead()),
+        u8::from(observation.marker_red),
+        u8::from(observation.marker_blue),
+        u8::from(observation.at_goal),
+        u8::from(observation.wall_ahead),
     );
     out.push('\n');
-    out.push_str(&board(backend, style));
+    out.push_str(&board(grid, scene, style));
     out.push('\n');
     let _ = writeln!(out, "{INDENT}{}", legend(style));
     out
@@ -75,8 +78,7 @@ pub fn frame(backend: &MazeBackend, tick: u64, style: Style) -> String {
 
 /// One two-column cell per grid cell: terrain on the left, occupant on the
 /// right. A robot standing on a marker therefore reads `R▶`, not just `▶`.
-pub fn board(backend: &MazeBackend, style: Style) -> String {
-    let grid = backend.grid();
+pub fn board(grid: &Grid, scene: &Scene, style: Style) -> String {
     let mut out = String::new();
 
     for y in 0..grid.height() {
@@ -91,7 +93,7 @@ pub fn board(backend: &MazeBackend, style: Style) -> String {
             }
 
             put_char(&mut out, terrain(cell), terrain_color(cell), style.color);
-            match occupant(backend, x, y, style.charset) {
+            match occupant(scene, x, y, style.charset) {
                 Some((glyph, color)) => put_char(&mut out, glyph, Some(color), style.color),
                 None => out.push(' '),
             }
@@ -102,16 +104,12 @@ pub fn board(backend: &MazeBackend, style: Style) -> String {
     out
 }
 
-fn occupant(
-    backend: &MazeBackend,
-    x: i32,
-    y: i32,
-    charset: Charset,
-) -> Option<(char, &'static str)> {
-    if backend.position() == (x, y) {
-        return Some((arrow(backend.heading(), charset), ROBOT_COLOR));
+fn occupant(scene: &Scene, x: i32, y: i32, charset: Charset) -> Option<(char, &'static str)> {
+    let observation = &scene.observation;
+    if (observation.x, observation.y) == (x, y) {
+        return Some((arrow(observation.heading, charset), ROBOT_COLOR));
     }
-    if backend.trail().contains(&(x, y)) {
+    if scene.trail.contains(&(x, y)) {
         return Some((trail(charset), TRAIL_COLOR));
     }
     None

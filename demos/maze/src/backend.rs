@@ -2,8 +2,8 @@
 //!
 //! The host asks this type for three things per tick: a snapshot of what the
 //! runner senses, the commands the program published, and one step of the
-//! world. The grid, the walls and the position never leave this side; the
-//! program only sees the names in `maze.rig.json`.
+//! world. The grid and the walls never leave this side; everything the action
+//! and any viewer can know is a name in `maze.rig.json`.
 
 use cyberspine_core::rig::{BoundFingerprint, Name, Rig};
 use cyberspine_vm::{Backend, BackendError, Shape, Snapshot};
@@ -11,7 +11,7 @@ use cyberspine_vm::{Backend, BackendError, Shape, Snapshot};
 use crate::grid::{Cell, DEFAULT_LAYOUT, Grid, Heading};
 
 pub const RIG_NAME: &str = "maze-runner";
-pub const RIG_VERSION: u32 = 1;
+pub const RIG_VERSION: u32 = 2;
 
 /// The body's actuators, in physical-index order. A command at or above `0.5`
 /// means "do it this tick"; the value is held until the program lowers it.
@@ -77,21 +77,38 @@ impl SensorF {
 }
 
 /// The body's `i32` observables, in physical-index order.
+///
+/// The last three are the runner's own odometer. They are part of the rig, not a
+/// side channel: a viewer that reaches the body over a wire can display exactly
+/// what the body publishes, and nothing else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SensorI {
     X,
     Y,
     Heading,
+    Moves,
+    Turns,
+    Bumps,
 }
 
 impl SensorI {
-    pub const ALL: [Self; 3] = [Self::X, Self::Y, Self::Heading];
+    pub const ALL: [Self; 6] = [
+        Self::X,
+        Self::Y,
+        Self::Heading,
+        Self::Moves,
+        Self::Turns,
+        Self::Bumps,
+    ];
 
     pub const fn name(self) -> &'static str {
         match self {
             Self::X => "x",
             Self::Y => "y",
             Self::Heading => "heading",
+            Self::Moves => "moves",
+            Self::Turns => "turns",
+            Self::Bumps => "bumps",
         }
     }
 
@@ -122,8 +139,8 @@ fn name(text: &'static str) -> Name {
     Name::new(text).expect("the body's names are literals")
 }
 
-/// The body's state: where the runner is, which way it faces, and the value
-/// each muscle was last commanded to hold.
+/// The body's state: where the runner is, which way it faces, the value each
+/// muscle was last commanded to hold, and the odometer its sensors report.
 pub struct MazeBackend {
     grid: Grid,
     fingerprint: BoundFingerprint,
@@ -134,7 +151,6 @@ pub struct MazeBackend {
     moves: u32,
     turns: u32,
     bumps: u32,
-    trail: Vec<(i32, i32)>,
 }
 
 impl MazeBackend {
@@ -155,7 +171,6 @@ impl MazeBackend {
             moves: 0,
             turns: 0,
             bumps: 0,
-            trail: vec![(x, y)],
         }
     }
 
@@ -181,10 +196,6 @@ impl MazeBackend {
 
     pub fn bumps(&self) -> u32 {
         self.bumps
-    }
-
-    pub fn trail(&self) -> &[(i32, i32)] {
-        &self.trail
     }
 
     pub fn marker_red(&self) -> bool {
@@ -230,8 +241,9 @@ impl Backend for MazeBackend {
         }
     }
 
-    /// Report one instant: the cell underfoot, the wall in front, the goal and
-    /// the position. The host freezes this snapshot for the whole tick.
+    /// Report one instant: the cell underfoot, the wall in front, the goal, the
+    /// position and the odometer. The host freezes this snapshot for the whole
+    /// tick, and a viewer on the far side of a transport reads the same slots.
     fn sample(&mut self, out: &mut Snapshot<'_>) -> Result<(), BackendError> {
         out.f[SensorF::MarkerRed.index()] = flag(self.marker_red());
         out.f[SensorF::MarkerBlue.index()] = flag(self.marker_blue());
@@ -241,6 +253,9 @@ impl Backend for MazeBackend {
         out.i[SensorI::X.index()] = self.x;
         out.i[SensorI::Y.index()] = self.y;
         out.i[SensorI::Heading.index()] = self.heading.index();
+        out.i[SensorI::Moves.index()] = count(self.moves);
+        out.i[SensorI::Turns.index()] = count(self.turns);
+        out.i[SensorI::Bumps.index()] = count(self.bumps);
 
         out.muscles.copy_from_slice(&self.commands);
         Ok(())
@@ -287,7 +302,6 @@ impl Backend for MazeBackend {
         if self.grid.is_walkable(x, y) {
             (self.x, self.y) = (x, y);
             self.moves += 1;
-            self.trail.push((x, y));
         } else {
             self.bumps += 1;
         }
@@ -297,4 +311,10 @@ impl Backend for MazeBackend {
 
 fn flag(value: bool) -> f32 {
     if value { 1.0 } else { 0.0 }
+}
+
+/// The rig carries `i32`; the counters only ever grow, so saturating is the
+/// honest conversion for a run that outlives two billion ticks.
+fn count(value: u32) -> i32 {
+    i32::try_from(value).unwrap_or(i32::MAX)
 }

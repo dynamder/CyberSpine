@@ -1,6 +1,6 @@
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_demo_maze::{
-    Error, MANIFEST, MAX_TICKS, SOURCE, Session, assemble,
+    Body, Error, MANIFEST, MAX_TICKS, SOURCE, Session, assemble,
     backend::{MazeBackend, rig},
     grid::{Cell, DEFAULT_LAYOUT, Grid, GridError},
     render::{self, Charset, Style},
@@ -29,12 +29,12 @@ fn the_program_walks_the_maze_to_the_goal() {
             .expect("the maze backend cannot fail");
     }
 
-    let outcome = session.outcome();
+    let outcome = session.outcome().expect("the linked body cannot fail");
     assert!(outcome.faults.is_empty(), "{:?}", outcome.faults);
     assert!(
         outcome.solved(),
         "ended at {:?}: {outcome:?}",
-        session.backend().position()
+        outcome.position
     );
     assert_eq!((outcome.moves, outcome.turns, outcome.bumps), (24, 6, 0));
     assert!(outcome.ticks <= 40, "took {} ticks", outcome.ticks);
@@ -58,7 +58,7 @@ fn a_manifest_that_disagrees_with_the_backend_is_refused() {
     let swapped = MANIFEST.replace("\"forward\", \"backward\"", "\"backward\", \"forward\"");
     assert_ne!(swapped, MANIFEST);
 
-    let error = match Session::open(SOURCE, &swapped) {
+    let error = match Session::open(SOURCE, &swapped, Body::linked()) {
         Ok(_) => panic!("a reordered rig must not load"),
         Err(error) => error,
     };
@@ -98,9 +98,11 @@ fn every_marker_sits_on_a_junction() {
 
 #[test]
 fn the_board_has_one_row_per_cell_row_and_marks_the_rover() {
-    let session = Session::embedded().expect("the demo assembles and loads");
+    let mut session = Session::embedded().expect("the demo assembles and loads");
+    let scene = session.scene().expect("the linked body cannot fail");
     let ascii = render::board(
-        session.backend(),
+        session.grid(),
+        &scene,
         Style {
             charset: Charset::Ascii,
             color: false,
@@ -109,7 +111,7 @@ fn the_board_has_one_row_per_cell_row_and_marks_the_rover() {
     assert_eq!(ascii.lines().count(), DEFAULT_LAYOUT.len());
     assert!(ascii.contains("S>"), "{ascii}");
 
-    let unicode = render::board(session.backend(), Style::plain());
+    let unicode = render::board(session.grid(), &scene, Style::plain());
     assert!(unicode.contains('█'));
     assert!(unicode.contains('▶'));
 }
