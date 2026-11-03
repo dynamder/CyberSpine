@@ -24,22 +24,51 @@ cargo run -p cyberspine-demo-maze
 See [`demos/maze/README.md`](demos/maze/README.md) for what the demo
 demonstrates and what to expect when it runs.
 
+## Toolchain
+
+The workspace's default members are the two tools, so a release build produces
+both:
+
+```bash
+cargo build --release
+# target/release/cyinea, target/release/cyinevm
+```
+
+`cyinea` assembles a `.csa` into a `.csp`; `cyinevm` runs it against a body:
+
+```bash
+cyinea -a action.csa
+cyinevm -i action.csp --ticks 120 --unpaced --trace > trace.tsv
+cyinevm -i action.csp -b rpc:127.0.0.1:7777
+```
+
+`cyinevm` without `--backend` uses the built-in dummy body and prints a warning.
+See [`docs/runtime.md`](docs/runtime.md) for the lifetime, pacing, trace and
+static-linking rules.
+
+```bash
+cargo install --path crates/cyberspine-asm
+cargo install --path crates/cyberspine-runtime
+```
+
 ## Bodies
 
 A body — the thing being driven — is a Rust `Backend` implementation, and it can
 be packaged three ways:
 
-- **linked**: depend on the body's crate and hand it to `Host::new`.
+- **linked**: depend on the body's crate and hand it to `Host::new`; for
+  `cyinevm` this is the `LinkedBody` type compiled into the binary.
 - **dynamic library**: build the body as a `cdylib` and load it at run time.
 - **RPC**: run the body in its own process and connect over TCP.
 
-All three share one wire protocol, and a body written for one is one `export!`
-away from the other. See [`docs/backend.md`](docs/backend.md); the dev tool runs
-an image against any of them:
+The two boundary-crossing packagings share one wire protocol, and a body written
+for one is one `export!` away from the other; a linked body is a direct call.
+See [`docs/backend.md`](docs/backend.md); `cyinevm` runs an image against any of
+them:
 
 ```bash
-csp-dev run --image action.csp --backend rpc:127.0.0.1:7777
-csp-dev inspect --backend dylib:bodies/robot.dll
+cyinevm -i action.csp -b rpc:127.0.0.1:7777
+cyinevm -i action.csp -b dylib:bodies/robot.dll
 ```
 
 ## License

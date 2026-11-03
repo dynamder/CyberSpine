@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "demos/*"]
+default-members = ["crates/cyberspine-asm", "crates/cyberspine-runtime"]
 
 [workspace.package]
 license = "MIT OR Apache-2.0"

@@ -209,8 +209,8 @@ pending 检查是一个布尔数据流：`FEXCITE` 置真，`FLUSH` 清假，在
   7 │     FADDD f1, f2, f3
     ╰╴    ━
   ```
-- CLI 可执行文件统一命名为 `cyine` + 工具字母：汇编器是 **`cyinea`**；VM 侧按同一
-  规则使用 `cyinev`。asm 与 vm 是独立进程，不合并成单个二进制。
+- CLI 可执行文件统一命名为 `cyine` + 工具后缀：汇编器是 **`cyinea`**，虚拟机运行时是
+  **`cyinevm`**（见 [`runtime.md`](runtime.md)）。asm 与 vm 是独立进程，不合并成单个二进制。
 - CLI 输出 `path:line:col: error: …` + 源行 + 标记，并以非零退出码结束。
 
 ```bash

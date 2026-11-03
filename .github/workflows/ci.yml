@@ -54,6 +54,14 @@ jobs:
       - name: test (all platforms)
         run: cargo test --workspace --all-targets
 
+      # The runtime's external backends are features. This build has neither,
+      # so the tests that pin the "not compiled" message run here.
+      - name: test (runtime without external backends)
+        run: cargo test -p cyberspine-runtime --no-default-features
+
+      - name: clippy (runtime without external backends)
+        run: cargo clippy -p cyberspine-runtime --no-default-features --all-targets --no-deps -- -D warnings
+
       # `cyberspine-backend`'s transports are feature-gated, so the workspace run
       # above compiles only the wire and remote layers. This one loads a real
       # shared library and opens a real socket.
@@ -62,6 +70,13 @@ jobs:
 
       - name: clippy (backend integrations)
         run: cargo clippy -p cyberspine-backend --all-features --all-targets --no-deps -- -D warnings
+
+      # The two tools the project ships: assemble a real source, then run the
+      # image against the built-in linked dummy body.
+      - name: tools (assemble + run)
+        run: |
+          cargo run --release -p cyberspine-asm -- -a demos/maze/maze.csa -o target/maze.csp
+          cargo run --release -p cyberspine-runtime -- -i target/maze.csp --ticks 5 --unpaced
 
   # The `rust-version` every manifest declares, checked against a real compiler
   # instead of trusted. The `+` overrides `rust-toolchain.toml`, which pins the

@@ -1,0 +1,28 @@
+[package]
+name = "cyberspine-runtime"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = ["dylib", "rpc"]
+dylib = ["cyberspine-backend/dylib"]
+rpc = ["cyberspine-backend/rpc"]
+
+[dependencies]
+clap = { version = "4.6.7", features = ["derive"] }
+ctrlc = "3.5.2"
+cyberspine-backend = { path = "../cyberspine-backend", default-features = false }
+cyberspine-core = { path = "../cyberspine-core" }
+cyberspine-vm = { path = "../cyberspine-vm" }
+thiserror = "2.0.21"
+
+[dev-dependencies]
+cyberspine-asm = { path = "../cyberspine-asm" }
+cyberspine-manifest = { path = "../cyberspine-manifest" }
+cyberspine-testkit = { path = "../cyberspine-testkit" }
+
+[[bin]]
+name = "cyinevm"
+path = "src/main.rs"

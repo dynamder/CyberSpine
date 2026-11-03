@@ -146,10 +146,7 @@ impl<B: Backend, P: RigPolicy> core::fmt::Debug for Host<B, P> {
 
 impl<B: Backend> Host<B, Strict> {
     pub fn new(backend: B) -> Self {
-        Self {
-            backend,
-            _policy: PhantomData,
-        }
+        Self::with_policy(backend)
     }
 
     /// Accept images assembled without a rig, and keep everything else strict.
@@ -158,14 +155,20 @@ impl<B: Backend> Host<B, Strict> {
     /// only ever ran images for this body" is no longer a fact, and un-saying it
     /// would not make it true.
     pub fn permissive(self) -> Host<B, Permissive> {
-        Host {
-            backend: self.backend,
-            _policy: PhantomData,
-        }
+        Host::with_policy(self.backend)
     }
 }
 
 impl<B: Backend, P: RigPolicy> Host<B, P> {
+    /// A host whose identity policy is the type `P`; `new` and `permissive` are
+    /// the two common cases.
+    pub fn with_policy(backend: B) -> Self {
+        Self {
+            backend,
+            _policy: PhantomData,
+        }
+    }
+
     /// Load the first action, turning the host into a ticking [`Session`].
     ///
     /// The instance id comes back alongside the session — it is the handle the

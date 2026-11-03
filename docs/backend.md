@@ -17,7 +17,7 @@
 
 | 方式 | 进程 | 语言 | 每 tick 代价 | 什么时候用 |
 |---|---|---|---|---|
-| **链接** | 同 | Rust | 直接调用，零拷贝 | 默认。后端随宿主一起编译、一起分发 |
+| **链接** | 同 | Rust | 直接调用，零拷贝 | 默认。后端随宿主一起编译、一起分发；没有 spec |
 | **动态库** | 同 | 任意（C ABI） | 一帧进、一帧出，各一次拷贝 | 插件化、版分解耦、工具链不同 |
 | **RPC** | 跨 | 任意 | 两个网络往返 | 设备守护进程、引擎、跨机 |
 
@@ -152,7 +152,7 @@ cyberspine_backend::export! {
 | 握手、粘性失败、错 kind、形状不符 | `tests/remote.rs` |
 | 链接 vs 动态库 同 trace | `tests/dylib.rs` |
 | 链接 vs RPC 同 trace | `tests/rpc.rs` |
-| spec 语法与 dummy body | `tests/spec.rs` |
+| spec 语法与缺 feature 报错 | `tests/spec.rs` |
 
 ## 8. 非目标（v1）
 
@@ -168,7 +168,7 @@ cyberspine_backend::export! {
 | `cyberspine-backend::server` | body 侧：一帧请求 → 一帧应答；manifest 与 body 的一次性比对 |
 | `cyberspine-backend::dylib` | `libloading` 加载、`Drop` 顺序、`export!` |
 | `cyberspine-backend::rpc` | tokio 客户端与服务端；运行时关在 `TcpTransport` 里 |
-| `cyberspine-backend::spec` | `dummy:` / `dylib:` / `rpc:` 的解析与打开 |
+| `cyberspine-backend::spec` | `dylib:` / `rpc:` 的解析与打开；linked 没有 spec |
 
 ## 附录 A：非 Rust 实现速查
 
