@@ -1,0 +1,17 @@
+[package]
+name = "cyberspine-backend-fixture"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# The rlib half is for the test that compares the loaded body with the linked
+# one; the cdylib half is the artifact that test loads.
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+cyberspine-backend = { path = "../cyberspine-backend", default-features = false, features = ["export"] }
+cyberspine-rig = { path = "../cyberspine-rig" }
+cyberspine-vm = { path = "../cyberspine-vm" }

@@ -75,10 +75,14 @@ le32(count) || (le32(len) || sensor_i_name)*
 ```
 汇编器：manifest 文件 → Rig → fingerprint → 写进镜像头段（binfmt.md §4）
 后端：  代码里的声明 → Rig → fingerprint → 加载时报出
+        （跨边界的后端报出 manifest 文本，宿主自己解析并算指纹，见 backend.md §2）
 加载：  两者相等才运行，否则拒绝（isa.md §13.3）
 ```
 
 - 后端实现 `Backend::fingerprint()`，结果应在构造时算好并缓存。
+- **跨进程或动态库的后端不传指纹，传 manifest。** 宿主解析、校验、自己算指纹：一个从设备读回来的
+  32 字节永远不能变成 `BoundFingerprint`，因为该类型没有这样的构造路径。日志里也因此是可读的名字与
+  版本，而不是一串十六进制。
 - **`BoundFingerprint` 不会是全零。** 镜像侧的 `Fingerprint` 可以是全零（未绑定），后端的不能：
   该类型字段私有、只有一个构造器 `of(&Rig)`，并且刻意没有 `From<Fingerprint>`/`Default`/`UNBOUND`
   常量——所以"从设备读回 32 字节然后贴上这个类型"这件事写不出来。全零摘要的概率是 2⁻²⁵⁶，

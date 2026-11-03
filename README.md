@@ -24,6 +24,24 @@ cargo run -p cyberspine-demo-maze
 See [`demos/maze/README.md`](demos/maze/README.md) for what the demo
 demonstrates and what to expect when it runs.
 
+## Bodies
+
+A body — the thing being driven — is a Rust `Backend` implementation, and it can
+be packaged three ways:
+
+- **linked**: depend on the body's crate and hand it to `Host::new`.
+- **dynamic library**: build the body as a `cdylib` and load it at run time.
+- **RPC**: run the body in its own process and connect over TCP.
+
+All three share one wire protocol, and a body written for one is one `export!`
+away from the other. See [`docs/backend.md`](docs/backend.md); the dev tool runs
+an image against any of them:
+
+```bash
+csp-dev run --image action.csp --backend rpc:127.0.0.1:7777
+csp-dev inspect --backend dylib:bodies/robot.dll
+```
+
 ## License
 
 Licensed under either of

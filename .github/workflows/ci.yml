@@ -54,6 +54,15 @@ jobs:
       - name: test (all platforms)
         run: cargo test --workspace --all-targets
 
+      # `cyberspine-backend`'s transports are feature-gated, so the workspace run
+      # above compiles only the wire and remote layers. This one loads a real
+      # shared library and opens a real socket.
+      - name: test (backend integrations)
+        run: cargo test -p cyberspine-backend --all-features
+
+      - name: clippy (backend integrations)
+        run: cargo clippy -p cyberspine-backend --all-features --all-targets --no-deps -- -D warnings
+
   # The `rust-version` every manifest declares, checked against a real compiler
   # instead of trusted. The `+` overrides `rust-toolchain.toml`, which pins the
   # build toolchain for every other job.

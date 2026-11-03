@@ -2,8 +2,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use cyberspine_backend::{BackendSpec, SpecError};
 use cyberspine_vm::io::{LoadFileError, read_image};
-use cyberspine_vm::{DummyBackend, Host, LoadError};
+use cyberspine_vm::{Backend, BackendError, Host, LoadError};
 use thiserror::Error;
 
 #[derive(Parser)]
@@ -21,24 +22,30 @@ enum CliCommands {
         doc: DigestedDoc,
     },
 
-    /// Run a `.csp` image against a zero rig and print its command stream.
+    /// Run a `.csp` image against a body and print its command stream.
     ///
-    /// A development aid, not a runtime: every sensor reports zero and nothing
-    /// is displayed, so it answers "what does this image do?" and nothing more.
-    /// The image is only run against the rig it was assembled for, exactly as the
-    /// host would refuse it anywhere else.
+    /// A development aid, not a runtime: it answers "what does this image do?"
+    /// and nothing more. The image is only run against the rig it was assembled
+    /// for, exactly as the host would refuse it anywhere else.
     Run {
         /// The `.csp` image to run.
         #[arg(short, long)]
         image: PathBuf,
 
-        /// The manifest the image was assembled for.
-        #[arg(short, long)]
-        rig: PathBuf,
+        /// `dummy:<manifest>`, `dylib:<path>` or `rpc:<host>:<port>`.
+        #[arg(short, long, value_parser = parse_backend)]
+        backend: BackendSpec,
 
         /// How many ticks to run.
         #[arg(short, long, default_value_t = 8)]
         ticks: u32,
+    },
+
+    /// Print the identity and shape a body reports.
+    Inspect {
+        /// `dummy:<manifest>`, `dylib:<path>` or `rpc:<host>:<port>`.
+        #[arg(short, long, value_parser = parse_backend)]
+        backend: BackendSpec,
     },
 }
 
@@ -49,22 +56,16 @@ enum DigestedDoc {
     Binfmt,
 }
 
-/// Everything `csp-dev run` can fail at, with the path it failed on.
+fn parse_backend(text: &str) -> Result<BackendSpec, SpecError> {
+    BackendSpec::parse(text)
+}
+
+/// Everything `csp-dev` can fail at, with the path it failed on.
 ///
 /// Same shape as `cyinea`: an error names the file it came from, `main` returns
 /// an `ExitCode`, and nothing calls `process::exit`.
 #[derive(Debug, Error)]
 enum Error {
-    #[error("cannot read `{path}`: {source}")]
-    Read {
-        path: PathBuf,
-        source: std::io::Error,
-    },
-    #[error("{path}: {source}")]
-    Manifest {
-        path: PathBuf,
-        source: cyberspine_manifest::ManifestError,
-    },
     #[error("{path}: {source}")]
     Image {
         path: PathBuf,
@@ -72,6 +73,8 @@ enum Error {
     },
     #[error("{path}: {source}")]
     Load { path: PathBuf, source: LoadError },
+    #[error("the backend failed: {0}")]
+    Backend(#[from] BackendError),
     #[error("the image faulted:\n{0}")]
     Faulted(String),
 }
@@ -82,32 +85,34 @@ fn main() -> ExitCode {
             doc_digest(doc);
             ExitCode::SUCCESS
         }
-        CliCommands::Run { image, rig, ticks } => match run_image(&image, &rig, ticks) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(error) => {
-                eprintln!("error: {error}");
-                ExitCode::FAILURE
-            }
-        },
+        CliCommands::Inspect { backend } => report(inspect(&backend)),
+        CliCommands::Run {
+            image,
+            backend,
+            ticks,
+        } => report(run_image(&image, &backend, ticks)),
     }
 }
 
-fn run_image(path: &Path, rig_path: &Path, ticks: u32) -> Result<(), Error> {
-    let manifest = std::fs::read_to_string(rig_path).map_err(|source| Error::Read {
-        path: rig_path.to_path_buf(),
-        source,
-    })?;
-    let rig = cyberspine_manifest::from_json(&manifest).map_err(|source| Error::Manifest {
-        path: rig_path.to_path_buf(),
-        source,
-    })?;
+fn report(result: Result<(), Error>) -> ExitCode {
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
 
+fn run_image(path: &Path, backend: &BackendSpec, ticks: u32) -> Result<(), Error> {
+    let body = backend.open()?;
+    let shape = body.shape();
     println!(
-        "dev rig: {} — {} muscle(s), {} float sensor(s), {} integer sensor(s), all zero",
-        rig.name,
-        rig.muscles.len(),
-        rig.sensors_f.len(),
-        rig.sensors_i.len()
+        "body: {} — {} muscle(s), {} float sensor(s), {} integer sensor(s)",
+        body.fingerprint(),
+        shape.muscles,
+        shape.sensors_f,
+        shape.sensors_i
     );
 
     let image = read_image(path).map_err(|source| Error::Image {
@@ -115,7 +120,7 @@ fn run_image(path: &Path, rig_path: &Path, ticks: u32) -> Result<(), Error> {
         source,
     })?;
 
-    let (mut host, _) = Host::new(DummyBackend::new(rig))
+    let (mut host, _) = Host::new(body)
         .load(image)
         .map_err(|(_, source)| Error::Load {
             path: path.to_path_buf(),
@@ -124,7 +129,7 @@ fn run_image(path: &Path, rig_path: &Path, ticks: u32) -> Result<(), Error> {
     host.set_tracing(true);
 
     for _ in 0..ticks {
-        host.tick();
+        host.tick()?;
     }
 
     for tick in host.trace() {
@@ -144,6 +149,18 @@ fn run_image(path: &Path, rig_path: &Path, ticks: u32) -> Result<(), Error> {
         ));
     }
     Err(Error::Faulted(message))
+}
+
+fn inspect(backend: &BackendSpec) -> Result<(), Error> {
+    let body = backend.open()?;
+    let shape = body.shape();
+
+    println!("{backend:?}");
+    println!("fingerprint: {}", body.fingerprint());
+    println!("muscles:     {}", shape.muscles);
+    println!("sensors_f:   {}", shape.sensors_f);
+    println!("sensors_i:   {}", shape.sensors_i);
+    Ok(())
 }
 
 fn doc_digest(doc: DigestedDoc) {

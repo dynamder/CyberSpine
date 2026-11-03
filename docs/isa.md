@@ -739,6 +739,8 @@ fn tick(instances: &mut [Instance], sensors: &Sensors, backend: &mut dyn Backend
 
 - 合并键 `(layer, 装载序)`：`layer` 大者优先；`layer` 相同，装载序大者（后装载）优先。实现上按装载序顺序覆盖即可。
 - 恢复顺序 = 装载顺序；合并顺序 = 装载顺序。**这是唯一需要确定性排序的地方，宿主维护，VM 不感知。**
+- **后端的三个调用可失败**：`sample` / `commit` / `step` 任一返回 `Err` 即结束本 tick，
+  已恢复的实例保留状态，但不再合并、不交付、不推进时钟（§9.2）。失败是终态，调用方必须停止 tick。
 - **合并缓冲是复用的**，不是每 tick 新建：`merged` 在装载第一张镜像时按肌肉数分配一次，之后每个 tick 原地 `fill(None)` 再覆盖。tick 路径上**零分配**——这是实时回路的前提，10 kHz 下每 tick 一次 `Vec` 分配就是每秒一万次堆操作。
 - **tick 永不休眠。** 没有实例时，`merged` 全是 `None`，但 `sample` / `commit` / `step` 照常调用，`now` 照常前进。原因见 §8.4 的最后一条：保持姿态靠的是后端在每一 tick 被推进，而不是靠宿主记住什么。
 
@@ -761,6 +763,9 @@ VM 里没有：调度器、实例树、`spawn`、`await`、fork/join、优先级
 ---
 
 ## 9. 后端接口（Rust）
+
+> 后端可以链接进宿主、装进动态库、或跑在另一个进程里；三种打包共用这一个 trait，
+> 跨边界的部分见 [`backend.md`](backend.md)。
 
 ### 9.1 边界是参数向量
 
@@ -790,18 +795,27 @@ pub trait Backend {
 
     /// 每个 tick 调用一次，**先于任何实例运行**：一次报齐本 tick 的全部可观测量
     /// 与肌肉读回。契约：只读——不得推进身体、不得推进时间。
-    fn sample(&mut self, out: &mut Snapshot<'_>);
+    fn sample(&mut self, out: &mut Snapshot<'_>) -> Result<(), BackendError>;
 
     /// 每个 tick 调用一次：本 tick 合并后的命令向量，可含 `None`（该肌肉无命令）。
     /// `None` 表示"本 tick 没有实例发布这条肌肉"，**不是"释放"**：后端必须保持
     /// 上一条生效命令。要释放，程序显式发布 `Some(0.0)`。
     /// 契约：整块原子、不得步进、不得推进时间。
-    fn commit(&mut self, commands: &[Option<f32>], dt: f32);
+    fn commit(&mut self, commands: &[Option<f32>], dt: f32) -> Result<(), BackendError>;
 
     /// 用已锁存命令 + 自身物理状态，做跨肌肉约束求解并推进。唯一能改物理状态处。
-    fn step(&mut self, dt: f32);   // dt = 1/hz 常数
+    fn step(&mut self, dt: f32) -> Result<(), BackendError>;   // dt = 1/hz 常数
 }
 ```
+
+**三个 tick 调用都是可失败的。** 后端不总是本进程里的一个 Rust 值：串口会掉、设备会被拔、
+动态库会返回垃圾、socket 会超时。返回 `BackendError` 表示身体已经不可驱动，宿主当场结束这个
+tick——已恢复的实例保留状态，但不合并、不交付、时钟不前进——调用方必须停止 tick。失败是终态，
+不是可重试信号；跨边界的适配器自己锁存错误，并在之后的每次调用里原样返回。进程内后端正常
+返回 `Ok(())`，但"串口没了"属于这条签名，不属于 panic。
+
+`Box<dyn Backend>` 也是 `Backend`：这是宿主能在平台层之上保持非泛型的入口（`BackendError`
+因此是具体类型，不是关联类型）。
 
 **读回与可观测量一起报。** `SensorSource::Muscle` 是特殊的 sensor，但它仍是 sensor：
 随 `sample` 的同一份快照返回。因此**每个 tick 只有一个后端瞬间**——若宿主逐个查询

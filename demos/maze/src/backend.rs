@@ -6,7 +6,7 @@
 //! program only sees the names in `maze.rig.json`.
 
 use cyberspine_core::rig::{BoundFingerprint, Name, Rig};
-use cyberspine_vm::{Backend, Shape, Snapshot};
+use cyberspine_vm::{Backend, BackendError, Shape, Snapshot};
 
 use crate::grid::{Cell, DEFAULT_LAYOUT, Grid, Heading};
 
@@ -232,7 +232,7 @@ impl Backend for MazeBackend {
 
     /// Report one instant: the cell underfoot, the wall in front, the goal and
     /// the position. The host freezes this snapshot for the whole tick.
-    fn sample(&mut self, out: &mut Snapshot<'_>) {
+    fn sample(&mut self, out: &mut Snapshot<'_>) -> Result<(), BackendError> {
         out.f[SensorF::MarkerRed.index()] = flag(self.marker_red());
         out.f[SensorF::MarkerBlue.index()] = flag(self.marker_blue());
         out.f[SensorF::AtGoal.index()] = flag(self.at_goal());
@@ -243,22 +243,24 @@ impl Backend for MazeBackend {
         out.i[SensorI::Heading.index()] = self.heading.index();
 
         out.muscles.copy_from_slice(&self.commands);
+        Ok(())
     }
 
     /// Latch this tick's published commands. A muscle keeps its last value
     /// until a program changes it; `None` means no instance published it.
-    fn commit(&mut self, commands: &[Option<f32>], _dt: f32) {
+    fn commit(&mut self, commands: &[Option<f32>], _dt: f32) -> Result<(), BackendError> {
         for (held, command) in self.commands.iter_mut().zip(commands) {
             if let Some(command) = command {
                 *held = *command;
             }
         }
+        Ok(())
     }
 
     /// Apply one tick: turn first, then move. The order only matters if a
     /// program presses both, which this one never does. A move into a wall is
     /// a bump, not a fault; the world simply refuses it.
-    fn step(&mut self, _dt: f32) {
+    fn step(&mut self, _dt: f32) -> Result<(), BackendError> {
         let turn = match (
             self.excited(Muscle::TurnLeft),
             self.excited(Muscle::TurnRight),
@@ -278,7 +280,7 @@ impl Backend for MazeBackend {
         ) {
             (true, false) => 1,
             (false, true) => -1,
-            _ => return,
+            _ => return Ok(()),
         };
         let (dx, dy) = self.heading.delta();
         let (x, y) = (self.x + dx * displacement, self.y + dy * displacement);
@@ -289,6 +291,7 @@ impl Backend for MazeBackend {
         } else {
             self.bumps += 1;
         }
+        Ok(())
     }
 }
 

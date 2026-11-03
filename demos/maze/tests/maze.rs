@@ -24,7 +24,9 @@ fn the_clock_comes_from_the_image() {
 fn the_program_walks_the_maze_to_the_goal() {
     let mut session = Session::embedded().expect("the demo assembles and loads");
     while session.running() && session.ticks() < MAX_TICKS {
-        session.advance(f64::from(session.dt()));
+        session
+            .advance(f64::from(session.dt()))
+            .expect("the maze backend cannot fail");
     }
 
     let outcome = session.outcome();

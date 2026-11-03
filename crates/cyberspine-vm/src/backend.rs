@@ -9,6 +9,39 @@
 
 use cyberspine_core::rig::BoundFingerprint;
 
+/// Why a backend could not finish this tick.
+///
+/// A body is not always a Rust value in this process: a serial port closes, a
+/// device is unplugged, a dynamic library returns garbage, a socket times out.
+/// Those failures had nowhere to go, so a backend had to panic or silently lie.
+/// One concrete error type keeps `Box<dyn Backend>` possible while still
+/// carrying a concrete adapter's error inside it.
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub struct BackendError {
+    message: Box<str>,
+    #[source]
+    source: Option<Box<dyn std::error::Error + Send + Sync>>,
+}
+
+impl BackendError {
+    /// Wrap a concrete failure, keeping its text and its source chain.
+    pub fn new(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self {
+            message: error.to_string().into_boxed_str(),
+            source: Some(Box::new(error)),
+        }
+    }
+
+    /// A failure with no error type behind it.
+    pub fn message(message: impl Into<Box<str>>) -> Self {
+        Self {
+            message: message.into(),
+            source: None,
+        }
+    }
+}
+
 /// How much a backend has to report: the three snapshot lengths.
 ///
 /// This is a *view* of the backend's rig, not a second truth: it is derived once
@@ -53,6 +86,17 @@ pub struct Snapshot<'s> {
 /// rig, and a second name table would be a second truth (`docs/isa.md` §9.2,
 /// §13.3). It does report its counts, which is the one part of the rig the host
 /// needs before it can size a snapshot.
+///
+/// # Failure
+///
+/// Every tick call is fallible. Returning [`BackendError`] says the body cannot
+/// be driven any more: the host aborts the tick there, and the session must not
+/// be ticked again. A failed call is the last call of its tick, and a body may
+/// be left in any state by it — this is not a retryable signal. An adapter that
+/// owns a link latches the failure and returns it on every later call.
+///
+/// In-process bodies normally return `Ok(())`, but the signature is where a real
+/// device's "the serial port is gone" belongs instead of a panic.
 pub trait Backend {
     /// The rig this backend implements, computed once at construction.
     ///
@@ -75,7 +119,10 @@ pub trait Backend {
     /// or the clock. It still takes `&mut self` because producing the snapshot
     /// may need exclusive access — polling a device, or refreshing a cache that
     /// [`Backend::step`] then reads.
-    fn sample(&mut self, out: &mut Snapshot<'_>);
+    ///
+    /// On error the tick stops here: no instance runs, and `out` may be
+    /// half-filled, which is why the host only reads it back after `Ok`.
+    fn sample(&mut self, out: &mut Snapshot<'_>) -> Result<(), BackendError>;
 
     /// Take this tick's merged command vector.
     ///
@@ -86,8 +133,32 @@ pub trait Backend {
     /// `Some(0.0)`.
     ///
     /// Must not advance the body.
-    fn commit(&mut self, commands: &[Option<f32>], dt: f32);
+    fn commit(&mut self, commands: &[Option<f32>], dt: f32) -> Result<(), BackendError>;
 
     /// Advance the body by one fixed tick. The only place physical state moves.
-    fn step(&mut self, dt: f32);
+    fn step(&mut self, dt: f32) -> Result<(), BackendError>;
+}
+
+/// A boxed body is a body: this is what lets a host hold
+/// `Box<dyn Backend>` and stay non-generic above the platform layer.
+impl<T: Backend + ?Sized> Backend for Box<T> {
+    fn fingerprint(&self) -> BoundFingerprint {
+        (**self).fingerprint()
+    }
+
+    fn shape(&self) -> Shape {
+        (**self).shape()
+    }
+
+    fn sample(&mut self, out: &mut Snapshot<'_>) -> Result<(), BackendError> {
+        (**self).sample(out)
+    }
+
+    fn commit(&mut self, commands: &[Option<f32>], dt: f32) -> Result<(), BackendError> {
+        (**self).commit(commands, dt)
+    }
+
+    fn step(&mut self, dt: f32) -> Result<(), BackendError> {
+        (**self).step(dt)
+    }
 }

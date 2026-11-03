@@ -21,7 +21,7 @@ pub mod dummy;
 pub mod host;
 pub mod io;
 
-pub use backend::{Backend, Shape, Snapshot};
+pub use backend::{Backend, BackendError, Shape, Snapshot};
 pub use dummy::{Call, DummyBackend};
 pub use host::{
     DEFAULT_TRACE_CAPACITY, FaultRecord, Host, InstanceId, LoadError, Permissive, RigPolicy,

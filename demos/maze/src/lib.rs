@@ -10,7 +10,7 @@ use cyberspine_asm::assembler::{self, AsmParseErrors, ImageGenError};
 use cyberspine_core::binfmt::image::Image;
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::rig::Rig;
-use cyberspine_vm::{FaultRecord, Host, LoadError, Session as EngineSession};
+use cyberspine_vm::{BackendError, FaultRecord, Host, LoadError, Session as EngineSession};
 
 pub use backend::{MazeBackend, Muscle, RIG_NAME, RIG_VERSION, SensorF, SensorI, rig};
 pub use grid::{Cell, DEFAULT_LAYOUT, Grid, GridError, Heading};
@@ -68,9 +68,10 @@ impl Session {
     }
 
     /// Hand the host the real seconds a frame took; it runs the ticks they
-    /// contain and keeps the remainder.
-    pub fn advance(&mut self, seconds: f64) {
-        self.host.advance(seconds);
+    /// contain and keeps the remainder. The maze body cannot fail, so the only
+    /// error this can return would come from a backend that replaced it.
+    pub fn advance(&mut self, seconds: f64) -> Result<(), BackendError> {
+        self.host.advance(seconds)
     }
 
     pub fn ticks(&self) -> u64 {

@@ -39,13 +39,10 @@ fn an_assembled_source_runs_and_produces_the_expected_commands() {
     host.set_tracing(true);
 
     for _ in 0..3 {
-        host.tick();
+        host.tick().expect("the dummy backend cannot fail");
     }
 
-    let commands: Vec<Vec<Option<f32>>> = host
-        .trace()
-        .map(|tick| tick.commands.to_vec())
-        .collect();
+    let commands: Vec<Vec<Option<f32>>> = host.trace().map(|tick| tick.commands.to_vec()).collect();
 
     assert_eq!(
         commands,

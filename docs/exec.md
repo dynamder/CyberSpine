@@ -19,7 +19,7 @@
 | sensor 采样时机与来源 | 宿主 / 后端 |
 | 名字 → 物理下标、`imm` 重写 | 装配期（汇编器读 manifest，`isa.md` §13.2） |
 | `.csp` 解析与校验 | `load.rs`，已完成 |
-| 后端、RPC、动态库 | 宿主层 |
+| 后端、RPC、动态库 | 宿主层（见 [`backend.md`](backend.md)） |
 
 ---
 

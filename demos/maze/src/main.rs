@@ -42,7 +42,10 @@ fn main() -> ExitCode {
         // host's. A slow frame therefore falls behind in wall-clock terms but
         // never changes what a tick contains.
         thread::sleep(frame);
-        session.advance(last.elapsed().as_secs_f64());
+        if let Err(error) = session.advance(last.elapsed().as_secs_f64()) {
+            eprintln!("error: {error}");
+            return ExitCode::FAILURE;
+        }
         last = Instant::now();
         draw(&session, style, interactive);
     }

@@ -50,7 +50,7 @@ fn the_first_tick_sees_the_rigs_state() {
             &rig,
         )))
         .expect("assembled for this rig");
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
 
     assert_eq!(
         host.instance(id)
@@ -66,10 +66,11 @@ fn the_first_tick_sees_the_rigs_state() {
 #[test]
 fn a_tick_is_sample_commit_step_in_that_order() {
     let rig = rig(0);
-    let (mut host, _) = Host::new(backend(&rig)).load(verified(action(vec![yield_(), jump(-2)], &rig)))
+    let (mut host, _) = Host::new(backend(&rig))
+        .load(verified(action(vec![yield_(), jump(-2)], &rig)))
         .expect("empty rig");
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
 
     assert_eq!(
         host.backend().calls(),
@@ -90,16 +91,20 @@ fn sampling_twice_reports_the_same_body_state() {
     let mut first = [0.0; 2];
     let mut second = [0.0; 2];
 
-    backend.sample(&mut Snapshot {
-        f: &mut no_f,
-        i: &mut no_i,
-        muscles: &mut first,
-    });
-    backend.sample(&mut Snapshot {
-        f: &mut no_f,
-        i: &mut no_i,
-        muscles: &mut second,
-    });
+    backend
+        .sample(&mut Snapshot {
+            f: &mut no_f,
+            i: &mut no_i,
+            muscles: &mut first,
+        })
+        .expect("the dummy backend cannot fail");
+    backend
+        .sample(&mut Snapshot {
+            f: &mut no_f,
+            i: &mut no_i,
+            muscles: &mut second,
+        })
+        .expect("the dummy backend cannot fail");
 
     assert_eq!(first, second, "sampling is a read, not a step");
     assert_eq!(
@@ -112,13 +117,14 @@ fn sampling_twice_reports_the_same_body_state() {
 #[test]
 fn a_terminated_instance_contributes_on_its_last_tick_only() {
     let rig = rig(1);
-    let (mut host, _) = Host::new(backend(&rig)).load(verified(action(
-        vec![fmovi(1, 0.5), excite(0, 1), flush(), halt()],
-        &rig,
-    )))
-    .expect("same shape");
+    let (mut host, _) = Host::new(backend(&rig))
+        .load(verified(action(
+            vec![fmovi(1, 0.5), excite(0, 1), flush(), halt()],
+            &rig,
+        )))
+        .expect("same shape");
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
     assert_eq!(
         host.backend().committed(),
         &[Some(0.5)],
@@ -127,7 +133,7 @@ fn a_terminated_instance_contributes_on_its_last_tick_only() {
     assert_eq!(host.instances(), 0, "removed after the step");
     assert!(host.faults().is_empty(), "a halt is not a fault");
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
     assert_eq!(
         host.backend().committed(),
         &[None],
@@ -144,7 +150,7 @@ fn a_fault_is_recorded_and_outlives_the_instance() {
     faulty.header_mut().fuel = 1;
     let (mut host, id) = host.load(verified(faulty)).expect("faulty");
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
 
     assert!(host.instance(id).is_none(), "a fault removes the instance");
     assert_eq!(
@@ -177,7 +183,7 @@ fn a_faulted_instance_contributes_nothing_that_tick() {
     faulty.header_mut().fuel = 3;
     let (mut host, id) = host.load(verified(faulty)).expect("faulty");
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
 
     assert_eq!(
         host.backend().committed(),
@@ -198,13 +204,14 @@ fn a_faulted_instance_contributes_nothing_that_tick() {
 #[test]
 fn excite_without_flush_never_reaches_the_backend() {
     let rig = rig(1);
-    let (mut host, _) = Host::new(backend(&rig)).load(verified(action(
-        vec![fmovi(1, 0.9), excite(0, 1), halt()],
-        &rig,
-    )))
-    .expect("same shape");
+    let (mut host, _) = Host::new(backend(&rig))
+        .load(verified(action(
+            vec![fmovi(1, 0.9), excite(0, 1), halt()],
+            &rig,
+        )))
+        .expect("same shape");
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
 
     assert_eq!(host.backend().committed(), &[None]);
     assert_eq!(host.backend().muscles(), &[0.0]);
@@ -213,11 +220,12 @@ fn excite_without_flush_never_reaches_the_backend() {
 #[test]
 fn a_published_value_is_held_by_the_instance_not_the_host() {
     let rig = rig(1);
-    let (mut host, _) = Host::new(backend(&rig)).load(verified(publish_then_idle(0, 0.25, &rig)))
+    let (mut host, _) = Host::new(backend(&rig))
+        .load(verified(publish_then_idle(0, 0.25, &rig)))
         .expect("same shape");
 
     for _ in 0..3 {
-        host.tick();
+        host.tick().expect("the dummy backend cannot fail");
         assert_eq!(host.backend().committed(), &[Some(0.25)]);
     }
     assert_eq!(host.instances(), 1, "the instance is still yielding");
@@ -230,12 +238,13 @@ fn a_published_value_is_held_by_the_instance_not_the_host() {
 #[test]
 fn merge_is_decided_per_muscle() {
     let rig = rig(2);
-    let (mut host, _) = Host::new(backend(&rig)).load(verified(publish_then_idle(0, 0.25, &rig)))
+    let (mut host, _) = Host::new(backend(&rig))
+        .load(verified(publish_then_idle(0, 0.25, &rig)))
         .expect("first");
     host.load(verified(publish_then_idle(1, 0.5, &rig)))
         .expect("second");
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
 
     assert_eq!(
         host.backend().committed(),
@@ -247,12 +256,13 @@ fn merge_is_decided_per_muscle() {
 #[test]
 fn a_later_instance_of_the_same_layer_wins() {
     let rig = rig(1);
-    let (mut host, _) = Host::new(backend(&rig)).load(verified(publish_then_idle(0, 0.25, &rig)))
+    let (mut host, _) = Host::new(backend(&rig))
+        .load(verified(publish_then_idle(0, 0.25, &rig)))
         .expect("first");
     host.load(verified(publish_then_idle(0, 0.5, &rig)))
         .expect("second");
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
 
     assert_eq!(host.backend().committed(), &[Some(0.5)]);
 }
@@ -270,7 +280,7 @@ fn a_higher_layer_wins_even_when_it_was_loaded_first() {
     low.header_mut().layer = 1;
     host.load(verified(low)).expect("low layer");
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
 
     assert_eq!(host.backend().committed(), &[Some(0.75)]);
 }
@@ -288,7 +298,7 @@ fn a_higher_layer_that_publishes_nothing_does_not_shadow_a_lower_one() {
     low.header_mut().layer = 1;
     host.load(verified(low)).expect("low layer, publishing");
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
 
     assert_eq!(host.backend().committed(), &[Some(0.25)]);
 }
@@ -300,11 +310,13 @@ fn a_higher_layer_that_publishes_nothing_does_not_shadow_a_lower_one() {
 #[test]
 fn a_frame_runs_exactly_the_ticks_its_time_contains() {
     let rig = rig(0);
-    let (mut host, _) = Host::new(backend(&rig)).load(verified(action(vec![yield_(), jump(-2)], &rig)))
+    let (mut host, _) = Host::new(backend(&rig))
+        .load(verified(action(vec![yield_(), jump(-2)], &rig)))
         .expect("empty rig");
     let dt = f64::from(host.dt());
 
-    host.advance(3.0 * dt);
+    host.advance(3.0 * dt)
+        .expect("the dummy backend cannot fail");
     assert_eq!(host.now(), 3);
     assert_eq!(
         host.backend().calls().len(),
@@ -312,10 +324,12 @@ fn a_frame_runs_exactly_the_ticks_its_time_contains() {
         "three ticks of three calls"
     );
 
-    host.advance(0.5 * dt);
+    host.advance(0.5 * dt)
+        .expect("the dummy backend cannot fail");
     assert_eq!(host.now(), 3, "a partial tick waits in the remainder");
 
-    host.advance(0.5 * dt);
+    host.advance(0.5 * dt)
+        .expect("the dummy backend cannot fail");
     assert_eq!(host.now(), 4, "the remainder is not lost");
 }
 
@@ -327,7 +341,7 @@ fn a_waiting_instance_is_not_resumed_early() {
     image.header_mut().hz = Hz::new(64).expect("64 Hz");
     let (mut host, id) = host.load(verified(image)).expect("64 Hz image");
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
     assert_eq!(
         host.instance(id).expect("waiting").wake_at(),
         16,
@@ -335,7 +349,7 @@ fn a_waiting_instance_is_not_resumed_early() {
     );
 
     for _ in 0..15 {
-        host.tick();
+        host.tick().expect("the dummy backend cannot fail");
     }
     assert_eq!(
         host.instance(id)
@@ -346,7 +360,7 @@ fn a_waiting_instance_is_not_resumed_early() {
         "now = 15 is one tick early"
     );
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
     assert_eq!(
         host.instance(id)
             .expect("resumed")
@@ -373,7 +387,7 @@ fn wait_zero_runs_once_per_tick() {
         .expect("empty rig");
 
     for _ in 0..3 {
-        host.tick();
+        host.tick().expect("the dummy backend cannot fail");
     }
 
     assert_eq!(
@@ -389,12 +403,14 @@ fn wait_zero_runs_once_per_tick() {
 #[test]
 fn a_slow_frame_drops_its_remainder_instead_of_spiralling() {
     let rig = rig(0);
-    let (mut host, _) = Host::new(backend(&rig)).load(verified(action(vec![yield_(), jump(-2)], &rig)))
+    let (mut host, _) = Host::new(backend(&rig))
+        .load(verified(action(vec![yield_(), jump(-2)], &rig)))
         .expect("empty rig");
     host.set_max_ticks_per_frame(8);
     let dt = f64::from(host.dt());
 
-    host.advance(1000.0 * dt);
+    host.advance(1000.0 * dt)
+        .expect("the dummy backend cannot fail");
 
     assert_eq!(host.now(), 8);
     assert_eq!(host.overruns(), 1);
@@ -410,24 +426,25 @@ fn an_excitation_is_invisible_to_the_tick_that_made_it() {
     let rig = rig(1);
     let host = Host::new(backend(&rig));
 
-    let (mut host, _) = host.load(verified(action(
-        vec![fmovi(1, 1.0), excite(0, 1), flush(), yield_(), jump(-2)],
-        &rig,
-    )))
-    .expect("writer");
+    let (mut host, _) = host
+        .load(verified(action(
+            vec![fmovi(1, 1.0), excite(0, 1), flush(), yield_(), jump(-2)],
+            &rig,
+        )))
+        .expect("writer");
 
     let mut reader = action(vec![sense(1, 0), var_set(0, 1), yield_(), jump(-4)], &rig);
     reader.push_var_f(&n("seen"), 0.0);
     let reader_id = host.load(verified(reader)).expect("reader");
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
     assert_eq!(
         host.instance(reader_id).expect("suspended").vars_f()[0],
         0.0,
         "the snapshot was taken before the writer ran"
     );
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
     assert_eq!(
         host.instance(reader_id).expect("suspended").vars_f()[0],
         1.0,
@@ -448,7 +465,7 @@ fn a_fault_removes_only_the_faulting_instance() {
         .load(verified(action(vec![yield_(), jump(-2)], &rig)))
         .expect("healthy");
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
 
     assert!(
         host.instance(faulty_id).is_none(),
@@ -490,7 +507,7 @@ fn the_kth_backend_source_reads_the_kth_observable() {
     VerifiedImage::from_bytes(&image.to_bytes()).expect("the fixture is a legal image");
     let (mut host, id) = host.load(verified(image)).expect("assembled for this rig");
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
 
     let registers = host.instance(id).expect("suspended").registers();
     assert_eq!(
@@ -552,7 +569,8 @@ fn an_unbound_image_still_has_to_fit_the_hosts_shape() {
 
     let mut first = action(vec![yield_(), jump(-2)], &rig(1));
     first.header_mut().rig = Fingerprint::UNBOUND;
-    let (mut host, _) = host.load(verified(first))
+    let (mut host, _) = host
+        .load(verified(first))
         .expect("the first image fixes the shape");
 
     let mut wider = action(vec![yield_(), jump(-2)], &rig(2));
@@ -607,7 +625,7 @@ fn a_halted_instance_is_removed_after_its_tick() {
         .load(verified(action(vec![halt()], &rig)))
         .expect("halt");
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
 
     assert_eq!(host.instances(), 0);
     assert!(host.instance(id).is_none());
@@ -621,12 +639,12 @@ fn builtin_sensors_are_filled_by_the_host() {
     // `sensors_f` is [dt] and `sensors_i` is [tick]: the rig has no observables.
     let (mut host, id) = host.load(verified(image)).expect("builtin rig");
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
     let instance = host.instance(id).expect("suspended");
     assert_eq!(instance.registers().get_f(reg(1)), host.dt());
     assert_eq!(instance.registers().get_i(reg(2)), 0);
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
     assert_eq!(
         host.instance(id)
             .expect("suspended")
@@ -645,7 +663,7 @@ fn the_same_inputs_reproduce_the_same_trace() {
             .expect("same shape");
         host.set_tracing(true);
         for _ in 0..4 {
-            host.tick();
+            host.tick().expect("the dummy backend cannot fail");
         }
         host.trace()
             .map(|tick| (tick.now, tick.commands.to_vec()))
@@ -671,13 +689,13 @@ fn a_halted_action_leaves_the_body_holding_its_last_command() {
         )))
         .expect("one publish, then halt");
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
     assert_eq!(host.backend().muscles(), &[0.5], "the command landed");
     assert_eq!(host.instances(), 0, "the action is over");
     assert!(host.is_idle());
 
     for _ in 0..3 {
-        host.tick();
+        host.tick().expect("the dummy backend cannot fail");
     }
     assert_eq!(
         host.backend().muscles(),
@@ -690,15 +708,18 @@ fn a_halted_action_leaves_the_body_holding_its_last_command() {
 fn an_idle_session_still_drives_the_body() {
     let rig = rig(1);
     let (mut host, _) = Host::new(backend(&rig))
-        .load(verified(action(vec![fmovi(1, 0.5), excite(0, 1), halt()], &rig)))
+        .load(verified(action(
+            vec![fmovi(1, 0.5), excite(0, 1), halt()],
+            &rig,
+        )))
         .expect("halt");
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
     assert_eq!(host.instances(), 0);
 
     let calls = host.backend().calls().len();
     let now = host.now();
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
 
     assert_eq!(
         host.backend().calls().len() - calls,
@@ -727,10 +748,14 @@ fn releasing_a_muscle_is_an_explicit_command() {
         )))
         .expect("publish, release, halt");
 
-    host.tick();
-    assert_eq!(host.backend().muscles(), &[0.5], "held after the first tick");
+    host.tick().expect("the dummy backend cannot fail");
+    assert_eq!(
+        host.backend().muscles(),
+        &[0.5],
+        "held after the first tick"
+    );
 
-    host.tick();
+    host.tick().expect("the dummy backend cannot fail");
     assert_eq!(
         host.backend().muscles(),
         &[0.0],
@@ -752,7 +777,7 @@ fn a_full_trace_ring_keeps_the_newest_ticks_and_counts_the_rest() {
     host.set_trace_capacity(2);
     host.set_tracing(true);
     for _ in 0..4 {
-        host.tick();
+        host.tick().expect("the dummy backend cannot fail");
     }
 
     let ticks: Vec<_> = host.trace().map(|tick| tick.now).collect();

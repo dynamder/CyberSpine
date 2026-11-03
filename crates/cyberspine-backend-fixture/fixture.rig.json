@@ -1,0 +1,6 @@
+{
+  "rig": { "name": "fixture", "version": 1 },
+  "muscles": ["m0", "m1"],
+  "sensors_f": ["s0"],
+  "sensors_i": ["steps"]
+}

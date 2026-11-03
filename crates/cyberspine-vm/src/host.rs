@@ -33,7 +33,7 @@ use cyberspine_core::exec::{Fault, Instance, Program, Sensors, Status};
 use cyberspine_core::isa::clock::Hz;
 use cyberspine_core::rig::{BoundFingerprint, Fingerprint};
 
-use crate::backend::{Backend, Shape, Snapshot};
+use crate::backend::{Backend, BackendError, Shape, Snapshot};
 
 /// How many one-tick command vectors a fresh trace holds.
 pub const DEFAULT_TRACE_CAPACITY: usize = 4096;
@@ -80,9 +80,7 @@ pub enum LoadError {
         "the image carries no rig fingerprint; load it with a permissive host (`Host::permissive`) to run it anyway"
     )]
     Unbound,
-    #[error(
-        "the image's {table} table has {declared} entries, the backend reports {host}"
-    )]
+    #[error("the image's {table} table has {declared} entries, the backend reports {host}")]
     ShapeMismatch {
         table: &'static str,
         declared: usize,
@@ -358,13 +356,18 @@ impl<B: Backend, P: RigPolicy> Session<B, P> {
     ///
     /// Never short-circuits, not even with no instances: the last three calls are
     /// how the body keeps holding what it was last told.
-    pub fn tick(&mut self) {
-        self.sample();
+    ///
+    /// The body is the only fallible part. An `Err` ends the tick on the spot:
+    /// instances already resumed keep their state, but nothing is merged, nothing
+    /// reaches the body and the clock does not advance. The body is gone at that
+    /// point, so a caller must stop ticking this session.
+    pub fn tick(&mut self) -> Result<(), BackendError> {
+        self.sample()?;
         self.resume_due();
 
         self.merge();
-        self.backend.commit(&self.merged, self.dt);
-        self.backend.step(self.dt);
+        self.backend.commit(&self.merged, self.dt)?;
+        self.backend.step(self.dt)?;
 
         if self.tracing {
             let now = self.now;
@@ -373,6 +376,7 @@ impl<B: Backend, P: RigPolicy> Session<B, P> {
 
         self.now += 1;
         self.remove_terminated();
+        Ok(())
     }
 
     /// Consume wall-clock seconds and run the whole ticks they contain.
@@ -380,8 +384,9 @@ impl<B: Backend, P: RigPolicy> Session<B, P> {
     /// The remainder stays here: it is host timing, and it never enters a tick.
     /// A frame that asks for more than [`Session::set_max_ticks_per_frame`] ticks
     /// drops its remainder and counts one overrun, so a slow frame can never
-    /// spiral.
-    pub fn advance(&mut self, seconds: f64) {
+    /// spiral. A failed tick ends the frame immediately, so the caller learns
+    /// about the body instead of losing it behind a loop.
+    pub fn advance(&mut self, seconds: f64) -> Result<(), BackendError> {
         self.accumulator += seconds.max(0.0);
         let dt = f64::from(self.dt);
         let mut ticks = 0;
@@ -391,10 +396,11 @@ impl<B: Backend, P: RigPolicy> Session<B, P> {
                 self.accumulator = 0.0;
                 break;
             }
-            self.tick();
+            self.tick()?;
             self.accumulator -= dt;
             ticks += 1;
         }
+        Ok(())
     }
 
     pub fn now(&self) -> u64 {
@@ -504,13 +510,13 @@ impl<B: Backend, P: RigPolicy> Session<B, P> {
         self.max_ticks_per_frame = ticks.max(1);
     }
 
-    fn sample(&mut self) {
+    fn sample(&mut self) -> Result<(), BackendError> {
         let mut snapshot = Snapshot {
             f: &mut self.rig_f,
             i: &mut self.rig_i,
             muscles: &mut self.rig_muscles,
         };
-        self.backend.sample(&mut snapshot);
+        self.backend.sample(&mut snapshot)
     }
 
     fn resume_due(&mut self) {

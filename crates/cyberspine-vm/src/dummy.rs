@@ -6,7 +6,7 @@
 
 use cyberspine_core::rig::{BoundFingerprint, Rig};
 
-use crate::backend::{Backend, Shape, Snapshot};
+use crate::backend::{Backend, BackendError, Shape, Snapshot};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Call {
@@ -75,25 +75,28 @@ impl Backend for DummyBackend {
         }
     }
 
-    fn sample(&mut self, out: &mut Snapshot<'_>) {
+    fn sample(&mut self, out: &mut Snapshot<'_>) -> Result<(), BackendError> {
         out.f.copy_from_slice(&self.sensors_f);
         out.i.copy_from_slice(&self.sensors_i);
         out.muscles.copy_from_slice(&self.muscles);
         self.calls.push(Call::Sample);
+        Ok(())
     }
 
-    fn commit(&mut self, commands: &[Option<f32>], _dt: f32) {
+    fn commit(&mut self, commands: &[Option<f32>], _dt: f32) -> Result<(), BackendError> {
         self.committed.clear();
         self.committed.extend_from_slice(commands);
         self.calls.push(Call::Commit);
+        Ok(())
     }
 
-    fn step(&mut self, _dt: f32) {
+    fn step(&mut self, _dt: f32) -> Result<(), BackendError> {
         for (muscle, command) in self.muscles.iter_mut().zip(&self.committed) {
             if let Some(value) = command {
                 *muscle = *value;
             }
         }
         self.calls.push(Call::Step);
+        Ok(())
     }
 }
