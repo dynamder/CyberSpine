@@ -5,7 +5,9 @@ pub mod text;
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 
-use cyberspine_core::binfmt::image::{FORMAT_VERSION, FixedHeader as ImageFixedHeader, ISA_VERSION, Image, SensorSource};
+use cyberspine_core::binfmt::image::{
+    FORMAT_VERSION, FixedHeader as ImageFixedHeader, ISA_VERSION, Image, SensorSource,
+};
 use cyberspine_core::isa::clock::{Hz, Seconds};
 use cyberspine_core::isa::jump::{jump_offset, jump_target};
 use cyberspine_core::isa::{ImmType, Insn, OpCode, RegName};
@@ -16,8 +18,8 @@ use winnow::{Parser, combinator::trace, token::take_while};
 
 use diagnostic::PResult;
 pub use diagnostic::{AsmParseErrors, Location, ParseError, ParseErrorKind};
-pub use lint::{Warning, WarningKind, lint};
 use header::{AsmHeader, header as header_section};
+pub use lint::{Warning, WarningKind, lint};
 use text::{AsmInsn, AsmOperand, Located, TextItem, text as text_section};
 
 pub type Line<'i> = &'i str;

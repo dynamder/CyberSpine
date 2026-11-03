@@ -101,7 +101,11 @@ fn a_minimal_program_gets_the_implicit_halt_and_the_header() {
     assert_eq!(image.code()[1].op, OpCode::Halt);
 
     let reloaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("the loader must accept it");
-    assert_eq!(reloaded.to_bytes(), image.to_bytes(), "the writer reproduces what the reader read");
+    assert_eq!(
+        reloaded.to_bytes(),
+        image.to_bytes(),
+        "the writer reproduces what the reader read"
+    );
 }
 
 #[test]
@@ -183,7 +187,11 @@ HALT
     assert_eq!(imm, vec![0, 2, 3, 0, 1, 0, 0, 1, 0, 1, 0, 0]);
 
     let reloaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("the loader must accept it");
-    assert_eq!(reloaded.to_bytes(), image.to_bytes(), "the writer reproduces what the reader read");
+    assert_eq!(
+        reloaded.to_bytes(),
+        image.to_bytes(),
+        "the writer reproduces what the reader read"
+    );
 }
 
 /// The table order is the rig's order, not the source's: swapping two names in
@@ -359,7 +367,11 @@ L_done:
     assert_eq!(jump_target(19, image.code()[19].imm as i32), Some(16));
 
     let reloaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("the loader must accept it");
-    assert_eq!(reloaded.to_bytes(), image.to_bytes(), "the writer reproduces what the reader read");
+    assert_eq!(
+        reloaded.to_bytes(),
+        image.to_bytes(),
+        "the writer reproduces what the reader read"
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -106,7 +106,9 @@ pub enum LoadError {
     TrailingBytes { consumed: usize, expected: usize }, // C7
     #[error("the last instruction must be HALT")]
     MissingTrailingHalt, // C8 / I8
-    #[error("ran off the end of the {section} section at byte {offset}: needed {needed} more byte(s)")]
+    #[error(
+        "ran off the end of the {section} section at byte {offset}: needed {needed} more byte(s)"
+    )]
     Truncated {
         section: &'static str,
         offset: usize,
@@ -230,10 +232,7 @@ impl VerifiedImage {
     /// The diagnostics are *additional* to the `Result`: a warning here never
     /// turns a refusal into a success, and a refusal never suppresses a warning
     /// that explains why the image was odd.
-    pub fn from_bytes_with(
-        bytes: &[u8],
-        diagnostics: &mut Diagnostics,
-    ) -> Result<Self, LoadError> {
+    pub fn from_bytes_with(bytes: &[u8], diagnostics: &mut Diagnostics) -> Result<Self, LoadError> {
         // ----- the container, before a single `Vec` is allocated (C0, C5) -----
         if bytes.len() > MAX_IMAGE_LEN {
             return Err(LoadError::TooLarge {

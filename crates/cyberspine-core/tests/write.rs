@@ -5,7 +5,9 @@
 //! re-derives the bit layout: a test that asks the code what it wrote cannot tell
 //! you whether what it wrote is what the spec says.
 
-use cyberspine_core::binfmt::image::{DEFAULT_FUEL, HASH_LEN, HEADER_LEN, INSN_LEN, Image, MIN_FILE_LEN, SensorSource};
+use cyberspine_core::binfmt::image::{
+    DEFAULT_FUEL, HASH_LEN, HEADER_LEN, INSN_LEN, Image, MIN_FILE_LEN, SensorSource,
+};
 use cyberspine_core::isa::register::RegId;
 use cyberspine_core::isa::{Insn, OpCode};
 use cyberspine_core::rig::{Name, NameError};

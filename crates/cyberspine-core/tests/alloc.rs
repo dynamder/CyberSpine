@@ -14,9 +14,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use cyberspine_core::binfmt::image::{Image, SensorSource};
 use cyberspine_core::binfmt::load::VerifiedImage;
-use cyberspine_core::rig::Name;
 use cyberspine_core::isa::Insn;
 use cyberspine_core::isa::OpCode;
+use cyberspine_core::rig::Name;
 
 static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
 
@@ -57,7 +57,10 @@ fn image_with(muscles: usize) -> Image {
     image.push_sensor_f(&name(muscles), SensorSource::Backend);
     image.push_sensor_f(&Name::new("dt").expect("legal"), SensorSource::BuiltinDt);
     image.push_sensor_i(&name(muscles + 1), SensorSource::Backend);
-    image.push_sensor_i(&Name::new("tick").expect("legal"), SensorSource::BuiltinTick);
+    image.push_sensor_i(
+        &Name::new("tick").expect("legal"),
+        SensorSource::BuiltinTick,
+    );
     image.push_var_f(&name(muscles + 2), 0.5);
     image.push_var_i(&name(muscles + 3), -7);
     image

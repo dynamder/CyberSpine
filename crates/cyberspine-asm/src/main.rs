@@ -46,12 +46,7 @@ fn run(cli_args: &CliArgs) -> Result<(), String> {
         if let Some(location) = item.location {
             eprint!(
                 "{}",
-                diagnostic::render_warning(
-                    &item.message,
-                    location,
-                    &cli_args.asm_file,
-                    &asm_str,
-                )
+                diagnostic::render_warning(&item.message, location, &cli_args.asm_file, &asm_str,)
             );
         }
     }

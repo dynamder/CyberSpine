@@ -15,9 +15,9 @@
 use cyberspine_core::binfmt::image::{
     HASH_LEN, HEADER_LEN, INSN_LEN, Image, MAX_IMAGE_LEN, SensorSource,
 };
-use cyberspine_core::binfmt::{Diagnostics, Level};
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::binfmt::load::{LoadError, Table};
+use cyberspine_core::binfmt::{Diagnostics, Level};
 use cyberspine_core::isa::register::RegId;
 use cyberspine_core::isa::{Insn, OpCode};
 use cyberspine_core::rig::Name;
@@ -115,7 +115,11 @@ fn reject(bytes: &[u8]) -> LoadError {
 fn a_minimal_image_round_trips() {
     let image = Image::halt_only();
     let loaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("the minimum legal file");
-    assert_eq!(loaded.to_bytes(), image.to_bytes(), "the writer reproduces what the reader read");
+    assert_eq!(
+        loaded.to_bytes(),
+        image.to_bytes(),
+        "the writer reproduces what the reader read"
+    );
 }
 
 #[test]
@@ -137,7 +141,11 @@ fn a_populated_image_round_trips() {
     image.header_mut().fuel = 1234;
 
     let loaded = VerifiedImage::from_bytes(&image.to_bytes()).expect("a well-formed image");
-    assert_eq!(loaded.to_bytes(), image.to_bytes(), "the writer reproduces what the reader read");
+    assert_eq!(
+        loaded.to_bytes(),
+        image.to_bytes(),
+        "the writer reproduces what the reader read"
+    );
 }
 
 #[test]
@@ -233,7 +241,10 @@ fn c2_a_newer_minor_is_reported_but_not_refused() {
     let mut diagnostics = Diagnostics::default();
     let bytes = forge(
         &image,
-        &[(OFF_FORMAT_VERSION, &((1u16 << 11) | (7u16 << 6)).to_le_bytes())],
+        &[(
+            OFF_FORMAT_VERSION,
+            &((1u16 << 11) | (7u16 << 6)).to_le_bytes(),
+        )],
     );
     let loaded = VerifiedImage::from_bytes_with(&bytes, &mut diagnostics)
         .expect("a newer minor is readable");
@@ -251,7 +262,10 @@ fn c2_a_patch_bump_is_not_even_a_diagnostic() {
 
     // A patch is the same format; there is nothing to report.
     let mut diagnostics = Diagnostics::default();
-    let bytes = forge(&image, &[(OFF_FORMAT_VERSION, &((1u16 << 11) | 9).to_le_bytes())]);
+    let bytes = forge(
+        &image,
+        &[(OFF_FORMAT_VERSION, &((1u16 << 11) | 9).to_le_bytes())],
+    );
     VerifiedImage::from_bytes_with(&bytes, &mut diagnostics).expect("a patch bump is readable");
     assert!(
         diagnostics.items().is_empty(),
@@ -697,10 +711,7 @@ fn the_plan_resolves_every_sensor_to_its_source() {
             SensorFSource::Dt,
         ]
     );
-    assert_eq!(
-        plan.i,
-        vec![SensorISource::Backend(0), SensorISource::Tick]
-    );
+    assert_eq!(plan.i, vec![SensorISource::Backend(0), SensorISource::Tick]);
     assert_eq!(plan.backend_counts(), (1, 1));
 }
 

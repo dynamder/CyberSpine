@@ -146,9 +146,7 @@ impl Diagnostics {
     }
 
     pub fn has_warnings(&self) -> bool {
-        self.items
-            .iter()
-            .any(|item| item.level == Level::Warning)
+        self.items.iter().any(|item| item.level == Level::Warning)
     }
 
     /// Whether warnings are treated as fatal by this run's policy.
