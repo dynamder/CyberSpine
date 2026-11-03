@@ -29,6 +29,8 @@ impl<'s> Sensors<'s> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     Suspended,
+    /// Parked on an `INTR` until the host answers it (`docs/isa.md` §4.8).
+    Interrupted,
     Halted,
     Faulted,
 }
@@ -40,6 +42,15 @@ pub enum Step {
     Waited {
         until: u64,
     },
+    /// The instance raised an interrupt and is parked until the host resolves
+    /// it. `pc` is the `INTR` instruction itself; the resume point is `pc + 1`.
+    Interrupted {
+        reason: u32,
+        pc: usize,
+    },
+    /// `resume` was called while the instance was still parked on an interrupt.
+    /// Nothing ran; the host forgot to resolve it.
+    Parked,
     Halted,
     Faulted(Fault),
     /// The instance had already terminated; nothing ran.
@@ -51,6 +62,24 @@ pub enum Step {
 pub enum Fault {
     #[error("fuel exhausted at instruction {pc}")]
     FuelExhausted { pc: usize },
+}
+
+/// The interrupt an instance is parked on (`docs/isa.md` §4.8).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingInterrupt {
+    /// Index into the image's reason table.
+    pub reason: u32,
+    /// The `INTR` instruction itself.
+    pub pc: usize,
+}
+
+/// Why an instance could not be released from an interrupt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum InterruptError {
+    #[error("the instance is not parked on an interrupt")]
+    NotInterrupted,
+    #[error("the instance is parked on reason {expected}, not {given}")]
+    WrongReason { expected: u32, given: u32 },
 }
 
 /// One coroutine's state.
@@ -70,6 +99,7 @@ pub struct Instance {
     wake_at: u64,
     status: Status,
     fault: Option<Fault>,
+    interrupt: Option<PendingInterrupt>,
 }
 
 impl Instance {
@@ -87,11 +117,12 @@ impl Instance {
             wake_at: 0,
             status: Status::Suspended,
             fault: None,
+            interrupt: None,
         }
     }
 
-    /// Run until the instance yields, waits, halts or faults — or until the fuel
-    /// for this resume is spent (`docs/exec.md` §4).
+    /// Run until the instance yields, waits, interrupts, halts or faults — or
+    /// until the fuel for this resume is spent (`docs/exec.md` §4).
     pub fn resume(&mut self, prog: &Program<'_>, sensors: &Sensors<'_>, now: u64) -> Step {
         assert!(
             sensors.f.len() >= prog.sensor_f_count(),
@@ -105,8 +136,13 @@ impl Instance {
             sensors.i.len(),
             prog.sensor_i_count()
         );
-        if self.status != Status::Suspended {
-            return Step::Dead;
+        match self.status {
+            Status::Suspended => {}
+            // Parked on an interrupt: the host has to answer it first
+            // (`docs/isa.md` §4.8). This is not an error and not a terminal
+            // state, so it gets its own answer rather than `Dead`.
+            Status::Interrupted => return Step::Parked,
+            Status::Halted | Status::Faulted => return Step::Dead,
         }
 
         let mut fuel = prog.fuel();
@@ -131,12 +167,47 @@ impl Instance {
                     self.status = Status::Suspended;
                     return Step::Waited { until };
                 }
+                Flow::Interrupt(reason) => {
+                    let pc = self.pc;
+                    self.pc += 1;
+                    self.wake_at = now;
+                    self.status = Status::Interrupted;
+                    self.interrupt = Some(PendingInterrupt { reason, pc });
+                    return Step::Interrupted { reason, pc };
+                }
                 Flow::Halt => {
                     self.status = Status::Halted;
                     return Step::Halted;
                 }
             }
         }
+    }
+
+    /// Release an instance parked on an interrupt (`docs/isa.md` §4.8).
+    ///
+    /// The reason must match the one the host was told about, so a host that
+    /// mixes up two interrupts is refused rather than releasing the wrong one.
+    pub fn resume_interrupted(&mut self, reason: u32) -> Result<(), InterruptError> {
+        if self.status != Status::Interrupted {
+            return Err(InterruptError::NotInterrupted);
+        }
+        let pending = self
+            .interrupt
+            .expect("an `Interrupted` instance always carries its pending interrupt");
+        if pending.reason != reason {
+            return Err(InterruptError::WrongReason {
+                expected: pending.reason,
+                given: reason,
+            });
+        }
+        self.interrupt = None;
+        self.status = Status::Suspended;
+        Ok(())
+    }
+
+    /// The interrupt this instance is parked on, if any.
+    pub fn interrupt(&self) -> Option<PendingInterrupt> {
+        self.interrupt
     }
 
     pub fn status(&self) -> Status {
@@ -360,6 +431,9 @@ impl Instance {
                 let ticks = ceil_ticks(seconds, prog.hz());
                 Flow::Wait(now.saturating_add(ticks))
             }
+            // The loader checked that `imm` names a reason row (I9); execution
+            // only carries it out.
+            OpCode::Intr => Flow::Interrupt(insn.imm),
 
             OpCode::Fexcite => {
                 let muscle = insn.imm_index();
@@ -415,6 +489,7 @@ enum Flow {
     Jump(usize),
     Yield,
     Wait(u64),
+    Interrupt(u32),
     Halt,
 }
 

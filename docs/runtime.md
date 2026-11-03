@@ -25,24 +25,30 @@ body 有两种来源：
 ## 1. 用法
 
 ```text
-cyinevm -i <IMAGE> [-b <SPEC>] [--ticks N | --until-halt] [--unpaced] [--trace] [-q]
+cyinevm -i <IMAGE> [-i <IMAGE> ...] [-b <SPEC>] [--on-interrupt stop|continue]
+        [--ticks N | --until-halt] [--unpaced] [--trace] [-q]
 ```
 
 | 参数 | 含义 |
 |---|---|
-| `-i, --image <IMAGE>` | 要运行的 `.csp`，必填 |
+| `-i, --image <IMAGE>` | 要运行的 `.csp`；重复给出即按顺序装载到同一个 session，必填 |
 | `-b, --backend <SPEC>` | `dylib:<path>` 或 `rpc:<host>:<port>`；省略时使用官方 linked dummy |
+| `--on-interrupt <STOP\|CONTINUE>` | 内置中断策略：`stop`（默认，卸载该实例）或 `continue`（下一 tick 继续） |
 | `--ticks <N>` | 恰好运行 N 个 tick 后退出；`0` 表示只加载不运行；与 `--until-halt` 互斥 |
 | `--until-halt` | 所有实例结束后退出；与 `--ticks` 互斥 |
 | `--unpaced` | 不按真实时间睡眠；必须与 `--ticks` 一起使用 |
 | `--trace` | 每个 tick 向 stdout 写一行命令向量 |
-| `-q, --quiet` | 不打印启动摘要；dummy warning 与 fault 仍然打印 |
+| `-q, --quiet` | 不打印启动摘要；dummy warning、fault 与中断报告仍然打印 |
+
+多个 `-i` 共享同一个时钟与同一个 body：每个镜像必须与第一个镜像的 `hz` 和 shape 一致，
+装载顺序就是恢复顺序与合并顺序（`isa.md` §8.4）。`--ticks 0` 会装载全部镜像再退出，
+适合一次性校验。
 
 退出码：
 
 | 码 | 含义 |
 |---|---|
-| `0` | `--ticks`/`--until-halt` 正常结束、Ctrl-C、trace 管道关闭 |
+| `0` | `--ticks`/`--until-halt` 正常结束、Ctrl-C、trace 管道关闭；中断本身不是错误 |
 | `1` | 镜像读取/校验/加载失败、后端握手或 tick 失败、fault、feature 缺失、信号处理器安装失败 |
 | `2` | 命令行用法错误（clap 的约定） |
 
@@ -88,6 +94,17 @@ dummy 是内置的，不需要也不接受 `dummy:` 前缀；`cyinevm -b dummy:�
 
 **HALT 不会结束进程。** 动作结束后实例被移除，合并向量变成全 `None`，但宿主继续
 `sample` / `commit` / `step`；这是 `isa.md` §8.4 的“保持”语义：停止 tick 等于停止驱动身体。
+
+**中断不会结束进程。** `INTR` 让该实例挂起，`cyinevm` 在 tick 之后用内置策略回答：
+`--on-interrupt stop`（默认）把它卸载，`--on-interrupt continue` 让它下一 tick 从 `INTR`
+之后继续。事件本身（实例、路径、pc、tick、插值后的原因）打印到 stderr，例如：
+
+```text
+interrupt: instance 0 (actions/idle.csp) at pc 3 tick 12: obstacle: x=0.32 y=0.90
+```
+
+退出码仍是 `0`：中断是程序与宿主之间的正常通信，不是错误。需要真正的仲裁器（让外部程序
+决定 Continue / Stop / Switch）属于宿主集成，不在本 CLI 的 v1 范围内。
 
 Ctrl-C 由 `ctrlc` 捕获，设置停止标志；当前循环结束后进程以 `0` 退出。
 
@@ -213,7 +230,8 @@ pub type Official = MyBody;
 
 ## 8. 非目标（v1）
 
-- 多镜像 CLI：`Session` 支持多实例，但 `cyinevm` 一次只接受一个 `-i`。
+- 仲裁器插件：v1 只有 `--on-interrupt stop|continue` 这一条内置策略；把中断转发给
+  dylib / rpc 形式的裁决器、以及“停止并换一个动作”的 `Switch`，属于后续的宿主集成层。
 - `--permissive`：外部 body 始终 strict；dummy 的 permissive 是类型 `Policy` 决定的，
   不是命令行开关。
 - `inspect` / 反汇编：加载失败的报错已经包含 rig 与 shape；调试信息是 `asm.md` §8 的独立任务。
@@ -226,6 +244,12 @@ pub type Official = MyBody;
 ```bash
 # 官方 dummy：校验镜像能否运行，跑 120 tick 并输出 trace
 cyinevm -i action.csp --ticks 120 --unpaced --trace > trace.tsv
+
+# 两个镜像装进同一个 session；顺序就是装载顺序
+cyinevm -i idle.csp -i walk.csp --ticks 300
+
+# 中断默认停掉实例；改成继续
+cyinevm -i action.csp --on-interrupt continue --until-halt
 
 # 动态库 body
 cyinevm -i action.csp -b dylib:bodies/robot.dll

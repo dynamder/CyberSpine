@@ -76,7 +76,7 @@ fn a_halt_only_image_is_the_minimum_136_bytes() {
         0x00, 0x00, 0x00, 0x00, // 48  reserved_b = 0
         0x00, 0x10, 0x00, 0x00, // 52  fuel = 4096
         0x00, 0x00, 0x16, 0x44, // 56  max_wait_bits = 600.0f32
-        0x00, 0x00, 0x00, 0x00, // 60  reserved1 = 0
+        0x00, 0x00, 0x00, 0x00, // 60  reason_count = 0
     ];
     assert_eq!(
         &bytes[..64],
@@ -148,7 +148,7 @@ fn the_tables_are_gap_free_and_in_the_order_section_6_fixes() {
     assert_eq!(
         tables,
         &expected[..],
-        "the five tables are not laid out as §6 requires"
+        "the metadata tables are not laid out as §6 requires"
     );
 
     // The counts describe exactly those tables.
@@ -159,6 +159,21 @@ fn the_tables_are_gap_free_and_in_the_order_section_6_fixes() {
     assert_eq!(u32_at(&bytes, 36), 1, "var_f_count");
     assert_eq!(u32_at(&bytes, 40), 1, "var_i_count");
     assert_eq!(u32_at(&bytes, 12) as usize, bytes.len(), "file_len");
+}
+
+#[test]
+fn the_reason_table_follows_the_variable_tables() {
+    // §6.6: the reason table is the last metadata section, NUL-terminated text
+    // rather than a name. It is not an identifier, so spaces and braces are kept
+    // verbatim.
+    let mut image = Image::new(code(&[insn(OpCode::Intr), insn(OpCode::Halt)]));
+    image.push_reason("x={f1}");
+
+    let bytes = image.to_bytes();
+    assert_eq!(u32_at(&bytes, 60), 1, "reason_count");
+
+    let tables = &bytes[HEADER_LEN + 2 * INSN_LEN..bytes.len() - HASH_LEN];
+    assert_eq!(tables, b"x={f1}\0");
 }
 
 #[test]

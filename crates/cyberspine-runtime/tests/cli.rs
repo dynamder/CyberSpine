@@ -374,3 +374,87 @@ fn an_rpc_backend_without_the_feature_says_so() {
     assert!(message.contains("without the `rpc` feature"), "{message}");
     assert!(message.contains("--features rpc"), "{message}");
 }
+
+// ---------------------------------------------------------------------------
+// Several images, and interrupts
+// ---------------------------------------------------------------------------
+
+#[test]
+fn two_images_load_into_one_session() {
+    let dir = scratch("two-images");
+    let first = write_image(&dir, "first.csp", HALT, MANIFEST);
+    let second = write_image(&dir, "second.csp", HALT, MANIFEST);
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        first.as_os_str(),
+        OsStr::new("-i"),
+        second.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("1"),
+        OsStr::new("--unpaced"),
+    ]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let message = stderr(&output);
+    assert!(message.contains("instance 0:"), "{message}");
+    assert!(message.contains("instance 1:"), "{message}");
+    assert!(message.contains("first.csp"), "{message}");
+    assert!(message.contains("second.csp"), "{message}");
+}
+
+const INTERRUPT: &str = "\
+.layer 10
+.clock hz = 1000
+.fuel 4096
+.max_wait 600.0
+
+.text
+    FMOVI   f1, 0.5
+    INTR    \"why {f1:.1}\"
+    HALT
+";
+
+#[test]
+fn an_interrupt_is_reported_and_the_default_policy_stops_it() {
+    let dir = scratch("interrupt-stop");
+    let image = write_image(&dir, "interrupt.csp", INTERRUPT, MANIFEST);
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("1"),
+        OsStr::new("--unpaced"),
+        OsStr::new("--quiet"),
+    ]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let message = stderr(&output);
+    assert!(
+        message.contains("interrupt: instance 0"),
+        "the interrupt must be reported: {message}"
+    );
+    assert!(message.contains("why 0.5"), "{message}");
+    assert!(
+        !message.contains("did not apply"),
+        "the built-in policy must resolve the ticket: {message}"
+    );
+}
+
+#[test]
+fn continue_lets_the_instance_halt_on_the_next_tick() {
+    let dir = scratch("interrupt-continue");
+    let image = write_image(&dir, "interrupt.csp", INTERRUPT, MANIFEST);
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--on-interrupt"),
+        OsStr::new("continue"),
+        OsStr::new("--until-halt"),
+    ]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(stderr(&output).contains("why 0.5"), "{}", stderr(&output));
+}

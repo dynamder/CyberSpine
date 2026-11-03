@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use cyberspine_core::binfmt::image::{
     FORMAT_VERSION, FixedHeader as ImageFixedHeader, ISA_VERSION, Image, SensorSource,
 };
+use cyberspine_core::binfmt::reason::{MAX_REASON_LEN, Template, TemplateError};
 use cyberspine_core::isa::clock::{Hz, Seconds};
 use cyberspine_core::isa::jump::{jump_offset, jump_target};
 use cyberspine_core::isa::{ImmType, Insn, OpCode, RegName};
@@ -156,6 +157,16 @@ pub enum ImageGenError {
     ZeroHz,
     #[error("`max_wait` must be a non-negative finite f32")]
     InvalidMaxWait,
+    #[error("INTR needs a quoted reason template")]
+    MissingReason { location: Location },
+    #[error("invalid reason template: {source}")]
+    InvalidReason {
+        location: Location,
+        #[source]
+        source: TemplateError,
+    },
+    #[error("the reason template is {len} bytes, above the {MAX_REASON_LEN}-byte limit")]
+    ReasonTooLong { len: usize, location: Location },
     #[error("the program is too large for the format's 32-bit instruction count")]
     TooManyInstructions,
     /// A mismatch between the layout pass and the emitted code. No source can
@@ -182,6 +193,9 @@ impl ImageGenError {
             | Self::UnknownVarI { location, .. }
             | Self::GroupOutsideExcite { location, .. }
             | Self::PendingNotFlushed { location, .. }
+            | Self::MissingReason { location }
+            | Self::InvalidReason { location, .. }
+            | Self::ReasonTooLong { location, .. }
             | Self::InvalidWait { location, .. } => Some(*location),
             Self::DuplicateName(_)
             | Self::ReservedName(_)
@@ -203,11 +217,12 @@ pub fn generate_image(asm: &Asm, rig: &Rig) -> Result<Image, ImageGenError> {
     check_rig(rig)?;
 
     let symbols = Symbols::build(&asm.header, rig)?;
+    let reasons = ReasonTable::build(&asm.text, &symbols)?;
     let layout = layout(&asm.text, &symbols)?;
 
     let mut code = Vec::with_capacity(layout.code_len);
     let mut locations = Vec::with_capacity(layout.code_len);
-    for emitted in emit(&layout, &symbols) {
+    for emitted in emit(&layout, &symbols, &reasons) {
         let (insn, location) = emitted?;
         code.push(insn);
         locations.push(location);
@@ -265,7 +280,81 @@ pub fn generate_image(asm: &Asm, rig: &Rig) -> Result<Image, ImageGenError> {
     for (var, init) in symbols.image_vars_i {
         image.push_var_i(&var, init);
     }
+    for reason in reasons.entries() {
+        image.push_reason(reason);
+    }
     Ok(image)
+}
+
+/// The `INTR` reason table, built before emission so every instruction can be
+/// handed its index.
+///
+/// Interning is keyed by the **canonical** template, so two sites that resolve
+/// to the same text share one row. The order is first use in the instruction
+/// stream, which is what makes the table — and therefore the image hash —
+/// independent of anything but the source (`docs/binfmt.md` §8).
+struct ReasonTable {
+    entries: Vec<String>,
+    by_location: HashMap<Location, u32>,
+}
+
+impl ReasonTable {
+    fn build(items: &[Located<TextItem>], symbols: &Symbols) -> Result<Self, ImageGenError> {
+        let mut entries: Vec<String> = Vec::new();
+        let mut by_text: HashMap<String, u32> = HashMap::new();
+        let mut by_location = HashMap::new();
+
+        for located in items {
+            let TextItem::Insn(insn) = &located.item else {
+                continue;
+            };
+            if insn.op != OpCode::Intr {
+                continue;
+            }
+            let location = located.location;
+            let source = match insn.operands.first() {
+                Some(AsmOperand::Text(text)) => text,
+                _ => return Err(ImageGenError::MissingReason { location }),
+            };
+
+            let mut template = Template::parse(source)
+                .map_err(|source| ImageGenError::InvalidReason { location, source })?;
+            template
+                .resolve_vars(
+                    |name| symbols.vars_f.get(name).copied(),
+                    |name| symbols.vars_i.get(name).copied(),
+                )
+                .map_err(|source| ImageGenError::InvalidReason { location, source })?;
+
+            let canonical = template.canonical();
+            if canonical.len() > MAX_REASON_LEN {
+                return Err(ImageGenError::ReasonTooLong {
+                    len: canonical.len(),
+                    location,
+                });
+            }
+
+            let index = *by_text.entry(canonical.clone()).or_insert_with(|| {
+                let index = entries.len() as u32;
+                entries.push(canonical);
+                index
+            });
+            by_location.insert(location, index);
+        }
+
+        Ok(Self {
+            entries,
+            by_location,
+        })
+    }
+
+    fn entries(&self) -> &[String] {
+        &self.entries
+    }
+
+    fn index(&self, location: Location) -> u32 {
+        self.by_location[&location]
+    }
 }
 
 /// The clock rate the header declares, as the type every consumer divides by.
@@ -504,6 +593,7 @@ fn layout<'a>(
 fn emit<'a, 'i>(
     layout: &'a Layout<'i>,
     symbols: &'a Symbols,
+    reasons: &'a ReasonTable,
 ) -> impl Iterator<Item = Result<(Insn, Location), ImageGenError>> + 'a {
     layout.emissions.iter().flat_map(move |emission| {
         let count = emission.targets.as_ref().map_or(1, Vec::len);
@@ -515,6 +605,7 @@ fn emit<'a, 'i>(
                 emission.start_pc + offset,
                 &layout.labels,
                 symbols,
+                reasons,
                 excite_index,
             )
             .map(|insn| (insn, emission.location))
@@ -555,6 +646,7 @@ fn emit_insn(
     pc: usize,
     labels: &BTreeMap<SmolStr, (usize, Location)>,
     symbols: &Symbols,
+    reasons: &ReasonTable,
     excite_index: Option<u32>,
 ) -> Result<Insn, ImageGenError> {
     let mut insn = Insn::new(asm.op);
@@ -588,6 +680,7 @@ fn emit_insn(
                     .ok_or(ImageGenError::JumpOffsetOverflow { pc, location })?;
                 insn.imm = offset as u32;
             }
+            AsmOperand::Text(_) => insn.imm = reasons.index(location),
         }
     }
 
@@ -751,8 +844,10 @@ fn check_pending(code: &[Insn], locations: &[Location]) -> Result<(), ImageGenEr
         let state = states[pc];
         let insn = code[pc];
 
-        if matches!(insn.op, OpCode::Yield | OpCode::Wait | OpCode::Halt)
-            && let PendingState::Set(excite_pc) = state
+        if matches!(
+            insn.op,
+            OpCode::Yield | OpCode::Wait | OpCode::Intr | OpCode::Halt
+        ) && let PendingState::Set(excite_pc) = state
         {
             return Err(ImageGenError::PendingNotFlushed {
                 excite_pc,

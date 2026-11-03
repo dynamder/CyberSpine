@@ -34,6 +34,7 @@ use super::image::{
     format_parts,
 };
 use super::plan::{Plan, SensorFSource, SensorISource};
+use super::reason::{MAX_REASON_LEN, Template, TemplateError};
 use cyberspine_rig::{Fingerprint, Name, NameError};
 
 /// Which metadata table an error refers to.
@@ -44,6 +45,7 @@ pub enum Table {
     SensorsI,
     VarsF,
     VarsI,
+    Reasons,
 }
 
 impl Table {
@@ -56,6 +58,7 @@ impl Table {
             Self::SensorsI => "sensors_i",
             Self::VarsF => "vars_f",
             Self::VarsI => "vars_i",
+            Self::Reasons => "reasons",
         }
     }
 }
@@ -191,6 +194,12 @@ pub enum LoadError {
         muscle_id: usize,
         count: usize,
     }, // I5
+    #[error("instruction {index}: INTR reason {reason_id} is out of range (count {count})")]
+    ReasonIndexOutOfRange {
+        index: usize,
+        reason_id: usize,
+        count: usize,
+    }, // I9
     #[error("instruction {index}: target {index} + 1 + ({offset}) is outside [0, {code_len})")]
     JumpTargetOutOfRange {
         index: usize,
@@ -207,6 +216,26 @@ pub enum LoadError {
     }, // I7
     #[error("{table}[{index}]: the name is not NUL-terminated before the end of the file")]
     UnterminatedName { table: Table, index: usize }, // M1
+
+    // ----- §6.6 reasons -----
+    #[error("reasons[{index}]: the text is not NUL-terminated before the end of the file")]
+    UnterminatedReason { index: usize }, // M7
+    #[error("reasons[{index}]: the text is not valid UTF-8")]
+    ReasonNotUtf8 { index: usize }, // M7
+    #[error("reasons[{index}]: a reason template cannot be empty")]
+    EmptyReason { index: usize }, // M7
+    #[error("reasons[{index}]: the template is {len} bytes, above the {max}-byte limit")]
+    ReasonTooLong {
+        index: usize,
+        len: usize,
+        max: usize,
+    }, // M7
+    #[error("reasons[{index}]: {source}")]
+    InvalidReason {
+        index: usize,
+        #[source]
+        source: TemplateError,
+    }, // M7
 }
 
 /// An image that passed `docs/binfmt.md` §9.
@@ -219,7 +248,7 @@ pub enum LoadError {
 ///
 /// There is no `&mut` access: an action is immutable once it has loaded.
 #[derive(Debug, Clone)]
-pub struct VerifiedImage(Image, Plan);
+pub struct VerifiedImage(Image, Plan, [u8; 32]);
 
 impl VerifiedImage {
     /// Decode and verify an image from memory.
@@ -245,7 +274,7 @@ impl VerifiedImage {
         }
 
         let raw = RawHeader::parse(&bytes[..HEADER_LEN])?;
-        check_container(&raw, bytes, diagnostics)?;
+        let hash = check_container(&raw, bytes, diagnostics)?;
 
         let body_end = bytes.len() - HASH_LEN;
         let mut cursor = Cursor::new(&bytes[..body_end], HEADER_LEN, "code");
@@ -268,7 +297,7 @@ impl VerifiedImage {
             code.push(insn);
         }
 
-        // The five tables are exactly what is left of the body after the code, so
+        // The six tables are exactly what is left of the body after the code, so
         // this is an exact upper bound on the names in them — C5 already proved
         // the code section fits. One reservation, no growth, no per-name
         // allocation.
@@ -282,6 +311,7 @@ impl VerifiedImage {
             read_table::<Sensor>(&mut cursor, &mut names, Table::SensorsI, raw.sensor_i_count)?;
         let vars_f = read_table::<VarF>(&mut cursor, &mut names, Table::VarsF, raw.var_f_count)?;
         let vars_i = read_table::<VarI>(&mut cursor, &mut names, Table::VarsI, raw.var_i_count)?;
+        let reasons = read_reasons(&mut cursor, &mut names, raw.reason_count)?;
 
         if cursor.pos != body_end {
             return Err(LoadError::TrailingBytes {
@@ -290,28 +320,32 @@ impl VerifiedImage {
             }); // C7
         }
 
-        Self::verify(Image {
-            header: FixedHeader {
-                format_version: raw.format_version,
-                isa_version: raw.isa_version,
-                layer: raw.layer,
-                hz: Hz::new(raw.hz).ok_or(LoadError::ZeroHz)?,
-                fuel: raw.fuel,
-                max_wait: Seconds::new(f32::from_bits(raw.max_wait_bits)).ok_or(
-                    LoadError::InvalidMaxWait {
-                        bits: raw.max_wait_bits,
-                    },
-                )?,
-                rig: Fingerprint(raw.rig),
+        Self::finish(
+            Image {
+                header: FixedHeader {
+                    format_version: raw.format_version,
+                    isa_version: raw.isa_version,
+                    layer: raw.layer,
+                    hz: Hz::new(raw.hz).ok_or(LoadError::ZeroHz)?,
+                    fuel: raw.fuel,
+                    max_wait: Seconds::new(f32::from_bits(raw.max_wait_bits)).ok_or(
+                        LoadError::InvalidMaxWait {
+                            bits: raw.max_wait_bits,
+                        },
+                    )?,
+                    rig: Fingerprint(raw.rig),
+                },
+                code,
+                names,
+                muscles,
+                sensors_f,
+                sensors_i,
+                vars_f,
+                vars_i,
+                reasons,
             },
-            code,
-            names,
-            muscles,
-            sensors_f,
-            sensors_i,
-            vars_f,
-            vars_i,
-        })
+            hash,
+        )
     }
 
     /// Validate an image that was built in memory.
@@ -319,13 +353,27 @@ impl VerifiedImage {
     /// This is the rule set [`VerifiedImage::from_bytes`] applies minus the
     /// container checks, which need the original bytes.
     pub fn verify(image: Image) -> Result<Self, LoadError> {
+        let bytes = image.to_bytes();
+        let hash = *blake3::hash(&bytes[..bytes.len() - HASH_LEN]).as_bytes();
+        Self::finish(image, hash)
+    }
+
+    fn finish(image: Image, hash: [u8; 32]) -> Result<Self, LoadError> {
         let plan = image.validate()?;
-        Ok(Self(image, plan))
+        Ok(Self(image, plan, hash))
     }
 
     /// The image itself. Mutable access is deliberately absent.
     pub fn image(&self) -> &Image {
         &self.0
+    }
+
+    /// The content hash the loader computed (`docs/binfmt.md` §7).
+    ///
+    /// It is already part of the C6 check, so carrying it costs nothing and
+    /// gives an interrupt event a stable identity for the action.
+    pub fn content_hash(&self) -> [u8; 32] {
+        self.2
     }
 
     /// What each sensor reads from, resolved by M3–M6.
@@ -352,7 +400,7 @@ impl core::ops::Deref for VerifiedImage {
 }
 
 impl Image {
-    /// §9.1 C4 / C8 and §9.2 M1–M6, §9.3 I2–I8: everything a valid byte string
+    /// §9.1 C4 / C8 and §9.2 M1–M7, §9.3 I2–I9: everything a valid byte string
     /// implies once it has been decoded.
     ///
     /// [`VerifiedImage::from_bytes`] runs this after the container checks;
@@ -405,7 +453,7 @@ struct RawHeader {
     reserved_b: u32,
     fuel: u32,
     max_wait_bits: u32,
-    reserved1: u32,
+    reason_count: u32,
     rig: [u8; 32],
 }
 
@@ -443,7 +491,7 @@ impl RawHeader {
         let reserved_b = c.u32_le()?;
         let fuel = c.u32_le()?;
         let max_wait_bits = c.u32_le()?;
-        let reserved1 = c.u32_le()?;
+        let reason_count = c.u32_le()?;
 
         let mut rig = [0u8; 32];
         rig.copy_from_slice(c.take(32)?);
@@ -470,7 +518,7 @@ impl RawHeader {
             reserved_b,
             fuel,
             max_wait_bits,
-            reserved1,
+            reason_count,
             rig,
         })
     }
@@ -483,7 +531,7 @@ fn check_container(
     raw: &RawHeader,
     bytes: &[u8],
     diagnostics: &mut Diagnostics,
-) -> Result<(), LoadError> {
+) -> Result<[u8; 32], LoadError> {
     // C1 — the declared length must be the actual length, so every later offset
     // computed from it is trustworthy.
     if raw.file_len as usize != bytes.len() {
@@ -542,9 +590,6 @@ fn check_container(
             field: "reserved_b",
         });
     }
-    if raw.reserved1 != 0 {
-        return Err(LoadError::ReservedNotZero { field: "reserved1" });
-    }
 
     // C8, the early half. `validate` checks this too, for images built in
     // memory; here it also has to be checked *before* the cursor starts reading a
@@ -590,7 +635,8 @@ fn check_container(
         + raw.sensor_f_count as u64
         + raw.sensor_i_count as u64
         + raw.var_f_count as u64
-        + raw.var_i_count as u64;
+        + raw.var_i_count as u64
+        + raw.reason_count as u64;
     let lower_bound =
         HEADER_LEN as u64 + INSN_LEN as u64 * raw.code_len as u64 + HASH_LEN as u64 + 2 * entries;
     if lower_bound > bytes.len() as u64 {
@@ -600,14 +646,14 @@ fn check_container(
         });
     }
 
-    Ok(())
+    Ok(*computed.as_bytes())
 }
 
 // ---------------------------------------------------------------------------
 // §9.2 metadata
 // ---------------------------------------------------------------------------
 
-/// M3–M6, plus the [`Plan`] they imply. M1 (name validity) and the unknown-`src`
+/// M3–M7, plus the [`Plan`] they imply. M1 (name validity) and the unknown-`src`
 /// half of M5 are enforced while reading, since that is where the bytes are in hand.
 ///
 /// The plan is built inside the same loops that check the sources, so a plan can
@@ -715,6 +761,29 @@ fn check_metadata(image: &Image) -> Result<Plan, LoadError> {
         });
     }
 
+    // M7 — every reason template is a stored template: variables by index, and
+    // every index inside the table it addresses. Rendering is a host concern,
+    // so this is the last point where a bad template can be refused instead of
+    // becoming a diagnostic marker in an event.
+    for (index, reason) in image.reasons.iter().enumerate() {
+        let text = image.name(*reason);
+        if text.is_empty() {
+            return Err(LoadError::EmptyReason { index });
+        }
+        if text.len() > MAX_REASON_LEN {
+            return Err(LoadError::ReasonTooLong {
+                index,
+                len: text.len(),
+                max: MAX_REASON_LEN,
+            });
+        }
+        let template =
+            Template::parse(text).map_err(|source| LoadError::InvalidReason { index, source })?;
+        template
+            .check_stored(image.vars_f.len() as u32, image.vars_i.len() as u32)
+            .map_err(|source| LoadError::InvalidReason { index, source })?;
+    }
+
     Ok(plan)
 }
 
@@ -807,6 +876,18 @@ fn check_code(image: &Image) -> Result<(), LoadError> {
                         index,
                         muscle_id: imm,
                         count: image.muscles.len(),
+                    });
+                }
+            }
+
+            // I9 — an INTR names one row of the reason table.
+            OpCode::Intr => {
+                let imm = insn.imm_index();
+                if imm >= image.reasons.len() {
+                    return Err(LoadError::ReasonIndexOutOfRange {
+                        index,
+                        reason_id: imm,
+                        count: image.reasons.len(),
                     });
                 }
             }
@@ -936,6 +1017,18 @@ impl<'a> Cursor<'a> {
         self.pos += nul + 1;
         Ok(name)
     }
+
+    /// Read one reason, which is NUL-terminated but not a name (§6.6).
+    fn reason(&mut self, index: usize) -> Result<&'a [u8], LoadError> {
+        let rest = &self.bytes[self.pos..];
+        let nul = rest
+            .iter()
+            .position(|&b| b == 0)
+            .ok_or(LoadError::UnterminatedReason { index })?;
+        let text = &rest[..nul];
+        self.pos += nul + 1;
+        Ok(text)
+    }
 }
 
 /// One row of a metadata table: how to read it, and what to compare for the
@@ -1055,6 +1148,38 @@ fn read_table<T: Entry>(
             });
         }
         out.push(entry);
+    }
+
+    Ok(out)
+}
+
+/// Read the reason table (§6.6).
+///
+/// A reason is text, not a name: it has no identifier rule and may be any
+/// non-empty UTF-8 string. The only structural check is the NUL terminator that
+/// separates entries — everything else is `Template`'s job in M7.
+fn read_reasons(
+    cursor: &mut Cursor<'_>,
+    names: &mut Names,
+    count: u32,
+) -> Result<Vec<NameRef>, LoadError> {
+    cursor.enter(Table::Reasons.as_str());
+    let mut out = Vec::with_capacity(count as usize);
+
+    for index in 0..count as usize {
+        let bytes = cursor.reason(index)?;
+        let text = core::str::from_utf8(bytes).map_err(|_| LoadError::ReasonNotUtf8 { index })?;
+        if text.is_empty() {
+            return Err(LoadError::EmptyReason { index });
+        }
+        if text.len() > MAX_REASON_LEN {
+            return Err(LoadError::ReasonTooLong {
+                index,
+                len: text.len(),
+                max: MAX_REASON_LEN,
+            });
+        }
+        out.push(names.push(text));
     }
 
     Ok(out)

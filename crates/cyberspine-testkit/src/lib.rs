@@ -116,6 +116,14 @@ pub fn wait(seconds: f32) -> Insn {
     }
 }
 
+/// Raise interrupt `reason` (an index into the image's reason table).
+pub fn intr(reason: u32) -> Insn {
+    Insn {
+        imm: reason,
+        ..Insn::new(OpCode::Intr)
+    }
+}
+
 pub fn excite(muscle: usize, ra: u8) -> Insn {
     Insn {
         ra: reg(ra),

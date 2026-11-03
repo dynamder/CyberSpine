@@ -13,4 +13,4 @@ mod trace;
 pub use cli::Args;
 pub use cyberspine_core::binfmt::load::VerifiedImage;
 pub use linked::{LinkedBody, Notice, Official};
-pub use run::{Error, Feature, Options, RunMode, Stop, run_external, run_linked};
+pub use run::{Error, Feature, OnInterrupt, Options, RunMode, Stop, run_external, run_linked};

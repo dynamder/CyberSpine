@@ -37,6 +37,9 @@ pub enum ImmType {
     I32,
     Index,
     JumpOffset,
+    /// A quoted reason template; the assembler interns the text and stores the
+    /// table index in `imm` (`docs/isa.md` §4.8).
+    Text,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,6 +183,9 @@ macro_rules! operand {
     (imm JumpOffset) => {
         OperandParam::Imm(ImmType::JumpOffset)
     };
+    (imm Text) => {
+        OperandParam::Imm(ImmType::Text)
+    };
 }
 
 macro_rules! isa_table {
@@ -275,7 +281,7 @@ macro_rules! isa_table {
 }
 
 // ---------------------------------------------------------------------------
-// The ISA table (`docs/isa.md` §4, 49 instructions)
+// The ISA table (`docs/isa.md` §4, 50 instructions)
 // ---------------------------------------------------------------------------
 //
 // One row per opcode: `opcode => variant, "MNEMONIC" [, (operand ...)]`.
@@ -341,6 +347,9 @@ isa_table! {
     // 挂起 0x70
     0x70 => Yield, "YIELD";
     0x71 => Wait,  "WAIT", (imm F32);
+    // Raise an interrupt and park until the host decides
+    // (`docs/isa.md` §4.8). `imm` is the index of a reason template.
+    0x72 => Intr,  "INTR", (imm Text);
 
     // 激发 0x80
     0x80 => Fexcite, "FEXCITE", (imm Index), (ra F);

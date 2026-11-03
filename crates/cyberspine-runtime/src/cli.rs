@@ -3,24 +3,28 @@ use std::path::PathBuf;
 use clap::Parser;
 use cyberspine_backend::{BackendSpec, SpecError};
 
-use crate::run::{Options, RunMode, Stop};
+use crate::run::{OnInterrupt, Options, RunMode, Stop};
 
-/// `cyinevm`: run a `.csp` image against a body.
+/// `cyinevm`: run one or more `.csp` images against a body.
 #[derive(Debug, Clone, Parser)]
 #[command(
     name = "cyinevm",
     version,
-    about = "Run a .csp image against a body",
+    about = "Run .csp images against a body",
     arg_required_else_help = true
 )]
 pub struct Args {
-    /// The `.csp` image to run.
-    #[arg(short, long)]
-    pub image: PathBuf,
+    /// A `.csp` image to run. Repeat `-i` to load several into one session.
+    #[arg(short, long, required = true, action = clap::ArgAction::Append)]
+    pub image: Vec<PathBuf>,
 
     /// `dylib:<path>` or `rpc:<host>:<port>`; omit for the built-in dummy body.
     #[arg(short, long, value_name = "SPEC", value_parser = parse_backend)]
     pub backend: Option<BackendSpec>,
+
+    /// What the built-in arbiter does with an interrupt (`stop` or `continue`).
+    #[arg(long, value_enum, default_value_t = OnInterrupt::Stop)]
+    pub on_interrupt: OnInterrupt,
 
     /// Run exactly N ticks and exit; 0 loads without ticking.
     #[arg(long, value_name = "N", conflicts_with = "until_halt")]
@@ -67,6 +71,7 @@ impl Args {
             mode,
             trace: self.trace,
             quiet: self.quiet,
+            on_interrupt: self.on_interrupt,
         }
     }
 }

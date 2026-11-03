@@ -2,7 +2,7 @@
 //!
 //! `docs/binfmt.md` is the only spec for the byte layout, and this module is its
 //! transcription. It is written so that §8's canonical form holds **by
-//! construction**: every layout-derived field — `file_len`, `code_len`, the five
+//! construction**: every layout-derived field — `file_len`, `code_len`, the six
 //! counts, `flags`, `reserved*` — is *computed* here rather than stored, so there
 //! is no way to set one and no second way to encode the same action.
 //!
@@ -172,12 +172,12 @@ pub use cyberspine_isa::clock::DEFAULT_MAX_WAIT;
 
 /// The scalar half of the fixed header (§4).
 ///
-/// The other half — `magic`, `flags`, `file_len`, `code_len`, the five counts,
-/// `reserved_a`, `reserved_b` and `reserved0`/`reserved1` — is either derived
+/// The other half — `magic`, `flags`, `file_len`, `code_len`, the six counts,
+/// `reserved_a`, `reserved_b` and `reserved0` — is either derived
 /// from the image or required to be zero, so it deliberately has no
 /// representation here (P3: 布局全推导). `reserved_a` (offset 8) and
 /// `reserved_b` (offset 48) are reserved and must be zero; C3 refuses any
-/// non-zero value.
+/// non-zero value. Offset 60 is now `reason_count` rather than a reserved zero.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FixedHeader {
     pub format_version: u16,
@@ -271,9 +271,9 @@ pub struct VarI {
 
 /// A whole action: the semantics of a `.csp` file, before any layout.
 ///
-/// The five tables are in the order §3 and §6 fix for the file:
-/// `muscles → sensors_f → sensors_i → vars_f → vars_i`. Their order is part of
-/// the program's meaning (§6.2), not an implementation choice.
+/// The six tables are in the order §3 and §6 fix for the file:
+/// `muscles → sensors_f → sensors_i → vars_f → vars_i → reasons`. Their order is
+/// part of the program's meaning (§6.2), not an implementation choice.
 #[derive(Debug, Clone)]
 pub struct Image {
     pub(crate) header: FixedHeader,
@@ -284,6 +284,7 @@ pub struct Image {
     pub(crate) sensors_i: Vec<Sensor>,
     pub(crate) vars_f: Vec<VarF>,
     pub(crate) vars_i: Vec<VarI>,
+    pub(crate) reasons: Vec<NameRef>,
 }
 
 impl Image {
@@ -309,6 +310,7 @@ impl Image {
             sensors_i: Vec::new(),
             vars_f: Vec::new(),
             vars_i: Vec::new(),
+            reasons: Vec::new(),
         }
     }
 
@@ -331,7 +333,7 @@ impl Image {
         &mut self.code
     }
 
-    /// The five metadata tables, in the order §3 fixes for the file.
+    /// The six metadata tables, in the order §3 fixes for the file.
     pub fn muscles(&self) -> &[Muscle] {
         &self.muscles
     }
@@ -350,6 +352,27 @@ impl Image {
 
     pub fn vars_i(&self) -> &[VarI] {
         &self.vars_i
+    }
+
+    /// The reason templates, in `INTR` index order (`docs/binfmt.md` §6.6).
+    ///
+    /// The text lives in the same arena as the names: a reason is a byte string
+    /// with a length, which is exactly what a [`NameRef`] is, and one arena
+    /// keeps loading to a constant number of allocations.
+    pub fn reasons(&self) -> &[NameRef] {
+        &self.reasons
+    }
+
+    /// The text of one reason template.
+    pub fn reason(&self, index: usize) -> &str {
+        self.name(self.reasons[index])
+    }
+
+    /// Append a reason template. The assembler has already canonicalized it and
+    /// resolved its variable names to indices (`docs/asm.md` §4.4).
+    pub fn push_reason(&mut self, text: &str) {
+        let name = self.names.push(text);
+        self.reasons.push(name);
     }
 
     /// Append a muscle on its own.
@@ -438,6 +461,9 @@ impl Image {
             push_name(&mut out, self.name(var.name));
             out.extend_from_slice(&var.init.to_le_bytes());
         }
+        for reason in &self.reasons {
+            push_name(&mut out, self.name(*reason));
+        }
 
         out
     }
@@ -490,8 +516,8 @@ impl Image {
         push_u32(out, self.code.len(), "code_len");
         out.extend_from_slice(&self.header.layer.to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes()); // reserved0: must be 0 (§9.1 C3)
-        // The five counts, in the order §3 fixes. Asking for them as a table makes
-        // "all five were checked" a property of the code rather than of the eye.
+        // The counts, in the order §3 fixes. Asking for them as a table makes
+        // "all of them were checked" a property of the code rather than of the eye.
         for (what, count) in [
             ("muscle_count", self.muscles.len()),
             ("sensor_f_count", self.sensors_f.len()),
@@ -505,7 +531,7 @@ impl Image {
         out.extend_from_slice(&0u32.to_le_bytes()); // reserved_b: must be 0 (§9.1 C3)
         out.extend_from_slice(&self.header.fuel.to_le_bytes());
         out.extend_from_slice(&self.header.max_wait.get().to_bits().to_le_bytes());
-        out.extend_from_slice(&0u32.to_le_bytes()); // reserved1: must be 0 (§9.1 C3)
+        push_u32(out, self.reasons.len(), "reason_count");
         out.extend_from_slice(&self.header.rig.0); // rig fingerprint (§4)
 
         debug_assert_eq!(

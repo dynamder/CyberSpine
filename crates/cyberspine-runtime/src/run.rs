@@ -9,7 +9,9 @@ use cyberspine_backend::BackendSpec;
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::rig::Fingerprint;
 use cyberspine_vm::io::{LoadFileError, read_image};
-use cyberspine_vm::{Backend, BackendError, Host, LoadError, RigPolicy, Session};
+use cyberspine_vm::{
+    Backend, BackendError, Host, InstanceId, LoadError, RigPolicy, Session, Verdict,
+};
 use thiserror::Error;
 
 use crate::linked::{LinkedBody, Notice};
@@ -30,11 +32,23 @@ pub enum RunMode {
     UnpacedTicks(u64),
 }
 
+/// What the built-in arbiter does with an interrupt.
+///
+/// A real host replaces this with a plugin (`docs/interrupt.md`); the CLI has no
+/// way to ask an external program, so it offers the two decisions that need no
+/// state: stop the instance, or let it continue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum OnInterrupt {
+    Stop,
+    Continue,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Options {
     pub mode: RunMode,
     pub trace: bool,
     pub quiet: bool,
+    pub on_interrupt: OnInterrupt,
 }
 
 /// A build capability an external backend needs.
@@ -64,6 +78,8 @@ impl Feature {
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("no image given")]
+    NoImage,
     #[error("{path}: {source}")]
     Image {
         path: PathBuf,
@@ -90,41 +106,75 @@ pub enum Error {
 }
 
 /// Run the body linked into this binary.
-pub fn run_linked<L: LinkedBody>(path: &Path, options: &Options) -> Result<(), Error> {
+pub fn run_linked<L: LinkedBody>(paths: &[PathBuf], options: &Options) -> Result<(), Error> {
     if let Notice::Warn(text) = L::NOTICE {
         eprintln!("warning: {text}");
     }
 
-    let image = read_image(path).map_err(|source| Error::Image {
-        path: path.to_path_buf(),
+    let (first, rest) = paths.split_first().ok_or(Error::NoImage)?;
+    let image = read_image(first).map_err(|source| Error::Image {
+        path: first.clone(),
         source,
     })?;
-    let context = RunContext::new(&image);
     let body = L::open(&image)?;
     let host = L::host(body);
-    let (session, _) = host.load(image).map_err(|(_, source)| Error::Load {
-        path: path.to_path_buf(),
+    let mut context = RunContext::new(&image);
+    let layer = image.header().layer;
+    let (mut session, id) = host.load(image).map_err(|(_, source)| Error::Load {
+        path: first.clone(),
         source,
     })?;
+    context.push(id, layer, first);
+    load_rest(&mut session, &mut context, rest)?;
 
     run_session(session, context, options)
 }
 
 /// Run a body named by an external spec.
-pub fn run_external(spec: &BackendSpec, path: &Path, options: &Options) -> Result<(), Error> {
+pub fn run_external(spec: &BackendSpec, paths: &[PathBuf], options: &Options) -> Result<(), Error> {
     let body = open_external(spec)?;
-    let image = read_image(path).map_err(|source| Error::Image {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let context = RunContext::new(&image);
     let host = Host::new(body);
-    let (session, _) = host.load(image).map_err(|(_, source)| Error::Load {
-        path: path.to_path_buf(),
+
+    let (first, rest) = paths.split_first().ok_or(Error::NoImage)?;
+    let image = read_image(first).map_err(|source| Error::Image {
+        path: first.clone(),
         source,
     })?;
+    let mut context = RunContext::new(&image);
+    let layer = image.header().layer;
+    let (mut session, id) = host.load(image).map_err(|(_, source)| Error::Load {
+        path: first.clone(),
+        source,
+    })?;
+    context.push(id, layer, first);
+    load_rest(&mut session, &mut context, rest)?;
 
     run_session(session, context, options)
+}
+
+/// Load every image after the first one into the session.
+///
+/// The first image fixed the clock and the shape; `Session::load` is what turns
+/// "another action" into "another instance of this rig" or into a named
+/// mismatch (`docs/isa.md` §8).
+fn load_rest<B: Backend, P: RigPolicy>(
+    session: &mut Session<B, P>,
+    context: &mut RunContext,
+    paths: &[PathBuf],
+) -> Result<(), Error> {
+    for path in paths {
+        let image = read_image(path).map_err(|source| Error::Image {
+            path: path.clone(),
+            source,
+        })?;
+        let layer = image.header().layer;
+        let id = session.load(image).map_err(|source| Error::Load {
+            path: path.clone(),
+            source,
+        })?;
+        context.push(id, layer, path);
+    }
+    Ok(())
 }
 
 fn open_external(spec: &BackendSpec) -> Result<Box<dyn Backend>, Error> {
@@ -150,10 +200,18 @@ fn require(feature: Feature) -> Result<(), Error> {
     }
 }
 
+/// One instance and the file it came from. The session knows the id, the
+/// operator wants the path; this is the map between them.
+struct Loaded {
+    id: InstanceId,
+    layer: u16,
+    path: PathBuf,
+}
+
 struct RunContext {
     names: Vec<String>,
     rig: Fingerprint,
-    layer: u16,
+    instances: Vec<Loaded>,
 }
 
 impl RunContext {
@@ -165,8 +223,23 @@ impl RunContext {
                 .map(|muscle| image.name(muscle.name).to_owned())
                 .collect(),
             rig: image.header().rig,
-            layer: image.header().layer,
+            instances: Vec::new(),
         }
+    }
+
+    fn push(&mut self, id: InstanceId, layer: u16, path: &Path) {
+        self.instances.push(Loaded {
+            id,
+            layer,
+            path: path.to_path_buf(),
+        });
+    }
+
+    fn path_of(&self, id: InstanceId) -> Option<&Path> {
+        self.instances
+            .iter()
+            .find(|loaded| loaded.id == id)
+            .map(|loaded| loaded.path.as_path())
     }
 }
 
@@ -182,12 +255,19 @@ fn run_session<B: Backend, P: RigPolicy>(
             shape.muscles, shape.sensors_f, shape.sensors_i
         );
         eprintln!(
-            "image: {} at {} Hz, layer {}, {} instance(s)",
+            "rig: {} at {} Hz, {} instance(s)",
             context.rig,
             session.hz(),
-            context.layer,
-            session.instances()
+            context.instances.len()
         );
+        for loaded in &context.instances {
+            eprintln!(
+                "  instance {}: layer {}, {}",
+                loaded.id,
+                loaded.layer,
+                loaded.path.display()
+            );
+        }
     }
 
     let mut trace = options.trace.then(|| Trace::new(&context.names));
@@ -219,7 +299,7 @@ fn run_session<B: Backend, P: RigPolicy>(
                     break;
                 }
                 session.tick()?;
-                if !observe(&mut session, trace.as_mut())? {
+                if !observe(&mut session, &context, options, trace.as_mut())? {
                     return Ok(());
                 }
             }
@@ -234,7 +314,7 @@ fn run_session<B: Backend, P: RigPolicy>(
                 deadline += frame;
                 sleep_until(deadline);
                 session.tick()?;
-                if !observe(&mut session, trace.as_mut())? {
+                if !observe(&mut session, &context, options, trace.as_mut())? {
                     return Ok(());
                 }
             }
@@ -250,7 +330,7 @@ fn run_session<B: Backend, P: RigPolicy>(
                 let elapsed = last.elapsed().as_secs_f64();
                 last = Instant::now();
                 session.advance(elapsed)?;
-                if !observe(&mut session, trace.as_mut())? {
+                if !observe(&mut session, &context, options, trace.as_mut())? {
                     return Ok(());
                 }
                 if mode == Stop::UntilHalt && session.is_idle() {
@@ -276,9 +356,12 @@ fn sleep_until(deadline: Instant) {
 
 fn observe<B: Backend, P: RigPolicy>(
     session: &mut Session<B, P>,
+    context: &RunContext,
+    options: &Options,
     trace: Option<&mut Trace>,
 ) -> Result<bool, Error> {
     report_faults(session)?;
+    report_interrupts(session, context, options);
 
     if let Some(trace) = trace {
         trace.drain(session)?;
@@ -288,6 +371,34 @@ fn observe<B: Backend, P: RigPolicy>(
     }
 
     Ok(true)
+}
+
+/// Answer every interrupt this tick produced with the built-in policy.
+///
+/// This is the whole "host decides" story for the CLI: a real host replaces the
+/// two-line body with its own arbiter (`docs/interrupt.md`).
+fn report_interrupts<B: Backend, P: RigPolicy>(
+    session: &mut Session<B, P>,
+    context: &RunContext,
+    options: &Options,
+) {
+    for interrupt in session.take_interrupts() {
+        let path = context
+            .path_of(interrupt.instance)
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "?".to_string());
+        eprintln!(
+            "interrupt: instance {} ({path}) at pc {} tick {}: {}",
+            interrupt.instance, interrupt.pc, interrupt.tick, interrupt.reason
+        );
+        let verdict = match options.on_interrupt {
+            OnInterrupt::Stop => Verdict::Stop,
+            OnInterrupt::Continue => Verdict::Continue,
+        };
+        if let Err(error) = session.resolve(interrupt, verdict) {
+            eprintln!("warning: the built-in interrupt policy did not apply: {error}");
+        }
+    }
 }
 
 fn report_faults<B: Backend, P: RigPolicy>(session: &mut Session<B, P>) -> Result<(), Error> {

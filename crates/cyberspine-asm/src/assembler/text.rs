@@ -36,6 +36,8 @@ pub enum AsmOperand {
     ImmNone,
     Index(SmolStr),
     Target(SmolStr),
+    /// A quoted reason template, interned into the image's reason table.
+    Text(SmolStr),
 }
 
 impl AsmOperand {
@@ -57,6 +59,10 @@ impl AsmOperand {
 
     pub fn new_target(label: SmolStr) -> Self {
         Self::Target(label)
+    }
+
+    pub fn new_text(text: SmolStr) -> Self {
+        Self::Text(text)
     }
 }
 
@@ -181,6 +187,35 @@ fn directive_name(rest: &str) -> SmolStr {
         Ok(name) => SmolStr::new(name),
         Err(_) => SmolStr::new(""),
     }
+}
+
+/// A double-quoted string. Only `\\` and `\"` are escapes; a backslash before
+/// anything else is reported, so a Windows path has to be written `\\`.
+///
+/// Shared by `.rig` and the `INTR` reason operand (`docs/asm.md` §1): one
+/// string lexer, so a reason and a manifest path cannot disagree about escapes.
+pub(crate) fn quoted_string<'i>(input: &mut Line<'i>) -> PResult<SmolStr> {
+    let text = *input;
+    let Some(rest) = text.strip_prefix('"') else {
+        return cut_at(text, ParseErrorKind::Unexpected);
+    };
+
+    let mut out = String::new();
+    let mut chars = rest.char_indices();
+    while let Some((offset, character)) = chars.next() {
+        match character {
+            '"' => {
+                *input = &rest[offset + 1..];
+                return Ok(SmolStr::new(out));
+            }
+            '\\' => match chars.next() {
+                Some((_, escaped @ ('\\' | '"'))) => out.push(escaped),
+                _ => return cut_at(&rest[offset..], ParseErrorKind::Unexpected),
+            },
+            other => out.push(other),
+        }
+    }
+    cut_at(text, ParseErrorKind::UnterminatedString)
 }
 
 pub fn text(input: &mut &str) -> Result<Vec<Located<TextItem>>, AsmParseErrors> {

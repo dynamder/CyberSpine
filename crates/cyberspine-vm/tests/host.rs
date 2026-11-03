@@ -14,10 +14,12 @@ use cyberspine_core::isa::OpCode;
 use cyberspine_core::isa::clock::Hz;
 use cyberspine_core::rig::{Fingerprint, Rig};
 use cyberspine_testkit::{
-    action, binary, excite, flush, fmovi, halt, imovi, isense, jump, name as n, nop, reg, rig,
-    sense, var_set, verified, wait, yield_,
+    action, binary, excite, flush, fmovi, halt, imovi, intr, isense, jump, name as n, nop, reg,
+    rig, sense, var_set, verified, wait, yield_,
 };
-use cyberspine_vm::{Backend, Call, DummyBackend, FaultRecord, Host, LoadError, Snapshot};
+use cyberspine_vm::{
+    Backend, Call, DecideError, DummyBackend, FaultRecord, Host, LoadError, Snapshot, Verdict,
+};
 
 /// `FEXCITE` once, `FLUSH` once, then yield forever without touching b2 again.
 fn publish_then_idle(muscle: usize, value: f32, rig: &Rig) -> Image {
@@ -783,4 +785,134 @@ fn a_full_trace_ring_keeps_the_newest_ticks_and_counts_the_rest() {
     let ticks: Vec<_> = host.trace().map(|tick| tick.now).collect();
     assert_eq!(ticks, vec![2, 3], "the ring holds the two newest ticks");
     assert_eq!(host.trace_dropped(), 2, "and says how many it overwrote");
+}
+
+// ---------------------------------------------------------------------------
+// Interrupts
+// ---------------------------------------------------------------------------
+
+fn interrupt_action(body: Vec<cyberspine_core::isa::Insn>, rig: &Rig) -> VerifiedImage {
+    let mut image = action(body, rig);
+    image.push_reason("v={f1:.1}");
+    verified(image)
+}
+
+#[test]
+fn an_interrupt_is_rendered_from_the_frozen_instance() {
+    let rig = rig(1);
+    let (mut host, id) = Host::new(backend(&rig))
+        .load(interrupt_action(vec![fmovi(1, 1.5), intr(0), halt()], &rig))
+        .expect("assembled for this rig");
+
+    host.tick().expect("the dummy backend cannot fail");
+
+    let interrupts = host.take_interrupts();
+    assert_eq!(interrupts.len(), 1);
+    let interrupt = &interrupts[0];
+    assert_eq!(interrupt.instance, id);
+    assert_eq!(interrupt.pc, 1, "the ticket names the INTR itself");
+    assert_eq!(interrupt.tick, 0);
+    assert_eq!(&*interrupt.format, "v={f1:.1}");
+    assert_eq!(&*interrupt.reason, "v=1.5");
+    assert_eq!(interrupt.reason_id(), 0);
+    assert_eq!(host.parked(), vec![id]);
+    assert!(
+        host.take_interrupts().is_empty(),
+        "draining is not deciding"
+    );
+}
+
+#[test]
+fn continuing_an_interrupt_resumes_after_the_intr() {
+    let rig = rig(1);
+    let (mut host, id) = Host::new(backend(&rig))
+        .load(interrupt_action(vec![fmovi(1, 1.5), intr(0), halt()], &rig))
+        .expect("assembled for this rig");
+    host.tick().expect("the dummy backend cannot fail");
+
+    let interrupt = host.take_interrupts().remove(0);
+    host.resolve(interrupt, Verdict::Continue)
+        .expect("the instance is parked");
+
+    assert!(host.parked().is_empty());
+    assert_eq!(host.instance(id).map(|i| i.pc()), Some(2));
+
+    host.tick().expect("the dummy backend cannot fail");
+    assert!(
+        host.instance(id).is_none(),
+        "the HALT after INTR ended the instance"
+    );
+}
+
+#[test]
+fn stopping_an_interrupt_discards_the_instance() {
+    let rig = rig(1);
+    let (mut host, id) = Host::new(backend(&rig))
+        .load(interrupt_action(vec![intr(0), halt()], &rig))
+        .expect("assembled for this rig");
+    host.tick().expect("the dummy backend cannot fail");
+
+    let interrupt = host.take_interrupts().remove(0);
+    host.resolve(interrupt, Verdict::Stop)
+        .expect("the instance is parked");
+
+    assert!(host.instance(id).is_none());
+    assert!(host.parked().is_empty());
+    assert!(host.is_idle());
+}
+
+#[test]
+fn a_ticket_is_single_use() {
+    let rig = rig(1);
+    let (mut host, _) = Host::new(backend(&rig))
+        .load(interrupt_action(vec![intr(0), halt()], &rig))
+        .expect("assembled for this rig");
+    host.tick().expect("the dummy backend cannot fail");
+
+    let interrupt = host.take_interrupts().remove(0);
+    let stale = interrupt.clone();
+    host.resolve(interrupt, Verdict::Continue)
+        .expect("the instance is parked");
+
+    assert!(matches!(
+        host.resolve(stale, Verdict::Continue),
+        Err(DecideError::Stale)
+    ));
+}
+
+#[test]
+fn a_parked_instance_keeps_its_last_commands() {
+    let rig = rig(1);
+    let (mut host, _) = Host::new(backend(&rig))
+        .load(interrupt_action(
+            vec![fmovi(1, 0.5), excite(0, 1), flush(), intr(0), halt()],
+            &rig,
+        ))
+        .expect("assembled for this rig");
+
+    host.set_tracing(true);
+    host.tick().expect("the dummy backend cannot fail");
+    host.tick().expect("the dummy backend cannot fail");
+
+    let commands: Vec<_> = host.trace().map(|tick| tick.commands[0]).collect();
+    assert_eq!(
+        commands,
+        vec![Some(0.5), Some(0.5)],
+        "parked is a suspension, not an unload: the command keeps merging"
+    );
+}
+
+#[test]
+fn unloading_a_parked_instance_drops_its_ticket() {
+    let rig = rig(1);
+    let (mut host, id) = Host::new(backend(&rig))
+        .load(interrupt_action(vec![intr(0), halt()], &rig))
+        .expect("assembled for this rig");
+    host.tick().expect("the dummy backend cannot fail");
+    assert_eq!(host.take_interrupts().len(), 1);
+
+    assert!(host.unload(id));
+    assert!(!host.unload(id), "the second unload finds nothing");
+    assert!(host.instance(id).is_none());
+    assert!(host.take_interrupts().is_empty());
 }

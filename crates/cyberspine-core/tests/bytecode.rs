@@ -9,7 +9,7 @@
 //! sit above this one.
 //!
 //! Normative references:
-//!   * `docs/isa.md` §1.1 — 8/6/6/6/6/32 layout, 49 opcodes
+//!   * `docs/isa.md` §1.1 — 8/6/6/6/6/32 layout, 50 opcodes
 //!   * `docs/isa.md` §1.2 — per-opcode `imm` interpretation
 //!   * `docs/isa.md` §4    — opcode table
 
@@ -47,7 +47,7 @@ const B_RC: u8 = 8;
 /// `(opcode, register slots, uses imm)` — re-derived from `isa.md` §4, without
 /// consulting the generated `isa_table!`. This is the independent spec that
 /// makes the assertions below non-circular.
-const FIELDS: [(u8, u8, bool); 49] = [
+const FIELDS: [(u8, u8, bool); 50] = [
     (0x00, B_RD, true),                       // FMOVI  rd, imm(f32 bits)
     (0x01, B_RD, true),                       // IMOVI  rd, imm(i32)
     (0x02, B_RD | B_RA, false),               // FMOV   rd, ra
@@ -89,6 +89,7 @@ const FIELDS: [(u8, u8, bool); 49] = [
     (0x61, B_RD, true),                       // ISENSE rd, imm(sensor id)
     (0x70, 0, false),                         // YIELD
     (0x71, 0, true),                          // WAIT  imm(f32 bits)
+    (0x72, 0, true),                          // INTR  imm(reason id)
     (0x80, B_RA, true),                       // FEXCITE imm(muscle id), ra
     (0x90, B_RD, true),                       // FVGET rd, imm(var id)
     (0x91, B_RA, true),                       // FVSET imm(var id), ra
@@ -192,8 +193,8 @@ fn every_register_index_from_0_to_63_round_trips() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn isa_defines_exactly_49_distinct_opcodes() {
-    assert_eq!(FIELDS.len(), 49, "isa.md §4.12 enumerates 49 instructions");
+fn isa_defines_exactly_50_distinct_opcodes() {
+    assert_eq!(FIELDS.len(), 50, "isa.md §4.12 enumerates 50 instructions");
     let mut seen: Vec<u8> = FIELDS.iter().map(|&(byte, _, _)| byte).collect();
     seen.sort_unstable();
     let total = seen.len();
@@ -247,7 +248,7 @@ fn opcode_space_is_exactly_defined_plus_reserved() {
     expected.sort_unstable();
     assert_eq!(
         decoded, expected,
-        "the decoder must accept exactly the 49 defined opcodes and reject the other 207"
+        "the decoder must accept exactly the 50 defined opcodes and reject the other 206"
     );
 }
 

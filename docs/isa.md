@@ -48,7 +48,7 @@ M_{n+1}      = Backend(M_n, E_n, dt)        # Rust 后端，VM 不碰
 
 1. 指令流只出现装配期解析过的整数；rig 相关的名字只存在于头段。
 2. 指令集的全部副作用只有三处：**寄存器、实例变量、实例的命令缓冲区**。
-3. 一个实例是一条协程：**挂起点只有 `YIELD` 和 `WAIT`**。
+3. 一个实例是一条协程：**挂起点只有 `YIELD`、`WAIT` 和 `INTR`**。前两个会自己回来，`INTR` 必须由宿主裁决后才继续。
 4. **VM 只搬运，不解释。** 激发值原样送往后端；命令合并由宿主做，物理可行性、钳制、净化都是后端的事。
 5. 字段宽度 = 寄存器文件长度，索引按构造合法，零运行期边界检查。
 6. 一切越界在**加载期**验证，一切超限在**运行期确定性失败**。不存在"尽力而为"。
@@ -83,6 +83,7 @@ M_{n+1}      = Backend(M_n, E_n, dt)        # Rust 后端，VM 不碰
 | f32 位模式 | `FMOVI`、`WAIT` |
 | i32 | `IMOVI` |
 | 无符号索引 | sensor / var / muscle 下标 |
+| reason 表下标 | `INTR`（源码里是双引号字符串，装配期 intern） |
 | 有符号跳转偏移 | `JMP`、`IJZ`、`IJNZ`、`FLT`…`INE` |
 | 未使用 | 无 `imm` 语义的指令（必须填 0） |
 
@@ -179,7 +180,7 @@ pub struct Vars {
 
 **G2 寄存器生命周期。** 实例装载时清零，随挂起/恢复存活，随实例结束消亡（§2.3）。
 
-**G3 执行模型。** 单线程顺序执行。`pc` 从单元入口开始，每次执行一条指令后 `pc += 1`，除非该指令是跳转或挂起。**挂起点只有 `YIELD` 与 `WAIT`。**
+**G3 执行模型。** 单线程顺序执行。`pc` 从单元入口开始，每次执行一条指令后 `pc += 1`，除非该指令是跳转或挂起。**挂起点只有 `YIELD`、`WAIT` 与 `INTR`**；`INTR` 挂起后必须由宿主显式放行（§4.8）。
 
 执行由**虚拟时钟**驱动，`dt = 1/hz`（§6）。一个 tick 结束于所有到期实例都推进到挂起 / `HALT` / fault 之后（§8.4）。
 
@@ -219,7 +220,7 @@ fault 的实例贡献消失是刻意的：fault 是 bug 信号，视觉上的跳
 
 ## 4. 指令表
 
-全部 **49 条**。记法：`rd/ra/rb/rc` 为 6 位寄存器号，文件由 opcode 决定。
+全部 **50 条**。记法：`rd/ra/rb/rc` 为 6 位寄存器号，文件由 opcode 决定。
 
 ### 4.1 传送与常量（0x00）
 
@@ -356,8 +357,13 @@ FEXCITE mouth_open, r1     # 写新的命令值
 |---|---|---|---|
 | 0x70 | `YIELD` | — | 挂起到下一个 tick，恢复时从下一条指令继续 |
 | 0x71 | `WAIT` | `imm` | 挂起 `f32::from_bits(imm)` 秒，恢复时从下一条指令继续 |
+| 0x72 | `INTR` | `imm`（reason 表下标） | 提出中断；挂起直到宿主裁决，**不会**自动恢复 |
 
-两条指令都会先推进 `pc` 再挂起，所以恢复点是它们的下一条指令。寄存器与实例变量跨挂起存活。
+三条指令都会先推进 `pc` 再挂起，所以恢复点是它们的下一条指令。寄存器与实例变量跨挂起存活。
+
+`INTR` 把实例推进到 `Interrupted`：它不写 fault、不结束实例，也不参与 fuel 以外的任何计费。宿主拿到 `(实例, reason, pc)` 后必须显式回答 `Continue`（从 `pc + 1` 继续）或 `Stop`（卸载实例，状态丢弃，身体保持最后命令）。裁决前的任何 `resume` 都是无操作。这是**刻意的 fail-safe**：忘记回答的宿主只会让实例永远停着，而不会把它悄悄放回执行。
+
+`reason` 是镜像里一张文本模板表的下标（`binfmt.md` §6.6）；模板里的 `{fN}` / `{iN}` / `{vf:name}` / `{vi:name}` 在宿主侧按挂起瞬间的实例状态插值，因此中断原因可以携带上下文，而不需要把数字码表事先约定好。`INTR` 与 `YIELD` / `WAIT` / `HALT` 一样是挂起点：`FEXCITE` 之后没 `FLUSH` 就 `INTR` 是**汇编期硬错误**（`asm.md` §6）。
 
 `WAIT` 的时长按 `dt` 换算成 tick 数：
 
@@ -432,7 +438,7 @@ L_done:
 0x50 13   JMP  IJZ  IJNZ  FLT  FLE  FGT  FGE
           ILT  ILE  IGT  IGE  IEQ  INE
 0x60  2   FSENSE  ISENSE
-0x70  2   YIELD  WAIT
+0x70  3   YIELD  WAIT  INTR
 0x80  1   FEXCITE
 0x90  4   FVGET  FVSET  IVGET  IVSET
 0xA0  3   HALT  NOP  FLUSH
@@ -454,7 +460,7 @@ L_done:
 
 ### 5.2 汇编期标签解析
 
-源语言中控制流以标签或结构化构造表达；`ELSE`/`END`/`WHILE` 之类是**汇编器伪指令**，lowering 到 `JMP` + 条件跳转 +（需要时）`YIELD`，不占 opcode。ISA 因此保持 49 条。
+源语言中控制流以标签或结构化构造表达；`ELSE`/`END`/`WHILE` 之类是**汇编器伪指令**，lowering 到 `JMP` + 条件跳转 +（需要时）`YIELD`，不占 opcode。ISA 因此保持 50 条。
 
 ```
 第一遍（收集）
@@ -585,7 +591,7 @@ k_ticks = ceil(seconds × hz)
 
 **fuel 永远按指令条数等权重 1 计费。** 它要解决的问题是"逻辑不推进——死循环"，与时间度量无关。单次恢复的执行条数有上界 `fuel_default`，因此单次恢复的工作量有上界；没有周期预算，也就没有跨实例的耦合——一个实例的行为不依赖同一 tick 里其他实例消耗了多少指令。
 
-**`WAIT` 为什么不消耗 fuel：** `YIELD` 与 `WAIT` 是实例仅有的两个自愿出口，任何加在它们头上的成本都会惩罚"让出"本身——一个每 tick `YIELD` 一次的常住实例会瞬间烧光预算，从而杀掉 §2.4 承认的合法程序（呼吸、待机摆动）。
+**让出为什么便宜：** `YIELD`、`WAIT` 与 `INTR` 各自只消耗 1 条 fuel，而 fuel 按每次恢复重新装满（§7.1），所以一个每 tick `YIELD` 一次的常住实例每个 tick 只花 1，不会被预算杀掉。休眠的代价是虚拟时间（§6.4），不是 fuel。
 
 ### 6.6 时间意图：开环与闭环
 
@@ -691,13 +697,15 @@ struct Instance {
 
 ```
 装载 ──▶ Running ──┬── YIELD / WAIT ──▶ 挂起 ──▶ Running
+                   ├── INTR ──────────▶ Interrupted ──宿主 Continue──▶ Running
                    ├── HALT ──────────▶ Halted   （动作执行完成）
                    └── fault ─────────▶ Faulted  （贡献同时消失）
 ```
 
 - **装载**：宿主装载一个 `.csp`，分配一个实例。寄存器清零，变量取头段初值，两个 mask 全零。
 - **恢复**：宿主决定"到期"并调用 `resume(snapshot, now)`，实例从 `pc` 执行到挂起 / `HALT` / fault / fuel 耗尽。
-- **卸载**：`Halted` 与 `Faulted` 的实例由宿主从集合中移除；移除后不再被 tick，其命令也不再参与合并。
+- **中断**：`INTR` 让实例进入 `Interrupted`；它不是结束，也不写 fault。宿主必须显式回答 `Continue` 或 `Stop`，否则实例永远停着（fail-safe）。挂起期间它仍然参与命令合并（保持最后发布值）。
+- **卸载**：`Halted`、`Faulted` 以及被 `Stop` 回答的中断实例由宿主从集合中移除；移除后不再被 tick，其命令也不再参与合并。
 
 ### 8.4 宿主每 tick 流程
 
@@ -710,8 +718,11 @@ fn tick(instances: &mut [Instance], sensors: &Sensors, backend: &mut dyn Backend
 
     // 2. 按装载顺序恢复到期的实例
     for inst in instances.iter_mut() {
+        if inst.status == Status::Interrupted { continue; }   // 等宿主裁决
         if inst.wake_at <= *now {
             resume(inst, &prog, &snapshot, *now);  // 推进到挂起 / HALT / fault / fuel 耗尽
+            // Step::Interrupted 会把 (实例, reason, pc, 渲染后的文本) 交给宿主；
+            // 宿主在 tick 之外回答 Continue / Stop。
         }
     }
 
@@ -917,6 +928,9 @@ tick——已恢复的实例保留状态，但不合并、不交付、时钟不�
 8. 执行单元以 `HALT` 结尾（不足时由汇编器补齐）。
 9. 头段 `hz` 必须为正（加载期 C4）。汇编期 v1 要求显式写 `.clock hz = …`（`asm.md` §3.1）；
    默认值 60 只用于程序化构造镜像（`FixedHeader::default`），加载器不接受缺失字段。
+10. `INTR` 的 `imm` 必须落在镜像的 reason 表内（`binfmt.md` §6.6、§9.3 I9）。
+11. 每条 reason 模板必须是存储形式：变量按下标引用，且下标在对应变量表内（`binfmt.md` §9.2 M7）。
+    模板里出现变量名是**加载期拒绝**，不是运行期诊断。
 
 ---
 
@@ -935,7 +949,7 @@ tick——已恢复的实例保留状态，但不合并、不交付、时钟不�
 | `FSENSE rd, imm` | sensor（f32） | `F` |
 | `IJZ ra, imm` | 整数寄存器 | `I` |
 | `FLT ra, rb, imm` | 浮点寄存器 | `F` |
-| `JMP`/`YIELD`/`WAIT`/`HALT`/`NOP` | 无寄存器源操作数 | 无 |
+| `JMP`/`YIELD`/`WAIT`/`INTR`/`HALT`/`NOP` | 无寄存器源操作数 | 无 |
 
 规律写成"**源**的族"而非"**目的**的族"，`ITOF`/`FTOI` 就自动合规，不需要例外。
 
@@ -945,7 +959,7 @@ tick——已恢复的实例保留状态，但不合并、不交付、时钟不�
 
 ```
 每条助记符必须匹配   ^(F|I)[A-Z0-9]+$
-例外且仅例外：        JMP, YIELD, WAIT, HALT, NOP, FLUSH   （无寄存器源操作数）
+例外且仅例外：        JMP, YIELD, WAIT, INTR, HALT, NOP, FLUSH   （无寄存器源操作数）
 ```
 
 **第二条规则（防的是 bug，不是风格）：**

@@ -29,8 +29,10 @@ use core::marker::PhantomData;
 
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::binfmt::plan::{SensorFSource, SensorISource};
-use cyberspine_core::exec::{Fault, Instance, Program, Sensors, Status};
+use cyberspine_core::binfmt::reason::{ReasonView, Template};
+use cyberspine_core::exec::{Fault, Instance, InterruptError, Program, Sensors, Status, Step};
 use cyberspine_core::isa::clock::Hz;
+use cyberspine_core::isa::register::RegId;
 use cyberspine_core::rig::{BoundFingerprint, Fingerprint};
 
 use crate::backend::{Backend, BackendError, Shape, Snapshot};
@@ -64,6 +66,60 @@ pub struct FaultRecord {
 pub struct TickRef<'t> {
     pub now: u64,
     pub commands: &'t [Option<f32>],
+}
+
+/// One interrupt a guest raised, ready for the host to answer.
+///
+/// The reason is already rendered: the template names registers and variables,
+/// and by the time the host sees this the instance is frozen, so the text is
+/// exactly what the guest meant at the `INTR` (`docs/isa.md` §4.8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Interrupt {
+    pub instance: InstanceId,
+    /// The `INTR` instruction; the resume point is `pc + 1`.
+    pub pc: usize,
+    pub tick: u64,
+    /// The stored template — a stable key for a programmatic arbiter.
+    pub format: Box<str>,
+    /// The interpolated text — what a human or an LLM reads.
+    pub reason: Box<str>,
+    reason_id: u32,
+    seq: u64,
+}
+
+impl Interrupt {
+    /// The image-local reason index, for a handler that switches on the kind
+    /// rather than parsing the text.
+    pub fn reason_id(&self) -> u32 {
+        self.reason_id
+    }
+
+    /// The session-wide sequence number. Together with the instance it makes a
+    /// ticket single-use: a stale one cannot release a later interrupt.
+    pub fn seq(&self) -> u64 {
+        self.seq
+    }
+}
+
+/// What the host does with an interrupt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// Release the instance; it resumes at the instruction after the `INTR`.
+    Continue,
+    /// Drop the instance and its state. The body keeps the last published
+    /// command, which is what "stop" means physically.
+    Stop,
+}
+
+/// Why a verdict could not be applied.
+#[derive(Debug, thiserror::Error)]
+pub enum DecideError {
+    #[error("instance {0} is not in this session")]
+    UnknownInstance(InstanceId),
+    #[error("the interrupt ticket is stale")]
+    Stale,
+    #[error(transparent)]
+    Interrupt(#[from] InterruptError),
 }
 
 /// The host's own refusals, all of them about compatibility rather than validity:
@@ -196,6 +252,8 @@ impl<B: Backend, P: RigPolicy> Host<B, P> {
             slots: Vec::new(),
             merge_order: Vec::new(),
             faults: Vec::new(),
+            interrupts: Vec::new(),
+            next_seq: 0,
             rig_f: vec![0.0; shape.sensors_f],
             rig_i: vec![0; shape.sensors_i],
             rig_muscles: vec![0.0; shape.muscles],
@@ -257,6 +315,9 @@ struct Slot {
     instance: Instance,
     sensors_f: Vec<f32>,
     sensors_i: Vec<i32>,
+    /// The sequence number of the interrupt this slot is parked on, if any. It
+    /// is host bookkeeping, not VM state: the instance only knows its reason.
+    pending_seq: Option<u64>,
 }
 
 impl Slot {
@@ -290,6 +351,8 @@ pub struct Session<B: Backend, P: RigPolicy = Strict> {
     slots: Vec<Slot>,
     merge_order: Vec<usize>,
     faults: Vec<FaultRecord>,
+    interrupts: Vec<Interrupt>,
+    next_seq: u64,
     rig_f: Vec<f32>,
     rig_i: Vec<i32>,
     rig_muscles: Vec<f32>,
@@ -350,6 +413,7 @@ impl<B: Backend, P: RigPolicy> Session<B, P> {
             sensors_i: vec![0; image.sensors_i().len()],
             image,
             instance,
+            pending_seq: None,
         });
         self.rebuild_merge_order();
         id
@@ -509,6 +573,77 @@ impl<B: Backend, P: RigPolicy> Session<B, P> {
         core::mem::take(&mut self.faults)
     }
 
+    /// Every interrupt the caller has not drained yet, oldest first.
+    pub fn interrupts(&self) -> &[Interrupt] {
+        &self.interrupts
+    }
+
+    /// Drain the interrupt queue.
+    ///
+    /// Draining does not decide anything: a parked instance stays parked until
+    /// [`Session::resolve`] or [`Session::unload`], which is the fail-safe the
+    /// design relies on — a host that forgets to answer cannot accidentally run
+    /// the guest again.
+    pub fn take_interrupts(&mut self) -> Vec<Interrupt> {
+        core::mem::take(&mut self.interrupts)
+    }
+
+    /// Instances parked on an interrupt, in load order.
+    pub fn parked(&self) -> Vec<InstanceId> {
+        self.slots
+            .iter()
+            .filter(|slot| slot.instance.status() == Status::Interrupted)
+            .map(|slot| slot.id)
+            .collect()
+    }
+
+    /// Answer one interrupt.
+    ///
+    /// `Continue` releases the instance, so it runs again on the next tick.
+    /// `Stop` removes it and its state; the body keeps the last published
+    /// command. Either way the ticket is consumed: resolving it twice fails,
+    /// which is what makes a stale ticket harmless.
+    pub fn resolve(&mut self, interrupt: Interrupt, verdict: Verdict) -> Result<(), DecideError> {
+        let index = self
+            .slots
+            .iter()
+            .position(|slot| slot.id == interrupt.instance)
+            .ok_or(DecideError::UnknownInstance(interrupt.instance))?;
+        if self.slots[index].pending_seq != Some(interrupt.seq) {
+            return Err(DecideError::Stale);
+        }
+
+        match verdict {
+            Verdict::Continue => {
+                let slot = &mut self.slots[index];
+                slot.instance.resume_interrupted(interrupt.reason_id)?;
+                slot.pending_seq = None;
+            }
+            Verdict::Stop => {
+                self.slots.remove(index);
+                self.interrupts
+                    .retain(|pending| pending.instance != interrupt.instance);
+                self.rebuild_merge_order();
+            }
+        }
+        Ok(())
+    }
+
+    /// Remove an instance in any state, returning whether it existed.
+    ///
+    /// This is what "stop and switch actions" is built from: unload the one that
+    /// is done, then [`Session::load`] the next.
+    pub fn unload(&mut self, id: InstanceId) -> bool {
+        let before = self.slots.len();
+        self.slots.retain(|slot| slot.id != id);
+        if self.slots.len() == before {
+            return false;
+        }
+        self.interrupts.retain(|pending| pending.instance != id);
+        self.rebuild_merge_order();
+        true
+    }
+
     pub fn set_max_ticks_per_frame(&mut self, ticks: u32) {
         self.max_ticks_per_frame = ticks.max(1);
     }
@@ -528,23 +663,54 @@ impl<B: Backend, P: RigPolicy> Session<B, P> {
         let rig_f = &self.rig_f;
         let rig_i = &self.rig_i;
         let rig_muscles = &self.rig_muscles;
+        let mut next_seq = self.next_seq;
+        let mut interrupts = Vec::new();
 
         for slot in &mut self.slots {
+            // A parked instance is not resumed: its verdict has not arrived.
+            if slot.instance.status() == Status::Interrupted {
+                continue;
+            }
             if slot.instance.wake_at() > now {
                 continue;
             }
             slot.fill(rig_f, rig_i, rig_muscles, now, dt);
 
             let Slot {
+                id,
                 image,
                 instance,
                 sensors_f,
                 sensors_i,
+                pending_seq,
                 ..
             } = slot;
             let program = Program::new(image);
-            instance.resume(&program, &Sensors::new(sensors_f, sensors_i), now);
+            let step = instance.resume(&program, &Sensors::new(sensors_f, sensors_i), now);
+            let Step::Interrupted { reason, pc } = step else {
+                continue;
+            };
+
+            // The instance is frozen from here until it is answered, so this is
+            // the one moment the template and the values agree.
+            let format: Box<str> = image.reason(reason as usize).into();
+            let reason_text = render_reason(image, instance, reason);
+            let seq = next_seq;
+            next_seq += 1;
+            *pending_seq = Some(seq);
+            interrupts.push(Interrupt {
+                instance: *id,
+                pc,
+                tick: now,
+                format,
+                reason: reason_text,
+                reason_id: reason,
+                seq,
+            });
         }
+
+        self.next_seq = next_seq;
+        self.interrupts.extend(interrupts);
     }
 
     /// Rebuild this tick's command vector in place: `None` for every muscle no
@@ -574,7 +740,11 @@ impl<B: Backend, P: RigPolicy> Session<B, P> {
         let before = self.slots.len();
         let mut faults = Vec::new();
         self.slots.retain(|slot| {
-            if slot.instance.status() == Status::Suspended {
+            // A parked instance is alive and waiting for a verdict, not gone.
+            if matches!(
+                slot.instance.status(),
+                Status::Suspended | Status::Interrupted
+            ) {
                 return true;
             }
             if let Some(fault) = slot.instance.fault() {
@@ -596,6 +766,45 @@ impl<B: Backend, P: RigPolicy> Session<B, P> {
         self.merge_order.extend(0..self.slots.len());
         self.merge_order
             .sort_by_key(|&index| self.slots[index].layer);
+    }
+}
+
+/// Render one reason template against the frozen instance.
+///
+/// The loader has already checked the template, so a parse failure here means a
+/// hand-forged image; the raw text is the honest fallback and the host never
+/// panics inside `tick`.
+fn render_reason(image: &VerifiedImage, instance: &Instance, reason: u32) -> Box<str> {
+    match Template::parse(image.reason(reason as usize)) {
+        Ok(template) => template.render(&InstanceView { instance }).into_boxed_str(),
+        Err(_) => image.reason(reason as usize).into(),
+    }
+}
+
+/// The value side of a reason template: one frozen instance.
+struct InstanceView<'a> {
+    instance: &'a Instance,
+}
+
+impl ReasonView for InstanceView<'_> {
+    fn f(&self, reg: u8) -> f32 {
+        self.instance
+            .registers()
+            .get_f(RegId::new(reg).unwrap_or(RegId::ZERO))
+    }
+
+    fn i(&self, reg: u8) -> i32 {
+        self.instance
+            .registers()
+            .get_i(RegId::new(reg).unwrap_or(RegId::ZERO))
+    }
+
+    fn vf(&self, var: u32) -> Option<f32> {
+        self.instance.vars_f().get(var as usize).copied()
+    }
+
+    fn vi(&self, var: u32) -> Option<i32> {
+        self.instance.vars_i().get(var as usize).copied()
     }
 }
 

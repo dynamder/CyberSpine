@@ -1,7 +1,7 @@
 # cyber-spine 执行核心实现规范
 
 状态：v1 实现约束
-适用范围：`Instance` 的状态与生命周期、`resume` 的执行循环、49 条指令的落地语义、fuel、`WAIT` 换算、命令缓冲区
+适用范围：`Instance` 的状态与生命周期、`resume` 的执行循环、50 条指令的落地语义、fuel、`WAIT` 换算、命令缓冲区
 依赖：`docs/isa.md` 定义**语义**，本文件定义**实现必须满足的判据与边界**。两者冲突时以 `isa.md` 为准。
 
 ---
@@ -55,10 +55,15 @@ pub struct Instance {
     wake_at: u64,
     status: Status,
     fault: Option<Fault>,     // 便于宿主在移除前记录
+    interrupt: Option<PendingInterrupt>,  // reason 表下标 + INTR 的 pc
 }
 
-pub enum Status { Suspended, Halted, Faulted }
+pub enum Status { Suspended, Interrupted, Halted, Faulted }
+
+pub struct PendingInterrupt { pub reason: u32, pub pc: usize }
 ```
+
+`Interrupted` 不是结束：实例仍持有全部状态，只是 `resume` 在它上面返回 `Parked`，直到宿主用 `resume_interrupted(reason)` 放行（`isa.md` §4.8）。`reason` 是镜像 reason 表的下标，不是文本——渲染是宿主的事。
 
 `Program` **不是字段**，而是 `resume` 的参数。实例只拥有状态；宿主因此可以把「镜像 + 实例」并排持有，不需要 arena、`unsafe` 或 `Arc`（thumbv6m 没有 CAS）。
 
@@ -86,6 +91,8 @@ pub enum Status { Suspended, Halted, Faulted }
 pub enum Step {
     Yielded,
     Waited { until: u64 },   // 恢复条件 wake_at <= now，判断权在宿主
+    Interrupted { reason: u32, pc: usize },  // pc 是 INTR 自身；恢复点是 pc + 1
+    Parked,                  // 未放行又 resume：什么都没跑
     Halted,
     Faulted(Fault),
     Dead,                    // 实例已终止，本次调用什么都没做
@@ -96,7 +103,7 @@ pub enum Fault {
 }
 ```
 
-`Dead` 不是错误：对已终止实例再 `resume` 是一个可以发生的事实，宿主拿到它就知道自己漏了移除。它把「漏移除」变成可观测行为，而不是 panic 或 UB。
+`Dead` 不是错误：对已终止实例再 `resume` 是一个可以发生的事实，宿主拿到它就知道自己漏了移除。它把「漏移除」变成可观测行为，而不是 panic 或 UB。`Parked` 同构地覆盖另一个漏处理：宿主忘了回答中断，实例不会因此被误放回执行。
 
 ---
 
@@ -107,7 +114,11 @@ impl Instance {
     pub fn resume(&mut self, prog: &Program, sensors: &Sensors<'_>, now: u64) -> Step {
         assert!(sensors.f.len() >= prog.sensor_f_count());   // 宿主违约，不是程序 bug
         assert!(sensors.i.len() >= prog.sensor_i_count());
-        if self.status != Status::Suspended { return Step::Dead; }
+        match self.status {
+            Status::Suspended => {}
+            Status::Interrupted => return Step::Parked,      // 等宿主回答
+            Status::Halted | Status::Faulted => return Step::Dead,
+        }
 
         let mut fuel = prog.fuel();             // 每次恢复重新装满（§7.1 按恢复计量）
         loop {
@@ -121,6 +132,14 @@ impl Instance {
                 Flow::Yield        => { self.pc += 1; self.status = Status::Suspended; return Step::Yielded; }
                 Flow::Wait(at)     => { self.pc += 1; self.wake_at = at; self.status = Status::Suspended;
                                         return Step::Waited { until: at }; }
+                Flow::Interrupt(reason) => {
+                    let pc = self.pc;
+                    self.pc += 1;
+                    self.wake_at = now;
+                    self.status = Status::Interrupted;
+                    self.interrupt = Some(PendingInterrupt { reason, pc });
+                    return Step::Interrupted { reason, pc };
+                }
                 Flow::Halt         => { self.status = Status::Halted; return Step::Halted; }
             }
         }
@@ -132,7 +151,7 @@ impl Instance {
 
 1. **`pc` 只由循环推进**。指令体只返回 `Flow`，绝不自己改 `pc`。「先 `pc += 1` 再挂起」这条约定（§4.8）因此只写一次。
 2. **`fuel` 在取指前扣**。`fuel = 0` 的镜像会在 `pc = 0` 处零条指令就 fault（§7.3）。
-3. **挂起的 `pc` 已经是下一条**。恢复点在 `YIELD` / `WAIT` 之后（§4.8）。
+3. **挂起的 `pc` 已经是下一条**。恢复点在 `YIELD` / `WAIT` / `INTR` 之后（§4.8）。
 
 ### 4.1 索引检查策略（v1）
 
@@ -337,7 +356,7 @@ pend_mask.clear_all();
 
 | 类别 | 内容 |
 |---|---|
-| 逐指令 | 49 条全部有语义用例，但按族组织而不是一条一段：`unary`/`binary`/`ternary`/`compare` 构造器 + 每组一个用例，`FNEG`/`FMIN`/`FMAX`/`FMADD`/`FLERP`/`FCLAMP`/`FTOI` 各自单独钉边界；断言寄存器 / 变量 / 掩码 |
+| 逐指令 | 50 条全部有语义用例，但按族组织而不是一条一段：`unary`/`binary`/`ternary`/`compare` 构造器 + 每组一个用例，`FNEG`/`FMIN`/`FMAX`/`FMADD`/`FLERP`/`FCLAMP`/`FTOI` 各自单独钉边界；断言寄存器 / 变量 / 掩码 |
 | 位级 | `FMIN`/`FMAX` 的 ±0/NaN 矩阵；`FNEG`/`FABS` 对 NaN；`FMADD` 的「融合了就会不同」的输入；`FTOI` 饱和表 |
 | `FFRAC` | `-1e-30 → next_down(1.0)`、`±0`、`±Inf → NaN`、`1.0 → 0.0` |
 | `FSIN`/`FCOS` | 定点输入表 → 固定位模式；网格测试对照 host libm 报最大 ULP |

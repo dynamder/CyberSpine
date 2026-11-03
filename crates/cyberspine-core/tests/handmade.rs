@@ -7,16 +7,16 @@
 //! so a shared bug in the writer and loader cannot survive, because one side of
 //! the comparison is a file that was written by hand.
 //!
-//! The valid golden is **full-coverage**: it contains every one of the 49 opcodes
+//! The valid golden is **full-coverage**: it contains every one of the 50 opcodes
 //! exactly once, both read-back and backend/builtin sensors, all four immediate
 //! interpretations, a backward jump, a non-zero `WAIT`, two muscles, and a
-//! non-default clock and layer. It is 636 bytes:
+//! non-default clock and layer. It is 662 bytes:
 //!
 //! ```text
 //! [0   .. 96)    fixed header
-//! [96  .. 488)   49 instructions, one per opcode
-//! [488 .. 604)   metadata: muscles, sensors_f, sensors_i, vars_f, vars_i
-//! [604 .. 636)   content_hash = blake3(bytes[..604])
+//! [96  .. 496)   50 instructions, one per opcode
+//! [496 .. 630)   metadata: muscles, sensors_f, sensors_i, vars_f, vars_i, reasons
+//! [630 .. 662)   content_hash = blake3(bytes[..630])
 //! ```
 //!
 //! Regenerate the goldens deliberately with:
@@ -55,7 +55,7 @@ fn fixture_bytes(name: &str) -> Vec<u8> {
 // ---------------------------------------------------------------------------
 
 /// The number of instructions in the valid golden: one per opcode.
-const CODE_LEN: usize = 49;
+const CODE_LEN: usize = 50;
 
 /// Assemble one instruction word at the exact bit layout of `isa.md` §1.1:
 /// `[63..56] op  [55..50] rd  [49..44] ra  [43..38] rb  [37..32] rc  [31..0] imm`.
@@ -132,7 +132,8 @@ const CODE: [u64; CODE_LEN] = [
     // 0xA0 misc
     w(0xA1, 0, 0, 0, 0, 0), // 46  NOP
     w(0xA2, 0, 0, 0, 0, 0), // 47  FLUSH
-    w(0xA0, 0, 0, 0, 0, 0), // 48  HALT
+    w(0x72, 0, 0, 0, 0, 0), // 48  INTR   reason[0]
+    w(0xA0, 0, 0, 0, 0, 0), // 49  HALT
 ];
 
 /// Build the 96-byte fixed header at the exact offsets of `binfmt.md` §4.
@@ -161,7 +162,7 @@ fn hand_header(file_len: usize, code_len: usize) -> [u8; HEADER_LEN] {
     h[48..52].copy_from_slice(&0u32.to_le_bytes()); // 48  reserved_b = 0
     h[52..56].copy_from_slice(&8192u32.to_le_bytes()); // 52  fuel = 8192
     h[56..60].copy_from_slice(&12.5f32.to_bits().to_le_bytes()); // 56  max_wait = 12.5
-    h[60..64].copy_from_slice(&0u32.to_le_bytes()); // 60  reserved1 = 0
+    h[60..64].copy_from_slice(&1u32.to_le_bytes()); // 60  reason_count = 1
     // 64..96 reserved2 stays all zero.
 
     h
@@ -170,7 +171,7 @@ fn hand_header(file_len: usize, code_len: usize) -> [u8; HEADER_LEN] {
 /// The valid file the golden set is built around, assembled byte for byte.
 ///
 /// The program uses every opcode once, then falls through a backward `JMP` and a
-/// run of conditional branches to the trailing `HALT` at pc 48.
+/// run of conditional branches to the trailing `HALT` at pc 49.
 fn handmade_valid() -> Vec<u8> {
     // --- metadata tables, in the §3 order, gap free ---
     let mut tables: Vec<u8> = Vec::new();
@@ -213,6 +214,9 @@ fn handmade_valid() -> Vec<u8> {
     tables.extend_from_slice(&0i32.to_le_bytes());
     tables.extend_from_slice(b"limit\0");
     tables.extend_from_slice(&100i32.to_le_bytes());
+
+    // reasons (§6.6): one stored template, variables by index.
+    tables.extend_from_slice(b"halted at {f1:.2}\0");
 
     let file_len = HEADER_LEN + 8 * CODE.len() + tables.len() + HASH_LEN;
 
@@ -306,8 +310,8 @@ fn the_hand_assembled_bytes_match_the_offset_table() {
     let bytes = handmade_valid();
     assert_eq!(
         bytes.len(),
-        636,
-        "96 header + 392 code + 116 tables + 32 hash"
+        662,
+        "96 header + 400 code + 134 tables + 32 hash"
     );
 
     // §4, field by field, read straight out of the byte string.
@@ -320,8 +324,8 @@ fn the_hand_assembled_bytes_match_the_offset_table() {
         "reserved_a must be zero"
     );
     assert_eq!(u16::from_le_bytes(bytes[20..22].try_into().unwrap()), 3);
-    assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 636);
-    assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 49);
+    assert_eq!(u32::from_le_bytes(bytes[12..16].try_into().unwrap()), 662);
+    assert_eq!(u32::from_le_bytes(bytes[16..20].try_into().unwrap()), 50);
     assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 2);
     assert_eq!(u32::from_le_bytes(bytes[28..32].try_into().unwrap()), 4);
     assert_eq!(u32::from_le_bytes(bytes[32..36].try_into().unwrap()), 3);
@@ -338,7 +342,16 @@ fn the_hand_assembled_bytes_match_the_offset_table() {
         u32::from_le_bytes(bytes[56..60].try_into().unwrap()),
         0x4148_0000
     ); // 12.5f32
-    assert_eq!(&bytes[64..96], &[0u8; 32], "reserved2 must be zero");
+    assert_eq!(
+        u32::from_le_bytes(bytes[60..64].try_into().unwrap()),
+        1,
+        "reason_count"
+    );
+    assert_eq!(
+        &bytes[64..96],
+        &[0u8; 32],
+        "the golden declares no rig (all-zero fingerprint)"
+    );
 
     // §5: little-endian words, top byte = opcode. pc 0 is FMOVI, the last is HALT.
     assert_eq!(bytes[code_word(0) + 7], 0x00, "pc 0 must be FMOVI");
@@ -415,6 +428,8 @@ fn golden_valid_all_loads_and_decodes() {
         0xA2u64 << 56,
         "FLUSH must be a zero-operand word"
     );
+    assert_eq!(image.code()[48].op, OpCode::Intr);
+    assert_eq!(image.code()[48].imm_index(), 0, "INTR names reason[0]");
     assert_eq!(image.code()[LAST].op, OpCode::Halt);
 
     // Metadata: every table populated, read-back invariant (M4) intact.
@@ -449,6 +464,9 @@ fn golden_valid_all_loads_and_decodes() {
     assert_eq!(image.vars_i().len(), 3);
     assert_eq!(image.vars_i()[0].init, -7);
     assert_eq!(image.vars_i()[2].init, 100);
+
+    assert_eq!(image.reasons().len(), 1);
+    assert_eq!(image.reason(0), "halted at {f1:.2}");
 }
 
 #[test]
@@ -544,14 +562,14 @@ fn a_file_not_ending_in_halt_is_refused() {
 
 #[test]
 fn a_jump_past_the_end_is_refused() {
-    // JMP +100 from pc 0 targets instruction 101 of a 49-instruction program.
+    // JMP +100 from pc 0 targets instruction 101 of a 50-instruction program.
     let jmp = (0x50u64 << 56) | 100;
     let bytes = rehash(&handmade_valid(), &[(code_word(0), &jmp.to_le_bytes())]);
     match reject(&bytes) {
         LoadError::JumpTargetOutOfRange {
             index: 0,
             offset: 100,
-            code_len: 49,
+            code_len: 50,
         } => {}
         other => panic!("a jump past the end was not refused by I6: {other}"),
     }

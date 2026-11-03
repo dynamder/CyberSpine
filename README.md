@@ -48,12 +48,15 @@ cargo build --release
 ```bash
 cyinea -a action.csa
 cyinevm -i action.csp --ticks 120 --unpaced --trace > trace.tsv
-cyinevm -i action.csp -b rpc:127.0.0.1:7777
+cyinevm -i idle.csp -i walk.csp --ticks 300   # several images, one session
 ```
 
 `cyinevm` without `--backend` uses the built-in dummy body and prints a warning.
-See [`docs/runtime.md`](docs/runtime.md) for the lifetime, pacing, trace and
-static-linking rules.
+`-i` may be repeated; the images load in argument order and share one clock and
+one body. An `INTR` in a program suspends that instance until the host answers;
+the CLI's built-in policy is `--on-interrupt stop` (unload it) or `continue`.
+See [`docs/runtime.md`](docs/runtime.md) for the lifetime, pacing, trace, interrupt
+and static-linking rules.
 
 ```bash
 cargo install --path crates/cyberspine-asm

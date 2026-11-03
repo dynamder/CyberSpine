@@ -23,7 +23,7 @@
 | 十进制整数 | `42` `-42`（带符号，范围 i32） |
 | 非十进整数 | `0x1F` `0b1010` `0o17`：**按 u32 位模式**，重解释为 i32（`0xFFFFFFFF` = `-1`） |
 | 浮点字面量 | `1.5` `-0.25` `1e-3` `inf` `-inf` `nan` |
-| 字符串 | `"..."`；只有 `\\` 与 `\"` 是转义。目前只用于 `.rig` |
+| 字符串 | `"..."`；只有 `\\` 与 `\"` 是转义。`.rig` 与 `INTR` 共用这一个解析器 |
 | 多行字符串 | 每行以 `\\` 开头（Zig 风格），`\\` 必须逐行对齐；目前只用于 `.description` |
 | 标签 | `ident` 后跟 `:` |
 | 伪指令 | `.` 开头 |
@@ -88,6 +88,7 @@ muscles   = [manifest.muscles 序]
 sensors_f = [每个肌肉的读回项，按 manifest.muscles 序] ++ [manifest.sensors_f 序] ++ [dt]
 sensors_i = [manifest.sensors_i 序] ++ [tick]
 vars_f / vars_i = 源码声明序
+reasons   = 指令流中 INTR 文本的首次出现序（相同规范形式去重）
 ```
 
 顺序即物理下标，因此 manifest 的数组顺序是语义的一部分。
@@ -124,6 +125,7 @@ vars_f / vars_i = 源码声明序
 | `I32`（`IMOVI`） | 十进制带符号；`0x`/`0b`/`0o` → u32 位模式，补码重解释 |
 | `Index`（`FSENSE`/`FEXCITE`/`FVGET`/…） | **名字**，从对应表解析 |
 | `JumpOffset` | **标签**，不接受数字 |
+| `Text`（`INTR`） | **双引号字符串**，装配期 intern 进 reason 表 |
 
 - 十进制浮点用 `f32::from_str` 直读（单次正确舍入），**不得**先转 f64 再转 f32（双重舍入）。
 - 寄存器操作数按 `Operand::Reg(_, RegType)` 校验文件；arity 由 `signature()` 校验——`FADD f1,i2,f3` 汇编期报错。
@@ -144,7 +146,27 @@ FLUSH                            # 无操作数；published ← pending，清 pe
 ```
 
 - 见 `isa.md` §8.2 / §4.11。
-- 汇编期约束（§6）：从最后一次 `FLUSH` 起，若有 `FEXCITE` 未 `FLUSH` 就遇到挂起点（`YIELD`/`WAIT`）或 `HALT`，是**硬错误**。
+- 汇编期约束（§6）：从最后一次 `FLUSH` 起，若有 `FEXCITE` 未 `FLUSH` 就遇到挂起点（`YIELD`/`WAIT`/`INTR`）或 `HALT`，是**硬错误**。
+
+### 4.4 `INTR` 的 reason
+
+```asm
+INTR "obstacle: x={f3:.2} speed={f5:.2} state={vi:state}"
+```
+
+- 操作数是**单行双引号字符串**，与 `.rig` 共用词法；`\\` / `\"` 两个转义，`#` 在引号内是内容，未闭合是硬错误。
+- 占位符只**取值**，不求值：
+
+| 占位符 | 含义 |
+|---|---|
+| `{fN}` / `{iN}` | 寄存器（`N` 在 0..=63） |
+| `{vf:name}` / `{vi:name}` | 实例变量；装配期校验已声明并改写为下标 |
+| `{fN:.K}` / `{vf:name:.K}` | 浮点精度，`K` 在 0..=9 |
+| `{{` / `}}` | 字面大括号 |
+
+- 装配期把变量名改写为下标，因此镜像里存的是 `{vf:3}` 这种**存储形式**；相同规范形式只存一份，`INTR` 的 `imm` 是它在 `reasons` 表里的下标。
+- 文本、占位符语法、寄存器号、变量名、精度全部在装配期检查；加载期再验一遍下标范围与存储形式（`binfmt.md` §9.2 M7）。
+- 字符串本身不超过 4 KiB（`MAX_REASON_LEN`）；渲染是宿主的事，汇编器只负责把模板原样放对。
 
 ## 5. 标签与两遍
 
@@ -186,7 +208,7 @@ FLUSH                            # 无操作数；published ← pending，清 pe
 8. 名字、标签合法；`fN`/`iN`/`dt`/`tick` 保留名不得用作标签、变量名或组名。manifest 里的名字受同一组规则约束：`generate_image` 也校验它拿到的 `Rig`，因为代码里构造的 `Rig` 不经过 manifest 解析，而镜像仍必须是加载期合法的。
 9. `.description` 至少一行、至多一次，且所有 `\\` 对齐到同一列。
 
-pending 检查是一个布尔数据流：`FEXCITE` 置真，`FLUSH` 清假，在挂起点/HALT 处若为真报错；分支处取并集。
+pending 检查是一个布尔数据流：`FEXCITE` 置真，`FLUSH` 清假，在挂起点（`YIELD`/`WAIT`/`INTR`）/`HALT` 处若为真报错；分支处取并集。
 
 ### 6.1 诊断
 

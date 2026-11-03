@@ -51,7 +51,6 @@ const OFF_HZ: usize = 44;
 const OFF_RESERVED_B: usize = 48;
 const OFF_FUEL: usize = 52;
 const OFF_MAX_WAIT: usize = 56;
-const OFF_RESERVED1: usize = 60;
 const OFF_RIG: usize = 64;
 
 // ---------------------------------------------------------------------------
@@ -296,11 +295,12 @@ fn c2_isa_version_is_accepted_only_in_the_supported_set() {
 
 #[test]
 fn c3_every_reserved_field_must_be_zero() {
-    // "Undefined bits are refused, not ignored" — each of the five still-reserved
+    // "Undefined bits are refused, not ignored" — each of the four still-reserved
     // regions is checked, because each is a place a future version could put
     // something this loader would otherwise misread. `reserved_a` and
-    // `reserved_b` are where the retired cycle table used to live. The last 32
-    // header bytes are no longer reserved: they carry the rig fingerprint.
+    // `reserved_b` are where the retired cycle table used to live. Offset 60 is
+    // no longer reserved: it is `reason_count`. The last 32 header bytes are the
+    // rig fingerprint.
     let image = Image::halt_only();
 
     for (offset, field, width) in [
@@ -308,7 +308,6 @@ fn c3_every_reserved_field_must_be_zero() {
         (OFF_FLAGS, "flags", 2),
         (OFF_RESERVED0, "reserved0", 2),
         (OFF_RESERVED_B, "reserved_b", 4),
-        (OFF_RESERVED1, "reserved1", 4),
     ] {
         let mut patch = vec![0u8; width];
         patch[0] = 1;
@@ -534,7 +533,7 @@ fn m2_a_repeated_name_within_one_table_is_refused() {
 
 #[test]
 fn m2_names_are_only_unique_within_a_table() {
-    // The five tables are five separate namespaces (§6.5), so the same name may
+    // The five name tables are five separate namespaces (§6.5), so the same name may
     // appear in two of them — and does, in the read-back invariant.
     let mut image = Image::halt_only();
     image.push_muscle(&n("shared"));

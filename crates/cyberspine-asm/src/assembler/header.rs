@@ -14,6 +14,7 @@ use crate::assembler::{
         into_syntax, snippet, token_snippet,
     },
     ident,
+    text::quoted_string,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -156,32 +157,6 @@ pub enum HeaderStmt {
     Varf { name: SmolStr, value: f32 },
     VarI { name: SmolStr, value: i32 },
     Text,
-}
-
-/// A double-quoted string. Only `\\` and `\"` are escapes; a backslash before
-/// anything else is reported, so a Windows path has to be written `\\`.
-fn quoted_path<'i>(input: &mut Line<'i>) -> PResult<SmolStr> {
-    let text = *input;
-    let Some(rest) = text.strip_prefix('"') else {
-        return cut_at(text, ParseErrorKind::Unexpected);
-    };
-
-    let mut out = String::new();
-    let mut chars = rest.char_indices();
-    while let Some((offset, character)) = chars.next() {
-        match character {
-            '"' => {
-                *input = &rest[offset + 1..];
-                return Ok(SmolStr::new(out));
-            }
-            '\\' => match chars.next() {
-                Some((_, escaped @ ('\\' | '"'))) => out.push(escaped),
-                _ => return cut_at(&rest[offset..], ParseErrorKind::Unexpected),
-            },
-            other => out.push(other),
-        }
-    }
-    cut_at(text, ParseErrorKind::UnterminatedString)
 }
 
 fn name_arg<'i>(input: &mut Line<'i>) -> PResult<SmolStr> {
@@ -349,7 +324,7 @@ fn header_stmt<'i>(input: &mut Line<'i>) -> PResult<HeaderStmt> {
                 input,
                 "rig",
                 "a quoted manifest path",
-                quoted_path,
+                quoted_string,
             )?)
         }
         "group" => HeaderStmt::Group(group(input)?),

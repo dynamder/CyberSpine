@@ -11,6 +11,7 @@ use crate::assembler::{
     text::{
         AsmInsn, AsmOperand,
         imm::{imm_float, imm_ident, imm_int},
+        quoted_string,
         reg::reg,
     },
 };
@@ -52,6 +53,7 @@ pub(crate) fn operand(input: &mut Line<'_>, sig: OperandParam) -> PResult<AsmOpe
             ImmType::I32 => imm_int.map(AsmOperand::new_imm_i32).parse_next(input),
             ImmType::Index => imm_ident.map(AsmOperand::new_index).parse_next(input),
             ImmType::JumpOffset => imm_ident.map(AsmOperand::new_target).parse_next(input),
+            ImmType::Text => quoted_string.map(AsmOperand::new_text).parse_next(input),
             ImmType::None => Ok(AsmOperand::ImmNone),
         },
     }
@@ -168,6 +170,7 @@ fn expected_operand(sig: OperandParam) -> &'static str {
         OperandParam::Imm(ImmType::I32) => "an i32 literal",
         OperandParam::Imm(ImmType::Index) => "a declared name",
         OperandParam::Imm(ImmType::JumpOffset) => "a label",
+        OperandParam::Imm(ImmType::Text) => "a quoted reason string",
         OperandParam::Imm(ImmType::None) => "no operand",
     }
 }

@@ -13,5 +13,5 @@ pub mod instance;
 pub mod program;
 pub mod registers;
 
-pub use instance::{Fault, Instance, Sensors, Status, Step};
+pub use instance::{Fault, Instance, InterruptError, PendingInterrupt, Sensors, Status, Step};
 pub use program::Program;
