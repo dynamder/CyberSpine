@@ -25,5 +25,5 @@ pub use backend::{Backend, BackendError, Shape, Snapshot};
 pub use dummy::{Call, DummyBackend};
 pub use host::{
     DEFAULT_TRACE_CAPACITY, DecideError, FaultRecord, Host, InstanceId, Interrupt, LoadError,
-    Permissive, RigPolicy, Session, Strict, TickRef, TraceIter, Verdict,
+    Permissive, Resolution, RigPolicy, Ruling, Session, Strict, TickRef, TraceIter, Verdict,
 };

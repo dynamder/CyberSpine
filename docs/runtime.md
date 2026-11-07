@@ -104,7 +104,7 @@ interrupt: instance 0 (actions/idle.csp) at pc 3 tick 12: obstacle: x=0.32 y=0.9
 ```
 
 退出码仍是 `0`：中断是程序与宿主之间的正常通信，不是错误。需要真正的仲裁器（让外部程序
-决定 Continue / Stop / Switch）属于宿主集成，不在本 CLI 的 v1 范围内；边界设计见
+给出裁决流，可以是多轮）属于宿主集成，不在本 CLI 的 v1 范围内；边界设计见
 [`interrupt.md`](interrupt.md)。
 
 Ctrl-C 由 `ctrlc` 捕获，设置停止标志；当前循环结束后进程以 `0` 退出。
@@ -231,8 +231,9 @@ pub type Official = MyBody;
 
 ## 8. 非目标（v1）
 
-- 仲裁器插件：v1 只有 `--on-interrupt stop|continue` 这一条内置策略；把中断转发给
-  dylib / rpc 形式的裁决器、以及“停止并换一个动作”的 `Switch`，属于后续的宿主集成层。
+- 仲裁器插件：v1 只有 `--on-interrupt stop|continue` 这一条内置策略，即退化成单轮的
+  `Arbiter`；把中断转发给 dylib / rpc 形式的裁决器、以及“停止并换一个动作”的 `Switch`，
+  属于后续的宿主集成层。裁决可以是多轮的，完成性由 `Ruling` 标记。
 - `--permissive`：外部 body 始终 strict；dummy 的 permissive 是类型 `Policy` 决定的，
   不是命令行开关。
 - `inspect` / 反汇编：加载失败的报错已经包含 rig 与 shape；调试信息是 `asm.md` §8 的独立任务。

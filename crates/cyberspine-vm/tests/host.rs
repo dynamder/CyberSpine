@@ -9,7 +9,7 @@
 
 use cyberspine_core::binfmt::image::Image;
 use cyberspine_core::binfmt::load::VerifiedImage;
-use cyberspine_core::exec::Fault;
+use cyberspine_core::exec::{Fault, Status};
 use cyberspine_core::isa::OpCode;
 use cyberspine_core::isa::clock::Hz;
 use cyberspine_core::rig::{Fingerprint, Rig};
@@ -18,7 +18,8 @@ use cyberspine_testkit::{
     rig, sense, var_set, verified, wait, yield_,
 };
 use cyberspine_vm::{
-    Backend, Call, DecideError, DummyBackend, FaultRecord, Host, LoadError, Snapshot, Verdict,
+    Backend, Call, DecideError, DummyBackend, FaultRecord, Host, LoadError, Resolution, Ruling,
+    Snapshot, Verdict,
 };
 
 /// `FEXCITE` once, `FLUSH` once, then yield forever without touching b2 again.
@@ -831,8 +832,11 @@ fn continuing_an_interrupt_resumes_after_the_intr() {
     host.tick().expect("the dummy backend cannot fail");
 
     let interrupt = host.take_interrupts().remove(0);
-    host.resolve(interrupt, Verdict::Continue)
-        .expect("the instance is parked");
+    assert_eq!(
+        host.resolve(interrupt, Ruling::Finished(Verdict::Continue))
+            .expect("the instance is parked"),
+        Resolution::Settled
+    );
 
     assert!(host.parked().is_empty());
     assert_eq!(host.instance(id).map(|i| i.pc()), Some(2));
@@ -853,8 +857,11 @@ fn stopping_an_interrupt_discards_the_instance() {
     host.tick().expect("the dummy backend cannot fail");
 
     let interrupt = host.take_interrupts().remove(0);
-    host.resolve(interrupt, Verdict::Stop)
-        .expect("the instance is parked");
+    assert_eq!(
+        host.resolve(interrupt, Ruling::Finished(Verdict::Stop))
+            .expect("the instance is parked"),
+        Resolution::Settled
+    );
 
     assert!(host.instance(id).is_none());
     assert!(host.parked().is_empty());
@@ -871,12 +878,90 @@ fn a_ticket_is_single_use() {
 
     let interrupt = host.take_interrupts().remove(0);
     let stale = interrupt.clone();
-    host.resolve(interrupt, Verdict::Continue)
+    let _ = host
+        .resolve(interrupt, Ruling::Finished(Verdict::Continue))
         .expect("the instance is parked");
 
     assert!(matches!(
-        host.resolve(stale, Verdict::Continue),
+        host.resolve(stale.clone(), Ruling::Finished(Verdict::Continue)),
         Err(DecideError::Stale)
+    ));
+    assert!(
+        matches!(
+            host.resolve(stale, Ruling::Unfinished),
+            Err(DecideError::Stale)
+        ),
+        "a consumed ticket cannot be revived as an unfinished round"
+    );
+}
+
+#[test]
+fn an_unfinished_ruling_keeps_the_instance_parked() {
+    let rig = rig(1);
+    let (mut host, id) = Host::new(backend(&rig))
+        .load(interrupt_action(vec![intr(0), halt()], &rig))
+        .expect("assembled for this rig");
+    host.tick().expect("the dummy backend cannot fail");
+
+    let interrupt = host.take_interrupts().remove(0);
+    let seq = interrupt.seq();
+    let Resolution::Parked(ticket) = host
+        .resolve(interrupt, Ruling::Unfinished)
+        .expect("the instance is parked")
+    else {
+        panic!("an unfinished ruling never settles");
+    };
+
+    assert_eq!(ticket.seq(), seq, "the ticket comes back unchanged");
+    assert_eq!(host.parked(), vec![id]);
+    assert_eq!(
+        host.instance(id).map(|instance| instance.status()),
+        Some(Status::Interrupted),
+        "an unfinished round does not touch the instance"
+    );
+}
+
+#[test]
+fn a_ticket_survives_several_unfinished_rounds() {
+    let rig = rig(1);
+    let (mut host, id) = Host::new(backend(&rig))
+        .load(interrupt_action(vec![intr(0), halt()], &rig))
+        .expect("assembled for this rig");
+    host.tick().expect("the dummy backend cannot fail");
+
+    let mut ticket = host.take_interrupts().remove(0);
+    for _ in 0..3 {
+        let Resolution::Parked(next) = host
+            .resolve(ticket, Ruling::Unfinished)
+            .expect("the instance is parked")
+        else {
+            panic!("an unfinished ruling never settles");
+        };
+        ticket = next;
+    }
+
+    assert_eq!(
+        host.resolve(ticket, Ruling::Finished(Verdict::Continue))
+            .expect("the instance is parked"),
+        Resolution::Settled
+    );
+    assert_eq!(host.instance(id).map(|instance| instance.pc()), Some(1));
+}
+
+#[test]
+fn an_unfinished_ruling_for_an_unloaded_instance_is_unknown() {
+    let rig = rig(1);
+    let (mut host, id) = Host::new(backend(&rig))
+        .load(interrupt_action(vec![intr(0), halt()], &rig))
+        .expect("assembled for this rig");
+    host.tick().expect("the dummy backend cannot fail");
+
+    let interrupt = host.take_interrupts().remove(0);
+    assert!(host.unload(id));
+
+    assert!(matches!(
+        host.resolve(interrupt, Ruling::Unfinished),
+        Err(DecideError::UnknownInstance(instance)) if instance == id
     ));
 }
 

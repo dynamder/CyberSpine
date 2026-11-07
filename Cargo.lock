@@ -214,6 +214,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "cyberspine-arbiter"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "cyberspine-asm"
 version = "0.1.0"
 dependencies = [
@@ -365,6 +372,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "ctrlc",
+ "cyberspine-arbiter",
  "cyberspine-asm",
  "cyberspine-backend",
  "cyberspine-core",

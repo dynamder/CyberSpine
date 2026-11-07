@@ -111,6 +111,32 @@ pub enum Verdict {
     Stop,
 }
 
+/// One verdict, and whether it is the last one.
+///
+/// The marker sits outside [`Verdict`] on purpose: `Continue` / `Stop` stay
+/// atomic, and "this round did not decide" is not a third verdict. An interrupt
+/// may be ruled on several times — a fallback rule first, an LLM later — and only
+/// a `Finished` ruling consumes the ticket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ruling {
+    /// This round did not decide. The instance stays parked and the ticket stays
+    /// live for the next adjudicator.
+    Unfinished,
+    /// The verdict is final; the ticket is consumed.
+    Finished(Verdict),
+}
+
+/// What [`Session::resolve`] did with the ticket.
+#[must_use]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Resolution {
+    /// The ticket was not consumed. It comes back still valid, so a multi-round
+    /// caller cannot lose it.
+    Parked(Interrupt),
+    /// The ticket is consumed: the instance was released or removed.
+    Settled,
+}
+
 /// Why a verdict could not be applied.
 #[derive(Debug, thiserror::Error)]
 pub enum DecideError {
@@ -597,13 +623,21 @@ impl<B: Backend, P: RigPolicy> Session<B, P> {
             .collect()
     }
 
-    /// Answer one interrupt.
+    /// Answer one interrupt, for this round or for good.
     ///
-    /// `Continue` releases the instance, so it runs again on the next tick.
-    /// `Stop` removes it and its state; the body keeps the last published
-    /// command. Either way the ticket is consumed: resolving it twice fails,
-    /// which is what makes a stale ticket harmless.
-    pub fn resolve(&mut self, interrupt: Interrupt, verdict: Verdict) -> Result<(), DecideError> {
+    /// [`Ruling::Unfinished`] validates the ticket without touching the instance
+    /// and hands it back as [`Resolution::Parked`]. The check is what lets a
+    /// multi-round caller notice that someone else unloaded the instance during
+    /// an earlier round, instead of learning it at the end.
+    ///
+    /// [`Ruling::Finished`] is the S1 contract: `Continue` releases the instance,
+    /// `Stop` removes it and its state, and the ticket is consumed either way.
+    /// A stale ticket stays harmless because `seq` is checked against the slot.
+    pub fn resolve(
+        &mut self,
+        interrupt: Interrupt,
+        ruling: Ruling,
+    ) -> Result<Resolution, DecideError> {
         let index = self
             .slots
             .iter()
@@ -613,20 +647,27 @@ impl<B: Backend, P: RigPolicy> Session<B, P> {
             return Err(DecideError::Stale);
         }
 
-        match verdict {
-            Verdict::Continue => {
+        match ruling {
+            Ruling::Unfinished => {
+                // `pending_seq` is set when the instance turns `Interrupted` and
+                // cleared when it leaves, so the check above already proves it.
+                debug_assert_eq!(self.slots[index].instance.status(), Status::Interrupted);
+                Ok(Resolution::Parked(interrupt))
+            }
+            Ruling::Finished(Verdict::Continue) => {
                 let slot = &mut self.slots[index];
                 slot.instance.resume_interrupted(interrupt.reason_id)?;
                 slot.pending_seq = None;
+                Ok(Resolution::Settled)
             }
-            Verdict::Stop => {
+            Ruling::Finished(Verdict::Stop) => {
                 self.slots.remove(index);
                 self.interrupts
                     .retain(|pending| pending.instance != interrupt.instance);
                 self.rebuild_merge_order();
+                Ok(Resolution::Settled)
             }
         }
-        Ok(())
     }
 
     /// Remove an instance in any state, returning whether it existed.
