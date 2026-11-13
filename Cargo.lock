@@ -217,7 +217,19 @@ dependencies = [
 name = "cyberspine-arbiter"
 version = "0.1.0"
 dependencies = [
+ "cyberspine-frame",
+ "libloading",
+ "rmp-serde",
+ "serde",
+ "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "cyberspine-arbiter-fixture"
+version = "0.1.0"
+dependencies = [
+ "cyberspine-arbiter",
 ]
 
 [[package]]

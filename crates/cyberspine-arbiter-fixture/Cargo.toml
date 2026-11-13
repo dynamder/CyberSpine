@@ -1,0 +1,15 @@
+[package]
+name = "cyberspine-arbiter-fixture"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# The rlib half is for a test that drives the same arbiter linked; the cdylib
+# half is the artifact the dylib test loads.
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+cyberspine-arbiter = { path = "../cyberspine-arbiter", default-features = false, features = ["export"] }

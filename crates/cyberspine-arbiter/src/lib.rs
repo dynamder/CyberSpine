@@ -21,11 +21,27 @@
 //! `cyberspine_vm::Backend`: linked (implement it), dynamic library, and remote.
 //! A body and an arbiter differ in what they answer, not in how they are loaded.
 
+use serde::{Deserialize, Serialize};
+
+pub mod abi;
+pub mod remote;
+pub mod server;
+pub mod wire;
+
+#[cfg(feature = "dylib")]
+pub mod dylib;
+
+#[cfg(feature = "export")]
+pub mod export;
+
+pub use remote::{RemoteArbiter, Transport};
+pub use server::Server;
+
 /// The host's name for one interrupt, stable for the life of the ticket.
 ///
 /// It is an arbiter's only way to refer to an event: a [`Decision`] echoes the id
 /// it was delivered, and the host rejects an id it never sent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct EventId(u64);
 
 impl EventId {
@@ -48,7 +64,7 @@ impl core::fmt::Display for EventId {
 ///
 /// The host never reuses a handle, so an action may name an instance across
 /// rounds without it silently becoming someone else.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct InstanceRef(u64);
 
 impl InstanceRef {
@@ -68,7 +84,7 @@ impl core::fmt::Display for InstanceRef {
 }
 
 /// One instance visible at the moment of the interrupt.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstanceView {
     pub reference: InstanceRef,
     pub action: Box<str>,
@@ -79,7 +95,7 @@ pub struct InstanceView {
 ///
 /// It carries an id instead of the host's ticket: the ticket cannot be built
 /// outside the session, and an arbiter that could hold one could replay it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InterruptEvent {
     pub event: EventId,
     /// The `INTR` instruction; the resume point is `pc + 1`.
@@ -101,7 +117,7 @@ pub struct InterruptEvent {
 /// An action never decides the ticket's fate; that is [`Completion`]'s job.
 /// `Unload` of the interrupted instance is therefore not an action — it is
 /// [`Verdict::Stop`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Action {
     /// Resolve an action reference and load it as a new instance.
     Load { action: Box<str> },
@@ -115,7 +131,7 @@ pub enum Action {
 }
 
 /// The fate of the interrupted instance. Exactly two atomic outcomes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Verdict {
     /// Release the instance; it resumes after the `INTR`.
     Continue,
@@ -128,7 +144,7 @@ pub enum Verdict {
 ///
 /// The marker sits on the ruling rather than in the verdict: the two verdicts
 /// stay atomic, and "this round did not decide" is not a third one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Completion {
     /// This round did not decide. The ticket stays live; the next round may
     /// still answer it.
@@ -138,7 +154,7 @@ pub enum Completion {
 }
 
 /// One round's answer.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ruling {
     /// Who answered, as the arbiter names it. Observability only — never part
     /// of the replay input.
@@ -178,7 +194,7 @@ impl Ruling {
 }
 
 /// One stream element: an event id and the round it answers.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Decision {
     pub event: EventId,
     pub ruling: Ruling,
