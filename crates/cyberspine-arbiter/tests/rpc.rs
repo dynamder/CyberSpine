@@ -22,6 +22,7 @@ fn event() -> InterruptEvent {
         reason: "x=0.5".into(),
         action: "actions/idle.csp".into(),
         instances: Vec::new(),
+        actions: Vec::new(),
         image_hash: [0; 32],
     }
 }

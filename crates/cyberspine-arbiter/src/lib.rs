@@ -117,6 +117,9 @@ pub struct InterruptEvent {
     pub action: Box<str>,
     /// Every instance visible at the moment of the interrupt.
     pub instances: Vec<InstanceView>,
+    /// The action references the host could load. A hint, not an allowlist:
+    /// `Load` is still validated by the host's loader.
+    pub actions: Vec<Box<str>>,
     pub image_hash: [u8; 32],
 }
 

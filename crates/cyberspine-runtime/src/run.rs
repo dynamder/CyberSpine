@@ -7,8 +7,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use cyberspine_arbiter::{
-    Action, Arbiter, Batch, Completion, Decision, EventId, InstanceRef, InstanceView,
-    InterruptEvent, Ruling as ArbiterRuling, Verdict as ArbiterVerdict,
+    Action, Arbiter, ArbiterError, ArbiterSpec, Batch, Completion, Decision, EventId, InstanceRef,
+    InstanceView, InterruptEvent, Ruling as ArbiterRuling, Verdict as ArbiterVerdict,
 };
 use cyberspine_backend::BackendSpec;
 use cyberspine_core::binfmt::load::VerifiedImage;
@@ -20,6 +20,7 @@ use cyberspine_vm::{
 };
 use thiserror::Error;
 
+use crate::actions::{ActionDirectory, ActionError, ActionResolver};
 use crate::linked::{LinkedBody, Notice};
 use crate::trace::Trace;
 
@@ -49,12 +50,16 @@ pub enum OnInterrupt {
     Continue,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Options {
     pub mode: RunMode,
     pub trace: bool,
     pub quiet: bool,
     pub on_interrupt: OnInterrupt,
+    /// An external arbiter; `None` selects the built-in single-round one.
+    pub interrupt: Option<ArbiterSpec>,
+    /// The directory an arbiter may `Load` from.
+    pub actions: Option<PathBuf>,
 }
 
 /// A build capability an external backend needs.
@@ -109,6 +114,10 @@ pub enum Error {
     Trace(#[from] io::Error),
     #[error("the interrupt handler could not be installed: {0}")]
     Signal(#[from] ctrlc::Error),
+    #[error("the arbiter could not be installed: {0}")]
+    Arbiter(#[from] ArbiterError),
+    #[error("the action directory is unusable: {0}")]
+    Actions(#[from] ActionError),
 }
 
 /// Run the body linked into this binary.
@@ -337,7 +346,7 @@ fn run_session<B: Backend, P: RigPolicy>(
         return Ok(());
     }
 
-    let mut interrupts = Interrupts::new(BuiltinArbiter::new(options.on_interrupt));
+    let mut interrupts = Interrupts::new(open_arbiter(options)?, open_actions(options)?);
 
     let stop = Arc::new(AtomicBool::new(false));
     ctrlc::set_handler({
@@ -398,6 +407,21 @@ fn run_session<B: Backend, P: RigPolicy>(
 
 fn interrupted(stop: &AtomicBool) -> bool {
     stop.load(Ordering::SeqCst)
+}
+
+/// The arbiter this run will consult: the named one, or the built-in single round.
+fn open_arbiter(options: &Options) -> Result<Box<dyn Arbiter>, Error> {
+    match &options.interrupt {
+        Some(spec) => Ok(spec.open()?),
+        None => Ok(Box::new(BuiltinArbiter::new(options.on_interrupt))),
+    }
+}
+
+fn open_actions(options: &Options) -> Result<Option<Box<dyn ActionResolver>>, Error> {
+    match &options.actions {
+        Some(root) => Ok(Some(Box::new(ActionDirectory::open(root)?))),
+        None => Ok(None),
+    }
 }
 
 fn sleep_until(deadline: Instant) {
@@ -485,13 +509,15 @@ struct InFlight {
 struct Interrupts<A: Arbiter> {
     arbiter: A,
     inflight: HashMap<EventId, InFlight>,
+    resolver: Option<Box<dyn ActionResolver>>,
 }
 
 impl<A: Arbiter> Interrupts<A> {
-    fn new(arbiter: A) -> Self {
+    fn new(arbiter: A, resolver: Option<Box<dyn ActionResolver>>) -> Self {
         Self {
             arbiter,
             inflight: HashMap::new(),
+            resolver,
         }
     }
 
@@ -503,6 +529,11 @@ impl<A: Arbiter> Interrupts<A> {
         for ticket in session.take_interrupts() {
             let event = EventId::new(ticket.seq());
             let (action, instances, image_hash) = context.snapshot(ticket.instance);
+            let actions = self
+                .resolver
+                .as_ref()
+                .map(|resolver| resolver.actions())
+                .unwrap_or_default();
             report_interrupt(&ticket, context);
             self.arbiter.deliver(InterruptEvent {
                 event,
@@ -512,6 +543,7 @@ impl<A: Arbiter> Interrupts<A> {
                 reason: ticket.reason.clone(),
                 action,
                 instances,
+                actions,
                 image_hash,
             });
             self.inflight.insert(
@@ -530,7 +562,13 @@ impl<A: Arbiter> Interrupts<A> {
                 eprintln!("warning: the arbiter answered unknown event {event}");
                 continue;
             };
-            apply_actions(session, context, event, ruling.actions);
+            apply_actions(
+                session,
+                context,
+                self.resolver.as_deref(),
+                event,
+                ruling.actions,
+            );
             match ruling.completion {
                 Completion::Unfinished => {
                     eprintln!("interrupt {event}: {}: {}", ruling.source, ruling.note);
@@ -542,7 +580,9 @@ impl<A: Arbiter> Interrupts<A> {
                 }
                 Completion::Finished(verdict) => {
                     report_trail(event, &inflight.trail);
-                    settle(session, inflight.ticket, verdict);
+                    let instance = inflight.ticket.instance;
+                    let settled = settle(session, inflight.ticket, verdict);
+                    forget(settled, verdict, context, instance);
                 }
             }
         }
@@ -550,7 +590,9 @@ impl<A: Arbiter> Interrupts<A> {
         if let Some(error) = failure {
             eprintln!("warning: the arbiter failed: {error}");
             for (_, inflight) in self.inflight.drain() {
-                settle(session, inflight.ticket, ArbiterVerdict::Stop);
+                let instance = inflight.ticket.instance;
+                let settled = settle(session, inflight.ticket, ArbiterVerdict::Stop);
+                forget(settled, ArbiterVerdict::Stop, context, instance);
             }
         }
     }
@@ -583,16 +625,35 @@ impl<A: Arbiter> Interrupts<A> {
 fn apply_actions<B: Backend, P: RigPolicy>(
     session: &mut Session<B, P>,
     context: &mut RunContext,
+    resolver: Option<&dyn ActionResolver>,
     event: EventId,
     actions: Vec<Action>,
 ) {
     for action in actions {
         match action {
             Action::Load { action } => {
-                eprintln!(
-                    "warning: event {event}: cannot load `{action}` \
-                     because no action directory was given"
-                );
+                let Some(resolver) = resolver else {
+                    eprintln!(
+                        "warning: event {event}: cannot load `{action}` \
+                         because no action directory was given"
+                    );
+                    continue;
+                };
+                let image = match resolver.resolve(&action) {
+                    Ok(image) => image,
+                    Err(error) => {
+                        eprintln!("warning: event {event}: `{action}` cannot load: {error}");
+                        continue;
+                    }
+                };
+                let layer = image.header().layer;
+                let hash = image.content_hash();
+                match session.load(image) {
+                    Ok(id) => context.push(id, layer, hash, action),
+                    Err(error) => {
+                        eprintln!("warning: event {event}: `{action}` does not fit: {error}");
+                    }
+                }
             }
             Action::Unload { instance } => {
                 let Some(id) = context.id_of(instance) else {
@@ -623,17 +684,29 @@ fn apply_actions<B: Backend, P: RigPolicy>(
     }
 }
 
+/// Apply a terminal verdict, returning whether it landed.
 fn settle<B: Backend, P: RigPolicy>(
     session: &mut Session<B, P>,
     ticket: Interrupt,
     verdict: ArbiterVerdict,
-) {
+) -> bool {
     let verdict = match verdict {
         ArbiterVerdict::Continue => Verdict::Continue,
         ArbiterVerdict::Stop => Verdict::Stop,
     };
-    if let Err(error) = session.resolve(ticket, Ruling::Finished(verdict)) {
-        eprintln!("warning: the interrupt verdict did not apply: {error}");
+    match session.resolve(ticket, Ruling::Finished(verdict)) {
+        Ok(_) => true,
+        Err(error) => {
+            eprintln!("warning: the interrupt verdict did not apply: {error}");
+            false
+        }
+    }
+}
+
+/// Keep the host's bookkeeping in step with a verdict that removed an instance.
+fn forget(settled: bool, verdict: ArbiterVerdict, context: &mut RunContext, id: InstanceId) {
+    if settled && verdict == ArbiterVerdict::Stop {
+        context.remove(id);
     }
 }
 
@@ -735,10 +808,13 @@ mod tests {
     #[test]
     fn a_round_and_a_verdict_in_one_batch_are_applied_in_order() {
         let (mut session, id, mut context) = parked_session();
-        let mut interrupts = Interrupts::new(Scripted::new(vec![
-            unfinished("no rule"),
-            finished(ArbiterVerdict::Continue),
-        ]));
+        let mut interrupts = Interrupts::new(
+            Scripted::new(vec![
+                unfinished("no rule"),
+                finished(ArbiterVerdict::Continue),
+            ]),
+            None,
+        );
 
         interrupts.pump(&mut session, &mut context);
 
@@ -754,7 +830,7 @@ mod tests {
     #[test]
     fn an_unfinished_round_keeps_the_ticket_until_the_next_one() {
         let (mut session, id, mut context) = parked_session();
-        let mut interrupts = Interrupts::new(Scripted::new(vec![unfinished("no rule")]));
+        let mut interrupts = Interrupts::new(Scripted::new(vec![unfinished("no rule")]), None);
 
         interrupts.pump(&mut session, &mut context);
         assert_eq!(session.parked(), vec![id], "the first round did not decide");
@@ -788,12 +864,15 @@ mod tests {
         context.push(other, 0, [0; 32], "b.csp".into());
 
         session.tick().expect("the dummy backend cannot fail");
-        let mut interrupts = Interrupts::new(Scripted::new(vec![ArbiterRuling::finished(
-            vec![Action::Unload {
-                instance: InstanceRef::new(other.get()),
-            }],
-            ArbiterVerdict::Continue,
-        )]));
+        let mut interrupts = Interrupts::new(
+            Scripted::new(vec![ArbiterRuling::finished(
+                vec![Action::Unload {
+                    instance: InstanceRef::new(other.get()),
+                }],
+                ArbiterVerdict::Continue,
+            )]),
+            None,
+        );
 
         interrupts.pump(&mut session, &mut context);
 
@@ -803,5 +882,48 @@ mod tests {
         );
         assert!(session.instance(interrupted).is_some());
         assert!(session.parked().is_empty(), "the verdict still applied");
+    }
+
+    #[test]
+    fn a_load_action_adds_an_instance_through_the_registry() {
+        let rig = rig(1);
+        let mut first = action(vec![intr(0), halt()], &rig);
+        first.push_reason("obstacle");
+        let first = verified(first);
+
+        let mut context = RunContext::new(&first);
+        let (mut session, interrupted) = Host::new(DummyBackend::new(rig.clone()))
+            .load(first)
+            .expect("assembled for this rig");
+        context.push(interrupted, 0, [0; 32], "a.csp".into());
+        session.tick().expect("the dummy backend cannot fail");
+
+        let dir = std::env::temp_dir().join(format!("csp-load-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the scratch directory is created");
+        let next = action(vec![yield_(), jump(-1)], &rig);
+        std::fs::write(dir.join("next.csp"), next.to_bytes()).expect("the action is written");
+
+        let resolver = ActionDirectory::open(&dir).expect("the directory opens");
+        let mut interrupts = Interrupts::new(
+            Scripted::new(vec![ArbiterRuling::finished(
+                vec![Action::Load {
+                    action: "next.csp".into(),
+                }],
+                ArbiterVerdict::Stop,
+            )]),
+            Some(Box::new(resolver)),
+        );
+
+        interrupts.pump(&mut session, &mut context);
+
+        assert!(
+            session.instance(interrupted).is_none(),
+            "the old instance stopped"
+        );
+        assert_eq!(session.instances(), 1, "the loaded action is running");
+        assert_eq!(context.instances.len(), 1, "and the host tracked it");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

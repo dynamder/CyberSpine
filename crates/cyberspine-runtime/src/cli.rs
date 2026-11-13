@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use clap::Parser;
-use cyberspine_backend::{BackendSpec, SpecError};
+use cyberspine_arbiter::{ArbiterSpec, SpecError as ArbiterSpecError};
+use cyberspine_backend::{BackendSpec, SpecError as BackendSpecError};
 
 use crate::run::{OnInterrupt, Options, RunMode, Stop};
 
@@ -22,7 +23,15 @@ pub struct Args {
     #[arg(short, long, value_name = "SPEC", value_parser = parse_backend)]
     pub backend: Option<BackendSpec>,
 
-    /// What the built-in arbiter does with an interrupt (`stop` or `continue`).
+    /// `dylib:<path>` or `rpc:<host>:<port>`; omit for the built-in single-round arbiter.
+    #[arg(long, value_name = "SPEC", value_parser = parse_arbiter)]
+    pub interrupt: Option<ArbiterSpec>,
+
+    /// A directory of `.csp` actions an arbiter may load.
+    #[arg(long, value_name = "DIR")]
+    pub actions: Option<PathBuf>,
+
+    /// What the arbiter falls back to when it cannot decide (`stop` or `continue`).
     #[arg(long, value_enum, default_value_t = OnInterrupt::Stop)]
     pub on_interrupt: OnInterrupt,
 
@@ -72,10 +81,16 @@ impl Args {
             trace: self.trace,
             quiet: self.quiet,
             on_interrupt: self.on_interrupt,
+            interrupt: self.interrupt.clone(),
+            actions: self.actions.clone(),
         }
     }
 }
 
-fn parse_backend(text: &str) -> Result<BackendSpec, SpecError> {
+fn parse_backend(text: &str) -> Result<BackendSpec, BackendSpecError> {
     BackendSpec::parse(text)
+}
+
+fn parse_arbiter(text: &str) -> Result<ArbiterSpec, ArbiterSpecError> {
+    ArbiterSpec::parse(text)
 }
