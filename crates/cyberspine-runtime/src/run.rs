@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use cyberspine_arbiter::{
-    Arbiter, Batch, Decision, EventId, InterruptEvent, Ruling as ArbiterRuling,
-    Verdict as ArbiterVerdict,
+    Action, Arbiter, Batch, Completion, Decision, EventId, InstanceRef, InstanceView,
+    InterruptEvent, Ruling as ArbiterRuling, Verdict as ArbiterVerdict,
 };
 use cyberspine_backend::BackendSpec;
 use cyberspine_core::binfmt::load::VerifiedImage;
@@ -131,7 +131,12 @@ pub fn run_linked<L: LinkedBody>(paths: &[PathBuf], options: &Options) -> Result
         path: first.clone(),
         source,
     })?;
-    context.push(id, layer, hash, first);
+    context.push(
+        id,
+        layer,
+        hash,
+        first.display().to_string().into_boxed_str(),
+    );
     load_rest(&mut session, &mut context, rest)?;
 
     run_session(session, context, options)
@@ -154,7 +159,12 @@ pub fn run_external(spec: &BackendSpec, paths: &[PathBuf], options: &Options) ->
         path: first.clone(),
         source,
     })?;
-    context.push(id, layer, hash, first);
+    context.push(
+        id,
+        layer,
+        hash,
+        first.display().to_string().into_boxed_str(),
+    );
     load_rest(&mut session, &mut context, rest)?;
 
     run_session(session, context, options)
@@ -181,7 +191,7 @@ fn load_rest<B: Backend, P: RigPolicy>(
             path: path.clone(),
             source,
         })?;
-        context.push(id, layer, hash, path);
+        context.push(id, layer, hash, path.display().to_string().into_boxed_str());
     }
     Ok(())
 }
@@ -209,14 +219,14 @@ fn require(feature: Feature) -> Result<(), Error> {
     }
 }
 
-/// One instance and the file it came from. The session knows the id, the
-/// operator wants the path; this is the map between them. The hash is what an
-/// arbiter sees as the action's identity.
+/// One instance and the action it came from. The session knows the id; the
+/// arbiter names instances by reference and actions by an opaque name. The hash
+/// is what an arbiter sees as the action's identity.
 struct Loaded {
     id: InstanceId,
     layer: u16,
     hash: [u8; 32],
-    path: PathBuf,
+    action: Box<str>,
 }
 
 struct RunContext {
@@ -238,48 +248,57 @@ impl RunContext {
         }
     }
 
-    fn push(&mut self, id: InstanceId, layer: u16, hash: [u8; 32], path: &Path) {
+    fn push(&mut self, id: InstanceId, layer: u16, hash: [u8; 32], action: Box<str>) {
         self.instances.push(Loaded {
             id,
             layer,
             hash,
-            path: path.to_path_buf(),
+            action,
         });
     }
 
-    fn path_of(&self, id: InstanceId) -> Option<&Path> {
+    fn remove(&mut self, id: InstanceId) {
+        self.instances.retain(|loaded| loaded.id != id);
+    }
+
+    fn action_of(&self, id: InstanceId) -> Option<&str> {
         self.instances
             .iter()
             .find(|loaded| loaded.id == id)
-            .map(|loaded| loaded.path.as_path())
+            .map(|loaded| &*loaded.action)
+    }
+
+    fn id_of(&self, reference: InstanceRef) -> Option<InstanceId> {
+        self.instances
+            .iter()
+            .find(|loaded| loaded.id.get() == reference.get())
+            .map(|loaded| loaded.id)
     }
 
     fn loaded(&self, id: InstanceId) -> Option<&Loaded> {
         self.instances.iter().find(|loaded| loaded.id == id)
     }
 
-    /// The interrupted instance's action and the actions visible beside it.
-    ///
-    /// The CLI has no action resolver yet, so a path is the action reference it
-    /// can offer. A host with a registry fills the same fields with registry ids.
-    fn snapshot(&self, id: InstanceId) -> (Box<str>, Vec<Box<str>>, [u8; 32]) {
-        let action = self
-            .path_of(id)
-            .map(|path| path.display().to_string().into_boxed_str())
-            .unwrap_or_default();
-        let actions = self
+    /// The interrupted instance's action and the instances visible beside it.
+    fn snapshot(&self, id: InstanceId) -> (Box<str>, Vec<InstanceView>, [u8; 32]) {
+        let action = self.action_of(id).unwrap_or_default().into();
+        let instances = self
             .instances
             .iter()
-            .map(|loaded| loaded.path.display().to_string().into_boxed_str())
+            .map(|loaded| InstanceView {
+                reference: InstanceRef::new(loaded.id.get()),
+                action: loaded.action.clone(),
+                layer: loaded.layer,
+            })
             .collect();
         let hash = self.loaded(id).map(|loaded| loaded.hash).unwrap_or([0; 32]);
-        (action, actions, hash)
+        (action, instances, hash)
     }
 }
 
 fn run_session<B: Backend, P: RigPolicy>(
     mut session: Session<B, P>,
-    context: RunContext,
+    mut context: RunContext,
     options: &Options,
 ) -> Result<(), Error> {
     if !options.quiet {
@@ -297,9 +316,7 @@ fn run_session<B: Backend, P: RigPolicy>(
         for loaded in &context.instances {
             eprintln!(
                 "  instance {}: layer {}, {}",
-                loaded.id,
-                loaded.layer,
-                loaded.path.display()
+                loaded.id, loaded.layer, loaded.action
             );
         }
     }
@@ -335,7 +352,7 @@ fn run_session<B: Backend, P: RigPolicy>(
                     break;
                 }
                 session.tick()?;
-                if !observe(&mut session, &context, trace.as_mut(), &mut interrupts)? {
+                if !observe(&mut session, &mut context, trace.as_mut(), &mut interrupts)? {
                     return Ok(());
                 }
             }
@@ -350,7 +367,7 @@ fn run_session<B: Backend, P: RigPolicy>(
                 deadline += frame;
                 sleep_until(deadline);
                 session.tick()?;
-                if !observe(&mut session, &context, trace.as_mut(), &mut interrupts)? {
+                if !observe(&mut session, &mut context, trace.as_mut(), &mut interrupts)? {
                     return Ok(());
                 }
             }
@@ -366,7 +383,7 @@ fn run_session<B: Backend, P: RigPolicy>(
                 let elapsed = last.elapsed().as_secs_f64();
                 last = Instant::now();
                 session.advance(elapsed)?;
-                if !observe(&mut session, &context, trace.as_mut(), &mut interrupts)? {
+                if !observe(&mut session, &mut context, trace.as_mut(), &mut interrupts)? {
                     return Ok(());
                 }
                 if mode == Stop::UntilHalt && session.is_idle() {
@@ -392,7 +409,7 @@ fn sleep_until(deadline: Instant) {
 
 fn observe<B: Backend, P: RigPolicy, A: Arbiter>(
     session: &mut Session<B, P>,
-    context: &RunContext,
+    context: &mut RunContext,
     trace: Option<&mut Trace>,
     interrupts: &mut Interrupts<A>,
 ) -> Result<bool, Error> {
@@ -436,11 +453,11 @@ impl Arbiter for BuiltinArbiter {
     fn deliver(&mut self, event: InterruptEvent) {
         self.queue.push(Decision {
             event: event.event,
-            ruling: ArbiterRuling::Finished(self.verdict.clone()),
+            ruling: ArbiterRuling::finished(Vec::new(), self.verdict),
         });
     }
 
-    fn take(&mut self) -> Batch {
+    fn take(&mut self, _now: u64) -> Batch {
         Batch {
             decisions: core::mem::take(&mut self.queue),
             failure: None,
@@ -481,11 +498,11 @@ impl<A: Arbiter> Interrupts<A> {
     fn pump<B: Backend, P: RigPolicy>(
         &mut self,
         session: &mut Session<B, P>,
-        context: &RunContext,
+        context: &mut RunContext,
     ) {
         for ticket in session.take_interrupts() {
             let event = EventId::new(ticket.seq());
-            let (action, actions, image_hash) = context.snapshot(ticket.instance);
+            let (action, instances, image_hash) = context.snapshot(ticket.instance);
             report_interrupt(&ticket, context);
             self.arbiter.deliver(InterruptEvent {
                 event,
@@ -494,7 +511,7 @@ impl<A: Arbiter> Interrupts<A> {
                 format: ticket.format.clone(),
                 reason: ticket.reason.clone(),
                 action,
-                actions,
+                instances,
                 image_hash,
             });
             self.inflight.insert(
@@ -506,21 +523,26 @@ impl<A: Arbiter> Interrupts<A> {
             );
         }
 
-        let Batch { decisions, failure } = self.arbiter.take();
+        let now = session.now();
+        let Batch { decisions, failure } = self.arbiter.take(now);
         for Decision { event, ruling } in decisions {
             let Some(mut inflight) = self.inflight.remove(&event) else {
                 eprintln!("warning: the arbiter answered unknown event {event}");
                 continue;
             };
-            match ruling {
-                ArbiterRuling::Unfinished { source, note } => {
-                    eprintln!("interrupt {event}: {source}: {note}");
-                    inflight.trail.push(Round { source, note });
+            apply_actions(session, context, event, ruling.actions);
+            match ruling.completion {
+                Completion::Unfinished => {
+                    eprintln!("interrupt {event}: {}: {}", ruling.source, ruling.note);
+                    inflight.trail.push(Round {
+                        source: ruling.source,
+                        note: ruling.note,
+                    });
                     self.repark(session, event, inflight);
                 }
-                ArbiterRuling::Finished(verdict) => {
+                Completion::Finished(verdict) => {
                     report_trail(event, &inflight.trail);
-                    finish(session, event, inflight.ticket, verdict);
+                    settle(session, inflight.ticket, verdict);
                 }
             }
         }
@@ -528,7 +550,7 @@ impl<A: Arbiter> Interrupts<A> {
         if let Some(error) = failure {
             eprintln!("warning: the arbiter failed: {error}");
             for (_, inflight) in self.inflight.drain() {
-                settle(session, inflight.ticket, Verdict::Stop);
+                settle(session, inflight.ticket, ArbiterVerdict::Stop);
             }
         }
     }
@@ -552,21 +574,51 @@ impl<A: Arbiter> Interrupts<A> {
     }
 }
 
-fn finish<B: Backend, P: RigPolicy>(
+/// Apply one round's actions, left to right, before its completion.
+///
+/// Best-effort on purpose: a failed action is reported and skipped, and the
+/// completion is still applied. A `Load` that cannot be resolved leaves the
+/// world without the new action, which is exactly the fail-closed outcome when
+/// the completion is `Stop`.
+fn apply_actions<B: Backend, P: RigPolicy>(
     session: &mut Session<B, P>,
+    context: &mut RunContext,
     event: EventId,
-    ticket: Interrupt,
-    verdict: ArbiterVerdict,
+    actions: Vec<Action>,
 ) {
-    match verdict {
-        ArbiterVerdict::Continue => settle(session, ticket, Verdict::Continue),
-        ArbiterVerdict::Stop => settle(session, ticket, Verdict::Stop),
-        ArbiterVerdict::Switch { action } => {
-            eprintln!(
-                "warning: event {event}: switching to `{action}` needs an action resolver \
-                 this CLI does not have; stopping instead"
-            );
-            settle(session, ticket, Verdict::Stop);
+    for action in actions {
+        match action {
+            Action::Load { action } => {
+                eprintln!(
+                    "warning: event {event}: cannot load `{action}` \
+                     because no action directory was given"
+                );
+            }
+            Action::Unload { instance } => {
+                let Some(id) = context.id_of(instance) else {
+                    eprintln!("warning: event {event}: unknown instance {instance}");
+                    continue;
+                };
+                if session.unload(id) {
+                    context.remove(id);
+                } else {
+                    eprintln!("warning: event {event}: instance {instance} was already gone");
+                }
+            }
+            Action::Silence { instance } => {
+                let Some(id) = context.id_of(instance) else {
+                    eprintln!("warning: event {event}: unknown instance {instance}");
+                    continue;
+                };
+                session.set_silenced(id, true);
+            }
+            Action::Restore { instance } => {
+                let Some(id) = context.id_of(instance) else {
+                    eprintln!("warning: event {event}: unknown instance {instance}");
+                    continue;
+                };
+                session.set_silenced(id, false);
+            }
         }
     }
 }
@@ -574,8 +626,12 @@ fn finish<B: Backend, P: RigPolicy>(
 fn settle<B: Backend, P: RigPolicy>(
     session: &mut Session<B, P>,
     ticket: Interrupt,
-    verdict: Verdict,
+    verdict: ArbiterVerdict,
 ) {
+    let verdict = match verdict {
+        ArbiterVerdict::Continue => Verdict::Continue,
+        ArbiterVerdict::Stop => Verdict::Stop,
+    };
     if let Err(error) = session.resolve(ticket, Ruling::Finished(verdict)) {
         eprintln!("warning: the interrupt verdict did not apply: {error}");
     }
@@ -594,12 +650,9 @@ fn report_trail(event: EventId, trail: &[Round]) {
 }
 
 fn report_interrupt(ticket: &Interrupt, context: &RunContext) {
-    let path = context
-        .path_of(ticket.instance)
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|| "?".to_string());
+    let action = context.action_of(ticket.instance).unwrap_or("?");
     eprintln!(
-        "interrupt: instance {} ({path}) at pc {} tick {}: {}",
+        "interrupt: instance {} ({action}) at pc {} tick {}: {}",
         ticket.instance, ticket.pc, ticket.tick, ticket.reason
     );
 }
@@ -623,7 +676,7 @@ fn report_faults<B: Backend, P: RigPolicy>(session: &mut Session<B, P>) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cyberspine_testkit::{action, halt, intr, rig, verified};
+    use cyberspine_testkit::{action, halt, intr, jump, rig, verified, yield_};
     use cyberspine_vm::{DummyBackend, Strict};
 
     struct Scripted {
@@ -645,7 +698,7 @@ mod tests {
             self.event = Some(event.event);
         }
 
-        fn take(&mut self) -> Batch {
+        fn take(&mut self, _now: u64) -> Batch {
             let Some(event) = self.event else {
                 return Batch::default();
             };
@@ -659,10 +712,11 @@ mod tests {
     }
 
     fn unfinished(note: &str) -> ArbiterRuling {
-        ArbiterRuling::Unfinished {
-            source: "fallback".into(),
-            note: note.into(),
-        }
+        ArbiterRuling::unfinished("fallback", note)
+    }
+
+    fn finished(verdict: ArbiterVerdict) -> ArbiterRuling {
+        ArbiterRuling::finished(Vec::new(), verdict)
     }
 
     fn parked_session() -> (Session<DummyBackend, Strict>, InstanceId, RunContext) {
@@ -680,13 +734,13 @@ mod tests {
 
     #[test]
     fn a_round_and_a_verdict_in_one_batch_are_applied_in_order() {
-        let (mut session, id, context) = parked_session();
+        let (mut session, id, mut context) = parked_session();
         let mut interrupts = Interrupts::new(Scripted::new(vec![
             unfinished("no rule"),
-            ArbiterRuling::Finished(ArbiterVerdict::Continue),
+            finished(ArbiterVerdict::Continue),
         ]));
 
-        interrupts.pump(&mut session, &context);
+        interrupts.pump(&mut session, &mut context);
 
         assert!(session.parked().is_empty());
         assert_eq!(session.instance(id).map(|instance| instance.pc()), Some(1));
@@ -699,19 +753,55 @@ mod tests {
 
     #[test]
     fn an_unfinished_round_keeps_the_ticket_until_the_next_one() {
-        let (mut session, id, context) = parked_session();
+        let (mut session, id, mut context) = parked_session();
         let mut interrupts = Interrupts::new(Scripted::new(vec![unfinished("no rule")]));
 
-        interrupts.pump(&mut session, &context);
+        interrupts.pump(&mut session, &mut context);
         assert_eq!(session.parked(), vec![id], "the first round did not decide");
 
         interrupts
             .arbiter
             .rounds
-            .push(ArbiterRuling::Finished(ArbiterVerdict::Stop));
-        interrupts.pump(&mut session, &context);
+            .push(finished(ArbiterVerdict::Stop));
+        interrupts.pump(&mut session, &mut context);
 
         assert!(session.instance(id).is_none());
         assert!(session.is_idle());
+    }
+
+    #[test]
+    fn actions_are_applied_before_the_completion() {
+        let rig = rig(1);
+        let mut first = action(vec![intr(0), halt()], &rig);
+        first.push_reason("obstacle");
+        let first = verified(first);
+
+        let mut context = RunContext::new(&first);
+        let (mut session, interrupted) = Host::new(DummyBackend::new(rig.clone()))
+            .load(first)
+            .expect("assembled for this rig");
+        context.push(interrupted, 0, [0; 32], "a.csp".into());
+
+        let other = session
+            .load(verified(action(vec![yield_(), jump(-1)], &rig)))
+            .expect("assembled for this rig");
+        context.push(other, 0, [0; 32], "b.csp".into());
+
+        session.tick().expect("the dummy backend cannot fail");
+        let mut interrupts = Interrupts::new(Scripted::new(vec![ArbiterRuling::finished(
+            vec![Action::Unload {
+                instance: InstanceRef::new(other.get()),
+            }],
+            ArbiterVerdict::Continue,
+        )]));
+
+        interrupts.pump(&mut session, &mut context);
+
+        assert!(
+            session.instance(other).is_none(),
+            "the action removed the other instance"
+        );
+        assert!(session.instance(interrupted).is_some());
+        assert!(session.parked().is_empty(), "the verdict still applied");
     }
 }

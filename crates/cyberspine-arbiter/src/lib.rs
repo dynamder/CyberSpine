@@ -1,14 +1,21 @@
 //! Adjudicators: the host's second plugin boundary (`docs/interrupt.md` §7).
 //!
 //! An [`Arbiter`] turns one [`InterruptEvent`] into a stream of [`Ruling`]s that
-//! ends with exactly one [`Ruling::Finished`]. How many rounds that takes, and
-//! what happens between them, is the arbiter's own policy: a fallback rule and an
-//! LLM are two rounds of the same stream, not two host features.
+//! ends with exactly one [`Completion::Finished`]. How many rounds that takes,
+//! and what happens between them, is the arbiter's own policy: a fallback rule
+//! and an LLM are two rounds of the same stream, not two host features.
+//!
+//! # Two orthogonal axes
+//!
+//! A ruling does two independent things. [`Action`]s shape the world around the
+//! interrupt — load an instance, unload one, silence one. [`Completion`] says
+//! whether the ticket's fate is decided. `Switch` is not a third verdict: it is
+//! [`Action::Load`] followed by [`Verdict::Stop`], which is what it always was
+//! (`docs/interrupt.md` §7.1).
 //!
 //! The host owns the ticket and the instance state. An arbiter only sees the
-//! borrowed view in [`InterruptEvent`] and can only answer with a [`Ruling`], so
-//! it cannot read or write an instance. `Switch` names an action; resolving the
-//! name is the host's job, because the VM knows nothing about actions.
+//! borrowed view in [`InterruptEvent`] and answers with [`Ruling`]s, so it
+//! cannot read or write an instance directly.
 //!
 //! Three packagings share this one trait, the same way bodies share
 //! `cyberspine_vm::Backend`: linked (implement it), dynamic library, and remote.
@@ -37,6 +44,37 @@ impl core::fmt::Display for EventId {
     }
 }
 
+/// A stable handle on one loaded instance, as the arbiter sees it.
+///
+/// The host never reuses a handle, so an action may name an instance across
+/// rounds without it silently becoming someone else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct InstanceRef(u64);
+
+impl InstanceRef {
+    pub const fn new(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl core::fmt::Display for InstanceRef {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// One instance visible at the moment of the interrupt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstanceView {
+    pub reference: InstanceRef,
+    pub action: Box<str>,
+    pub layer: u16,
+}
+
 /// Everything an arbiter is allowed to know about one interrupt.
 ///
 /// It carries an id instead of the host's ticket: the ticket cannot be built
@@ -53,31 +91,90 @@ pub struct InterruptEvent {
     pub reason: Box<str>,
     /// The action the interrupted instance was running.
     pub action: Box<str>,
-    /// The actions visible at the moment of the interrupt.
-    pub actions: Vec<Box<str>>,
+    /// Every instance visible at the moment of the interrupt.
+    pub instances: Vec<InstanceView>,
     pub image_hash: [u8; 32],
 }
 
-/// One round's answer.
+/// An atomic operation on the world around the interrupt.
 ///
-/// The marker sits outside the verdict: the three verdicts stay atomic, and
-/// "this round did not decide" is not a fourth one. Only `Finished` consumes the
-/// ticket; an `Unfinished` round leaves the instance parked under the same id.
+/// An action never decides the ticket's fate; that is [`Completion`]'s job.
+/// `Unload` of the interrupted instance is therefore not an action — it is
+/// [`Verdict::Stop`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Ruling {
-    /// This round did not decide. The ticket stays live and the next round may
+pub enum Action {
+    /// Resolve an action reference and load it as a new instance.
+    Load { action: Box<str> },
+    /// Remove an instance.
+    Unload { instance: InstanceRef },
+    /// Stop merging the instance's commands. It stays alive and adjudicable;
+    /// the body keeps the last command for every muscle it no longer claims.
+    Silence { instance: InstanceRef },
+    /// Undo [`Action::Silence`].
+    Restore { instance: InstanceRef },
+}
+
+/// The fate of the interrupted instance. Exactly two atomic outcomes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Verdict {
+    /// Release the instance; it resumes after the `INTR`.
+    Continue,
+    /// Unload the instance. Its commands stop merging, and the body holds the
+    /// last published vector (`docs/isa.md` §G10).
+    Stop,
+}
+
+/// Whether a ruling is the last one for its event.
+///
+/// The marker sits on the ruling rather than in the verdict: the two verdicts
+/// stay atomic, and "this round did not decide" is not a third one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Completion {
+    /// This round did not decide. The ticket stays live; the next round may
     /// still answer it.
-    Unfinished { source: Box<str>, note: Box<str> },
-    /// The verdict is final.
+    Unfinished,
+    /// The verdict is final; the ticket is consumed.
     Finished(Verdict),
 }
 
-/// An atomic verdict, the three answers a finished stream can carry.
+/// One round's answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Verdict {
-    Continue,
-    Stop,
-    Switch { action: Box<str> },
+pub struct Ruling {
+    /// Who answered, as the arbiter names it. Observability only — never part
+    /// of the replay input.
+    pub source: Box<str>,
+    /// What the round concluded, for the log. Observability only.
+    pub note: Box<str>,
+    /// Applied left to right, before the completion. Failures are reported and
+    /// skipped; they never change whether the completion is applied.
+    pub actions: Vec<Action>,
+    pub completion: Completion,
+}
+
+impl Ruling {
+    /// A round that decides nothing and changes nothing.
+    pub fn unfinished(source: impl Into<Box<str>>, note: impl Into<Box<str>>) -> Self {
+        Self {
+            source: source.into(),
+            note: note.into(),
+            actions: Vec::new(),
+            completion: Completion::Unfinished,
+        }
+    }
+
+    /// A round that applies `actions` and then settles the ticket.
+    pub fn finished(actions: Vec<Action>, verdict: Verdict) -> Self {
+        Self {
+            source: Box::default(),
+            note: Box::default(),
+            actions,
+            completion: Completion::Finished(verdict),
+        }
+    }
+
+    pub fn is_finished(&self) -> bool {
+        matches!(self.completion, Completion::Finished(_))
+    }
 }
 
 /// One stream element: an event id and the round it answers.
@@ -123,11 +220,25 @@ pub struct ArbiterError(pub Box<str>);
 /// A host's adjudicator (`docs/interrupt.md` §7.3).
 ///
 /// The contract is a stream, not a handshake: every delivered event eventually
-/// gets exactly one [`Ruling::Finished`], preceded by any number of
-/// [`Ruling::Unfinished`]. `take` returning an empty batch is a normal state, so
-/// neither method may block the tick loop.
+/// gets exactly one [`Completion::Finished`], preceded by any number of
+/// [`Completion::Unfinished`] rounds. `take` returning an empty batch is a
+/// normal state, so neither method may block the tick loop.
+///
+/// `take` is given the host's current tick. A synchronous arbiter ignores it; an
+/// asynchronous one uses it for deadlines, and a replaying one uses it to
+/// release each recorded round at the tick it was originally applied.
 pub trait Arbiter {
     fn deliver(&mut self, event: InterruptEvent);
 
-    fn take(&mut self) -> Batch;
+    fn take(&mut self, now: u64) -> Batch;
+}
+
+impl<T: Arbiter + ?Sized> Arbiter for Box<T> {
+    fn deliver(&mut self, event: InterruptEvent) {
+        (**self).deliver(event);
+    }
+
+    fn take(&mut self, now: u64) -> Batch {
+        (**self).take(now)
+    }
 }
