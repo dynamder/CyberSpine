@@ -502,3 +502,78 @@ fn a_decision_log_replays_the_same_run() {
         "the replayed trace is the recorded one"
     );
 }
+
+#[cfg(feature = "dylib")]
+fn arbiter_fixture() -> &'static PathBuf {
+    use std::sync::OnceLock;
+
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let output = Command::new(env!("CARGO"))
+            .args([
+                "build",
+                "-p",
+                "cyberspine-arbiter-fixture",
+                "--message-format=json",
+                "--offline",
+            ])
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .output()
+            .expect("cargo runs");
+        assert!(
+            output.status.success(),
+            "cargo could not build the fixture:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if record["reason"] != "compiler-artifact" {
+                continue;
+            }
+            if !record["package_id"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("cyberspine-arbiter-fixture")
+            {
+                continue;
+            }
+            for file in record["filenames"].as_array().into_iter().flatten() {
+                let path = PathBuf::from(file.as_str().unwrap_or_default());
+                if path.extension().and_then(|ext| ext.to_str())
+                    == Some(std::env::consts::DLL_EXTENSION)
+                {
+                    return path;
+                }
+            }
+        }
+        panic!("cargo did not report a shared library for the fixture");
+    })
+}
+
+#[cfg(feature = "dylib")]
+#[test]
+fn a_dylib_arbiter_rules_in_two_rounds() {
+    let dir = scratch("dylib-arbiter");
+    let image = write_image(&dir, "interrupt.csp", INTERRUPT, MANIFEST);
+    let spec = format!("dylib:{}", arbiter_fixture().display());
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--interrupt"),
+        OsStr::new(&spec),
+        OsStr::new("--ticks"),
+        OsStr::new("4"),
+        OsStr::new("--unpaced"),
+        OsStr::new("--quiet"),
+    ]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stderr(&output).contains("fixture: first pass"),
+        "the first round crossed the boundary: {}",
+        stderr(&output)
+    );
+}
