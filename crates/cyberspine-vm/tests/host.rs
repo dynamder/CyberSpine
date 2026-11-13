@@ -1001,3 +1001,70 @@ fn unloading_a_parked_instance_drops_its_ticket() {
     assert!(host.instance(id).is_none());
     assert!(host.take_interrupts().is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Silence
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_silenced_instance_is_alive_but_unheard() {
+    let rig = rig(1);
+    let (mut host, id) = Host::new(backend(&rig))
+        .load(verified(publish_then_idle(0, 0.5, &rig)))
+        .expect("assembled for this rig");
+    host.set_tracing(true);
+
+    host.tick().expect("the dummy backend cannot fail");
+    assert_eq!(
+        host.trace().last().map(|tick| tick.commands[0]),
+        Some(Some(0.5)),
+        "an audible instance publishes"
+    );
+
+    assert!(host.set_silenced(id, true));
+    host.tick().expect("the dummy backend cannot fail");
+    assert_eq!(
+        host.trace().last().map(|tick| tick.commands[0]),
+        Some(None),
+        "a silenced instance stops contributing without being unloaded"
+    );
+    assert!(host.instance(id).is_some(), "silence does not remove it");
+
+    assert!(host.set_silenced(id, false));
+    host.tick().expect("the dummy backend cannot fail");
+    assert_eq!(
+        host.trace().last().map(|tick| tick.commands[0]),
+        Some(Some(0.5)),
+        "restoring brings the contribution back"
+    );
+}
+
+#[test]
+fn silencing_an_unknown_instance_changes_nothing() {
+    let rig = rig(1);
+    let (mut host, id) = Host::new(backend(&rig))
+        .load(verified(publish_then_idle(0, 0.5, &rig)))
+        .expect("assembled for this rig");
+
+    assert!(host.unload(id));
+    assert!(!host.set_silenced(id, true), "the instance is gone");
+}
+
+#[test]
+fn silence_does_not_release_a_parked_instance() {
+    let rig = rig(1);
+    let (mut host, id) = Host::new(backend(&rig))
+        .load(interrupt_action(vec![intr(0), halt()], &rig))
+        .expect("assembled for this rig");
+    host.tick().expect("the dummy backend cannot fail");
+
+    let ticket = host.take_interrupts().remove(0);
+    assert!(host.set_silenced(id, true));
+
+    assert_eq!(host.parked(), vec![id], "silence is not a verdict");
+    assert_eq!(
+        host.resolve(ticket, Ruling::Finished(Verdict::Continue))
+            .expect("the instance is parked"),
+        Resolution::Settled
+    );
+}

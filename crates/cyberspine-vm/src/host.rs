@@ -44,6 +44,13 @@ pub const DEFAULT_TRACE_CAPACITY: usize = 4096;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InstanceId(u64);
 
+impl InstanceId {
+    /// The numeric handle, for a host that has to name an instance to a plugin.
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
 impl core::fmt::Display for InstanceId {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{}", self.0)
@@ -344,6 +351,9 @@ struct Slot {
     /// The sequence number of the interrupt this slot is parked on, if any. It
     /// is host bookkeeping, not VM state: the instance only knows its reason.
     pending_seq: Option<u64>,
+    /// Set by [`Session::set_silenced`]: the slot stops contributing to the
+    /// merge while staying alive and adjudicable.
+    silenced: bool,
 }
 
 impl Slot {
@@ -440,6 +450,7 @@ impl<B: Backend, P: RigPolicy> Session<B, P> {
             image,
             instance,
             pending_seq: None,
+            silenced: false,
         });
         self.rebuild_merge_order();
         id
@@ -685,6 +696,26 @@ impl<B: Backend, P: RigPolicy> Session<B, P> {
         true
     }
 
+    /// Silence or restore an instance's contribution to the command merge.
+    ///
+    /// A silenced instance keeps running, keeps its published vector and stays
+    /// adjudicable; it simply stops being merged, so the body holds the last
+    /// command for every muscle it no longer claims. That is the non-terminal
+    /// "stop where you are" an arbiter needs while it is still deciding.
+    ///
+    /// Silence is explicit and persistent: only this method (or [`Session::unload`])
+    /// clears it. Returning to the patch on `Continue` is a decision for the
+    /// caller, not a side effect of the verdict.
+    ///
+    /// Returns whether the instance exists.
+    pub fn set_silenced(&mut self, id: InstanceId, silenced: bool) -> bool {
+        let Some(slot) = self.slots.iter_mut().find(|slot| slot.id == id) else {
+            return false;
+        };
+        slot.silenced = silenced;
+        true
+    }
+
     pub fn set_max_ticks_per_frame(&mut self, ticks: u32) {
         self.max_ticks_per_frame = ticks.max(1);
     }
@@ -759,7 +790,13 @@ impl<B: Backend, P: RigPolicy> Session<B, P> {
     fn merge(&mut self) {
         self.merged.fill(None);
         for &index in &self.merge_order {
-            let instance = &self.slots[index].instance;
+            let slot = &self.slots[index];
+            // A silenced slot is alive and adjudicable, but unheard: the body
+            // keeps the last command for every muscle it no longer claims.
+            if slot.silenced {
+                continue;
+            }
+            let instance = &slot.instance;
             // G12: a fault takes its contributions with it, in the same tick.
             if instance.status() == Status::Faulted {
                 continue;
