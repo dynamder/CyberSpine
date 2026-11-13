@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
-use cyberspine_arbiter::{Arbiter, Completion, EventId, InterruptEvent, Verdict, dylib};
+use cyberspine_arbiter::{
+    Arbiter, Completion, EventId, InstanceRef, InterruptEvent, Verdict, dylib,
+};
 
 fn fixture() -> &'static Path {
     static PATH: OnceLock<PathBuf> = OnceLock::new();
@@ -63,6 +65,7 @@ fn fixture() -> &'static Path {
 fn event() -> InterruptEvent {
     InterruptEvent {
         event: EventId::new(7),
+        instance: InstanceRef::new(0),
         pc: 3,
         tick: 12,
         format: "x={f1}".into(),

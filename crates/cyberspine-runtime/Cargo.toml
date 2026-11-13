@@ -16,15 +16,15 @@ ctrlc = "3.5.2"
 cyberspine-arbiter = { path = "../cyberspine-arbiter" }
 cyberspine-backend = { path = "../cyberspine-backend", default-features = false }
 cyberspine-core = { path = "../cyberspine-core" }
+cyberspine-host = { path = "../cyberspine-host" }
 cyberspine-vm = { path = "../cyberspine-vm" }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 thiserror = "2.0.21"
 
 [dev-dependencies]
 cyberspine-asm = { path = "../cyberspine-asm" }
 cyberspine-manifest = { path = "../cyberspine-manifest" }
 cyberspine-testkit = { path = "../cyberspine-testkit" }
+serde_json = "1"
 
 [[bin]]
 name = "cyinevm"

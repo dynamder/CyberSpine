@@ -107,7 +107,9 @@ interrupt: instance 0 (actions/idle.csp) at pc 3 tick 12: obstacle: x=0.32 y=0.9
 
 退出码仍是 `0`：中断是程序与宿主之间的正常通信，不是错误。`--decisions <PATH>` 把每一轮
 裁决记成 JSON Lines，`--replay <PATH>` 用记录代替仲裁器重跑同一段轨迹。模型与边界见
-[`interrupt.md`](interrupt.md)。
+[`interrupt.md`](interrupt.md)。maze 的默认运行是同一套 `cyberspine-host` 循环的完整示例
+（无路标路口 → 撞墙探测 → `reverse.csa` 退后 → `maze_left/right` 变体），见
+[`interrupt.md`](interrupt.md) §14 与 [`demos/maze/README.md`](../demos/maze/README.md)。
 
 Ctrl-C 由 `ctrlc` 捕获，设置停止标志；当前循环结束后进程以 `0` 退出。
 
@@ -185,6 +187,11 @@ help: rebuild with `cargo build -p cyberspine-runtime --features rpc`
 ```
 
 `dylib` 同理。`dummy` 和静态链接 body 不需要这两个 feature。
+
+宿主侧的 `Registry` / `Interrupts` / `Report` / 动作目录 / 决策日志在
+[`cyberspine-host`](../crates/cyberspine-host)；`cyberspine-runtime` 只做 CLI 接线和 feature 选择。
+maze 示例复用同一份循环；它的 `cyberspine-host` 不依赖这两个 feature（body 的三种打包仍由
+`cyberspine-backend` 的 feature 决定）。
 
 只构建静态版本：
 

@@ -9,13 +9,14 @@
 use std::time::Duration;
 
 use cyberspine_arbiter::{
-    Arbiter, Batch, Completion, EventId, InterruptEvent, RpcArbiter, Verdict, rpc,
+    Arbiter, Batch, Completion, EventId, InstanceRef, InterruptEvent, RpcArbiter, Verdict, rpc,
 };
 use cyberspine_arbiter_fixture::Scripted;
 
 fn event() -> InterruptEvent {
     InterruptEvent {
         event: EventId::new(9),
+        instance: InstanceRef::new(0),
         pc: 1,
         tick: 3,
         format: "x={f1}".into(),

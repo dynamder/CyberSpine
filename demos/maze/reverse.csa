@@ -1,0 +1,20 @@
+# reverse.csa — one tick backward, loaded by the arbiter's first round.
+#
+# The body is at the unsigned junction facing the wall. Backing off gives the
+# next brain room to re-enter the junction and take a side branch.
+
+.rig      "maze.rig.json"
+.layer    0
+.clock    hz = 4
+.fuel     4096
+.max_wait 600.0
+
+.text
+entry:
+    FMOVI   f1, 1.0
+    FEXCITE backward, f1
+    FLUSH
+    YIELD
+    FEXCITE backward, f0
+    FLUSH
+    HALT

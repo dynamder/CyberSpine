@@ -36,6 +36,11 @@ fn same_walk(mut linked: Session, mut other: Session) {
             left.tick
         );
         assert_eq!(left.trail, right.trail, "the trail at tick {}", left.tick);
+        assert_eq!(
+            left.reports, right.reports,
+            "the rulings at tick {}",
+            left.tick
+        );
 
         if !linked.running() {
             break;
@@ -57,7 +62,7 @@ fn same_walk(mut linked: Session, mut other: Session) {
     assert_eq!(other, linked);
     assert_eq!(
         (linked.moves, linked.turns, linked.bumps),
-        (24, 6, 0),
+        (26, 6, 4),
         "the odometer crosses the boundary unchanged"
     );
 }

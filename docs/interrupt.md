@@ -1,8 +1,8 @@
 # 中断：设计规范
 
-状态：**S1、S2、S2+、S3 全部已实现**
+状态：**S1、S2、S2+、S3 全部已实现；一个可运行示例见 §14**
 依赖：[`isa.md`](isa.md) §4.8、[`binfmt.md`](binfmt.md) §6.6、[`exec.md`](exec.md) §3、[`runtime.md`](runtime.md)
-范围：guest 发起的中断、原因模板、宿主裁决 API、仲裁器边界、动态动作集合
+范围：guest 发起的中断、原因模板、宿主裁决 API、仲裁器边界、动态动作集合、完整示例
 
 ---
 
@@ -16,12 +16,16 @@
 `Continue` / `Stop`（`Finished`）。完成性是裁决外面的一个独立标记；世界的变化由 `Action`
 原子操作承载。`Switch` 不是第三种裁决，它是 `Load` + `Stop` 的组合。
 
+一个可运行的例子是 [`demos/maze`](../demos/maze) 的默认运行：一条中断、两轮裁决、一次
+`Switch`；无路标路口的 no-progress 探测、退后和左/右选择。见 §14。
+
 | 部分 | 内容 | 状态 |
 |---|---|---|
 | **S1** | `INTR`、原因模板与插值、镜像 reason 表、`Session` 的 take/unload/parked、`cyinevm` 多镜像与内置策略 | 已实现 |
 | **S2** | `Ruling` / `Completion` / `Action`、裁决流、`cyberspine-arbiter`、linked 打包、`--interrupt` / `--actions` | 已实现 |
 | **S2+** | dylib 打包、`Switch` 与动态动作解析、`Silence` / `Restore` | 已实现 |
 | **S3** | RPC 仲裁器、非阻塞工作线程、`--decisions` / `--replay` | 已实现 |
+| **示例** | `demos/maze` 的默认 `handover`：撞墙探测、`reverse.csa`、`maze_left/right` | 已实现 |
 
 ---
 
@@ -243,6 +247,7 @@ pub struct InstanceView {
 
 pub struct InterruptEvent {
     pub event: EventId,              // = Interrupt::seq()
+    pub instance: InstanceRef,       // 提出中断的实例
     pub pc: usize,
     pub tick: u64,
     pub format: Box<str>,            // 稳定判类 key
@@ -285,6 +290,10 @@ pub trait Arbiter {
 
 `InterruptEvent` 带 `EventId` 而不是 `Interrupt`：票据的 `reason_id` / `seq` 是私有字段，
 本来就序列化不了；而且这样仲裁器在类型上**不可能持有或伪造票据**。
+
+`instance` 是提出中断的实例，不是票据：仲裁器可以拿它做 `Silence` / `Restore`，`Stop` 也隐式
+指向它。没有这个字段时，仲裁器只能拿 `action` 名去 `instances` 里猜提问者，两个实例跑同一动作
+就不成立。
 
 > 命名说明：`Session::resolve` 收的是 `cyberspine-vm::Ruling`（一个只有 `Unfinished` /
 > `Finished(Verdict)` 的两态枚举）；`cyberspine-arbiter::Ruling` 是同名结构体，多了
@@ -345,12 +354,13 @@ pub trait Arbiter {
 - `Switch` 不是第三种裁决：它是 `actions: [Load { action }]` + `completion: Finished(Stop)`。
   "先 load 后 unload"由"`actions` 在 `completion` 之前执行"保证，不靠约定。
 - `Action` 是原子集：每个操作只动一个对象，失败可跳过，宿主可重放，且都不决定票据的生死。
-- `Unload` 不得指向被裁决实例——那是 `Stop` 的职责。`Silence` / `Restore` 可以，它是
-  非终局的"停身"：实例退出命令合并、保持存活、仍可裁决。
+- `Unload` 不得指向被裁决实例——那是 `Stop` 的职责。`Silence` / `Restore` 可以，`event.instance`
+  就是被裁决实例的引用；它是非终局的"停身"：实例退出命令合并、保持存活、仍可裁决。
 - 动作集合不固定：`--actions <DIR>` 指向一个目录，`ActionResolver::actions()` 列出它；AI 可以
   在运行期往目录里写新动作，下一次中断的快照就会看到它。
-- 事件携带两样东西：`instances`（此刻在跑的实例，供 `Unload` / `Silence` / `Restore` 引用）
-  和 `actions`（可以 `Load` 的引用）。都是**中断瞬间的快照**，不做目录握手、不做 epoch 同步。
+- 事件携带三样东西：`instance`（提问者，供 `Silence` / `Restore` 引用）、`instances`（此刻在跑的
+  实例，供 `Unload` / `Silence` / `Restore` 引用）和 `actions`（可以 `Load` 的引用）。都是**中断瞬间的
+  快照**，不做目录握手、不做 epoch 同步。
 - 动作引用是**不透明字符串**，由宿主的 `ActionResolver` 解释：
 
 ```rust
@@ -362,8 +372,9 @@ pub trait ActionResolver {
 
 - CLI 的实现是"目录 + 文件名"：名字必须是单个路径分量（拒绝 `/`、`\`、`..`），再交给
   `read_image`。这是卫生规则，不是安全边界——仲裁器与 body 同级可信。
-- `Load` 由 runtime 执行：解析 → 读文件 + loader → `Session::load`。装载失败时跳过该动作，
-  `completion` 照常执行。
+- `Load` 由宿主执行：解析 → 读文件 + loader → `Session::load`。装载失败时跳过该动作，
+  `completion` 照常执行。`cyberspine-host` 里的 `Interrupts::pump` 是这一段的唯一实现，
+  `cyinevm` 和 maze 示例共用它。
 - 不通过 MessagePack 传镜像字节：动作集合在任一瞬时是确定的，用引用 + 宿主解析即可。
 
 ---
@@ -382,6 +393,14 @@ pub trait ActionResolver {
 
 ## 10. CLI
 
+maze 的默认运行就是 §14 的示例：
+
+```bash
+cargo run -p cyberspine-demo-maze   # 无路标路口：探测、退后、左转
+```
+
+`cyinevm` 的同一套边界：
+
 ```bash
 cyinevm -i idle.csp -i walk.csp --ticks 300
 cyinevm -i interrupt.csp --on-interrupt continue --until-halt
@@ -396,6 +415,8 @@ cyinevm -i interrupt.csp --replay run.jsonl --trace
 - `--decisions <PATH>` 记录每一轮裁决；`--replay <PATH>` 用记录代替仲裁器。
 - 内置仲裁器是 `Unfinished` 恒不出现的特例，不是链的简化版。
 - 中断报告走 stderr（实例、路径、pc、tick、插值后的原因）；退出码不变。
+- maze 与 `cyinevm` 共用 [`cyberspine-host`](../crates/cyberspine-host) 的在途表/动作/兜底逻辑；
+  maze 只是把同一份 `Report` 画到屏幕上，并在 `--headless` 时打到 stderr。
 
 ---
 
@@ -422,9 +443,13 @@ cyinevm -i interrupt.csp --replay run.jsonl --trace
 | 裁决流、`InterruptEvent` / `Ruling` / `Action` / `Batch` / `Arbiter` | [`crates/cyberspine-arbiter/src/lib.rs`](../crates/cyberspine-arbiter/src/lib.rs) |
 | 帧头（`CSPB` / `CSPA` 共用） | [`crates/cyberspine-frame/src/lib.rs`](../crates/cyberspine-frame/src/lib.rs) |
 | ABI、dylib、rpc、线上消息 | [`crates/cyberspine-arbiter/src/`](../crates/cyberspine-arbiter/src/) 的 `abi.rs` / `dylib.rs` / `rpc.rs` / `wire.rs` |
-| 在途票据表、`failure` 兜底、`--interrupt` / `--actions` | [`crates/cyberspine-runtime/src/run.rs`](../crates/cyberspine-runtime/src/run.rs)、[`cli.rs`](../crates/cyberspine-runtime/src/cli.rs) |
-| 动作目录 | [`crates/cyberspine-runtime/src/actions.rs`](../crates/cyberspine-runtime/src/actions.rs) |
-| 决策日志与重放 | [`crates/cyberspine-runtime/src/decisions.rs`](../crates/cyberspine-runtime/src/decisions.rs) |
+| 在途票据表、`failure` 兜底、动作应用 | [`crates/cyberspine-host/src/interrupts.rs`](../crates/cyberspine-host/src/interrupts.rs) |
+| 实例表（`InstanceId` ↔ `InstanceRef`） | [`crates/cyberspine-host/src/registry.rs`](../crates/cyberspine-host/src/registry.rs) |
+| 宿主观测流 `Report` | [`crates/cyberspine-host/src/report.rs`](../crates/cyberspine-host/src/report.rs) |
+| 动作目录 | [`crates/cyberspine-host/src/actions.rs`](../crates/cyberspine-host/src/actions.rs) |
+| 决策日志与重放 | [`crates/cyberspine-host/src/decisions.rs`](../crates/cyberspine-host/src/decisions.rs) |
+| `--interrupt` / `--actions` / `--decisions` 的 CLI 接线 | [`crates/cyberspine-runtime/src/run.rs`](../crates/cyberspine-runtime/src/run.rs)、[`cli.rs`](../crates/cyberspine-runtime/src/cli.rs) |
+| 示例：maze 的无路标路口 | [`demos/maze/src/arbiter.rs`](../demos/maze/src/arbiter.rs)、[`actions.rs`](../demos/maze/src/actions.rs)、[`maze.csa`](../demos/maze/maze.csa)、[`reverse.csa`](../demos/maze/reverse.csa) |
 
 ---
 
@@ -442,6 +467,101 @@ cyinevm -i interrupt.csp --replay run.jsonl --trace
 | 每个事件恰好一条 `Decision` | 改为 `Unfinished* + Finished`：多轮不必让宿主重投递事件 |
 | 链是宿主的配置 | 链下沉为仲裁器实现；宿主只维护在途表，不设超时、不做链尾兜底 |
 | `InterruptEvent` 携带票据 | 改为 `EventId` + 只读字段；票据留在宿主，仲裁器不可能持有或伪造 |
+| `InterruptEvent` 不带提问者引用 | `Silence` / `Restore` 只能按 action 名猜；补 `instance: InstanceRef`，`Stop` 仍隐式 |
 | `Verdict::Switch` 当第三种裁决 | `Switch` 是 `Load` + `Stop`；原子集与完成性拆成两个正交维度 |
 | 每个 dylib 调用只执行一次 | ABI 在缓冲不够时会重发同一请求；加 `seq` 缓存，让重发幂等 |
 | 重放只记终局裁决 | 一轮 `Unfinished` 也可能带 `actions`；按轮记录、按 tick 释放 |
+
+---
+
+## 14. 一个可运行示例：maze 的无路标路口
+
+默认的 `cargo run -p cyberspine-demo-maze` 就是这条流：**一条中断、两轮裁决、一次
+`Switch`**。故事不是“程序主动问方向”，而是它先真的走不动了：无路标、直行是墙，连续几个 tick
+只有 `bumps` 增长，才把票据交给宿主。
+
+### 14.1 场景
+
+- 默认迷宫在 `(4,11)` 去掉红标、把 `(5,11)` 封成墙；北边是正解，南边是死路。颜色规则在
+  `(4,11)` 失效，`maze.csa` 只能先直行撞墙。
+- `maze.csa` 的 `L_stuck`：`.var_i turn = 0` 时进入探测循环，连续 4 个 tick 按 `forward`
+  （`moves` 不动、`bumps` 涨到 4），然后
+  `INTR "no progress: x=… y=… heading=… bumps=…"`。
+- `Junction` 第 1 轮：`Unfinished`，`actions: [Silence(event.instance), Load("reverse.csa")]`，
+  note “the unsigned junction: backing off”。`reverse.csa` 是一拍 `backward`，把身体从
+  `(4,11)` 退到 `(3,11)`；提问者仍挂起。
+- 第 2 轮（`now > interrupt_tick + 3`）：`Finished(Stop)`，
+  `actions: [Load("maze_left.csa")]`，note “turning left”。如果左转变体又卡住，仲裁器下一次
+  会切到 `maze_right.csa`。
+- 两个方向变体是同一份 `maze.csa`，只把 `.var_i turn = 0` 换成 `1` / `2`；`L_turn_left` /
+  `L_turn_right` 转一次、把 `turn` 置回 0，然后回到普通颜色规则。默认地图 left 是正解，
+  right 是兜底路径。
+
+### 14.2 时序
+
+```text
+tick 3   maze: at (4,11), no marker, straight is a wall -> probe
+tick 7   probe: forward x4, moves unchanged, bumps=4 -> INTR
+         host: take_interrupts -> 1 ticket; take(now=8)
+         arbiter: Unfinished + Silence + Load("reverse.csa")
+tick 8   reverse: backward one tick -> (3,11); HALT
+tick 11  host: take(now=11) -> Finished(Stop) + Load("maze_left.csa")
+         maze_left: (3,11) -> (4,11) at the end of the tick
+tick 12  maze_left: at (4,11), wall ahead, turn=1 -> turn left
+tick 13  maze_left: north into the colour path; ... goal
+```
+
+`reverse` 先把身体退开一格，第 2 轮的新实例再从 `(3,11)` 重新进入 `(4,11)`，所以“退后”和
+“左/右”各自有独立的 tick 边界，画面能看见。
+
+### 14.3 输出
+
+`--headless` 把 `Report` 流打到 stderr：
+
+```text
+interrupt: instance 0 (maze.csa) at pc 49 tick 7: no progress: x=4 y=11 heading=1 bumps=4
+interrupt 0: junction: the unsigned junction: backing off
+interrupt 0: finished after 1 round(s), last: junction: the unsigned junction: backing off · the unsigned junction: turning left
+  goal reached in 40 ticks: 26 moves, 6 turns, 4 bumps
+```
+
+屏幕底部固定 3 行裁决日志（在棋盘和 legend 下面，日志增减不会顶动地图）：
+
+```text
+  ruling  interrupt 0: no progress: x=4 y=11 heading=1 bumps=4
+  ruling  interrupt 0 round 1: the unsigned junction: backing off
+  ruling  interrupt 0 finished: the unsigned junction: turning left
+```
+
+这 3 行保留到下一次裁决；`--headless` 的 stderr 是完整流。odometer 的构成是：4 个 bump 来自探测，2 个 move 来自退后和重新进入，
+turns 仍是 6。
+
+### 14.4 宿主侧
+
+maze 没有自己的仲裁循环：它和 `cyinevm` 共用 [`crates/cyberspine-host`](../crates/cyberspine-host)
+的 `Registry` + `Interrupts::pump` + `Report`。`pump` 每个 tick 做四件事：
+
+1. 把 `Session::take_interrupts` 的票据变成 `InterruptEvent`，投给仲裁器，记在在途表；
+2. `arbiter.take(now)` 拿回 `Batch`；
+3. 每条 `Decision` 先应用 `Action`，再应用 `Completion`；`Unfinished` 重新挂起，`Finished`
+   消耗票据；
+4. 仲裁器整体失效时，给所有在途票据合成兜底裁决。
+
+maze 只多做了两件事：用内存里的 `ActionResolver` 把 `"reverse.csa"` / `"maze_left.csa"` /
+`"maze_right.csa"` 解析成现场汇编的 `VerifiedImage`，以及把 `Report` 画到屏幕上。`cyinevm`
+用目录解析动作、把 `Report` 打到 stderr，其余完全一样。
+
+### 14.5 文件
+
+| 内容 | 位置 |
+|---|---|
+| 无路标地图 | [`demos/maze/world/src/grid.rs`](../demos/maze/world/src/grid.rs) |
+| no-progress 探测、方向变体 | [`demos/maze/maze.csa`](../demos/maze/maze.csa) |
+| 退后动作 | [`demos/maze/reverse.csa`](../demos/maze/reverse.csa) |
+| 两轮仲裁器 | [`demos/maze/src/arbiter.rs`](../demos/maze/src/arbiter.rs) |
+| 内存动作解析 | [`demos/maze/src/actions.rs`](../demos/maze/src/actions.rs) |
+| 宿主装配 | [`demos/maze/src/session.rs`](../demos/maze/src/session.rs) |
+| 测试 | [`demos/maze/tests/arbiter.rs`](../demos/maze/tests/arbiter.rs) |
+
+仲裁器只做 linked。dylib / rpc 打包由 `cyinevm --interrupt dylib:…|rpc:…` 覆盖；宿主侧仍是
+同一个 [`cyberspine-host`](../crates/cyberspine-host) 循环。

@@ -1,23 +1,27 @@
 //! The action, the host and the viewer's record of the walk.
 //!
-//! This is the app half of the demo: it assembles `maze.csa`, loads it into
-//! whatever body it was handed, and turns each tick into a [`Scene`] for the
-//! renderer. The body itself is the `world` crate; the two boundary packagings
-//! are the `dylib` and `rpc` crates.
+//! This is the app half of the demo: it assembles the actions, loads them into
+//! whatever body it was handed, pumps the arbiter, and turns each tick into a
+//! [`Scene`] for the renderer.
 
+use cyberspine_arbiter::Verdict as ArbiterVerdict;
 use cyberspine_asm::assembler::{self, AsmParseErrors, ImageGenError};
 use cyberspine_backend::BackendSpec;
 use cyberspine_core::binfmt::image::Image;
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::rig::Rig;
 use cyberspine_demo_maze_world::{Grid, MANIFEST};
+use cyberspine_host::{Interrupts, LogError, Registry, Report};
 use cyberspine_vm::{
     BackendError, FaultRecord, Host, LoadError, Session as EngineSession, TraceIter,
 };
 
+use crate::actions::ActionSet;
+use crate::arbiter::Junction;
 use crate::body::{Body, Observation};
 
 pub const SOURCE: &str = include_str!("../maze.csa");
+pub const REVERSE_SOURCE: &str = include_str!("../reverse.csa");
 pub const MAX_TICKS: u64 = 600;
 
 #[derive(Debug, thiserror::Error)]
@@ -36,6 +40,8 @@ pub enum Error {
     Spec(#[from] cyberspine_backend::SpecError),
     #[error("the backend is not available: {0}")]
     Backend(#[from] BackendError),
+    #[error("the decision log could not be written: {0}")]
+    Log(#[from] LogError),
 }
 
 /// Compile a `.csa` source against a rig, ready for `Host::load`.
@@ -44,44 +50,50 @@ pub fn assemble(source: &str, rig: &Rig) -> Result<Image, Error> {
     Ok(assembler::generate_image(&asm, rig)?)
 }
 
-/// One instant of the world plus the walk the viewer has recorded so far.
-///
-/// The trail is the viewer's memory, not the body's: a body only reports where
-/// it is now, and a viewer draws the cells it has seen it occupy.
+/// One instant of the world plus the walk and the rulings recorded so far.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scene {
     pub tick: u64,
     pub observation: Observation,
     pub trail: Vec<(i32, i32)>,
+    pub reports: Vec<Report>,
+}
+
+struct Arbitration {
+    registry: Registry,
+    interrupts: Interrupts<Junction>,
 }
 
 /// One assembled action, its body, and the host ticking them together.
-///
-/// Pacing is the host's (`Host::advance`): a frame hands over the real time it
-/// spent and the host decides how many ticks that buys. Nothing outside this
-/// type can step the machine one tick at a time, so an example cannot invent a
-/// second advance policy.
 pub struct Session {
     host: EngineSession<Body>,
     trail: Vec<(i32, i32)>,
     trail_tick: Option<u64>,
+    arbitration: Option<Arbitration>,
+    reports: Vec<Report>,
 }
 
 impl Session {
-    /// The body compiled into this binary.
+    /// The default demo: the unsigned-junction handover.
     pub fn embedded() -> Result<Self, Error> {
-        Self::open(SOURCE, MANIFEST, Body::linked())
+        Self::handover()
     }
 
-    /// A body the spec names, reached in its own process or from a shared
-    /// library. The handshake runs before the image is assembled, so a body that
-    /// cannot introduce itself fails at startup instead of mid-tick.
+    /// The handover over a body the spec names.
     pub fn external(spec: &BackendSpec) -> Result<Self, Error> {
-        Self::open(SOURCE, MANIFEST, Body::external(spec)?)
+        Self::handover_external(spec)
+    }
+
+    /// Load `maze.csa` and the three action images the arbiter may switch to.
+    pub fn handover() -> Result<Self, Error> {
+        Self::handover_with(Body::linked())
+    }
+
+    pub fn handover_external(spec: &BackendSpec) -> Result<Self, Error> {
+        Self::handover_with(Body::external(spec)?)
     }
 
     /// Assemble `source` against `manifest`, then load the image into `body`.
-    /// The fingerprints must agree or loading refuses the image.
     pub fn open(source: &str, manifest: &str, body: Body) -> Result<Self, Error> {
         let rig = cyberspine_manifest::from_json(manifest)?;
         let image = assemble(source, &rig)?;
@@ -94,14 +106,61 @@ impl Session {
             host,
             trail: Vec::new(),
             trail_tick: None,
+            arbitration: None,
+            reports: Vec::new(),
         })
     }
 
-    /// Hand the host the real seconds a frame took; it runs the ticks they
-    /// contain and keeps the remainder. A linked body cannot fail; a wired one
-    /// can, and that error is terminal.
-    pub fn advance(&mut self, seconds: f64) -> Result<(), BackendError> {
-        self.host.advance(seconds)
+    fn handover_with(body: Body) -> Result<Self, Error> {
+        let rig = cyberspine_manifest::from_json(MANIFEST)?;
+        let maze = VerifiedImage::verify(assemble(SOURCE, &rig)?)?;
+        let left = VerifiedImage::verify(assemble(&SOURCE.replace("turn = 0", "turn = 1"), &rig)?)?;
+        let right =
+            VerifiedImage::verify(assemble(&SOURCE.replace("turn = 0", "turn = 2"), &rig)?)?;
+        let reverse = VerifiedImage::verify(assemble(REVERSE_SOURCE, &rig)?)?;
+
+        let (mut host, id) = Host::new(body)
+            .load(maze.clone())
+            .map_err(|(_, error)| error)?;
+        host.set_tracing(true);
+
+        let mut registry = Registry::new(&maze);
+        registry.push(
+            id,
+            maze.header().layer,
+            maze.content_hash(),
+            "maze.csa".into(),
+        );
+
+        let interrupts = Interrupts::new(
+            Junction::new(),
+            Some(Box::new(ActionSet::new(reverse, left, right))),
+            None,
+            ArbiterVerdict::Stop,
+        );
+
+        Ok(Self {
+            host,
+            trail: Vec::new(),
+            trail_tick: None,
+            arbitration: Some(Arbitration {
+                registry,
+                interrupts,
+            }),
+            reports: Vec::new(),
+        })
+    }
+
+    /// Advance the clock, then let the arbiter answer whatever the tick raised.
+    pub fn advance(&mut self, seconds: f64) -> Result<(), Error> {
+        self.host.advance(seconds)?;
+        if let Some(arbitration) = self.arbitration.as_mut() {
+            let reports = arbitration
+                .interrupts
+                .pump(&mut self.host, &mut arbitration.registry)?;
+            self.reports.extend(reports);
+        }
+        Ok(())
     }
 
     /// Draw at most one tick per frame. A viewer that ran several would only see
@@ -129,9 +188,12 @@ impl Session {
         self.host.backend().grid()
     }
 
-    /// The instant to draw, plus the walk recorded so far. For a wired body this
-    /// costs one extra exchange; calling it twice for one tick records the trail
-    /// only once.
+    /// Everything the arbiter did so far, oldest first.
+    pub fn reports(&self) -> &[Report] {
+        &self.reports
+    }
+
+    /// The instant to draw, plus the walk and the rulings recorded so far.
     pub fn scene(&mut self) -> Result<Scene, BackendError> {
         let observation = self.host.backend_mut().observe()?;
         let tick = self.host.now();
@@ -148,11 +210,11 @@ impl Session {
             tick,
             observation,
             trail: self.trail.clone(),
+            reports: self.reports.clone(),
         })
     }
 
-    /// What one run did, in the numbers the demo prints. Reading it asks the
-    /// body for one final instant.
+    /// What one run did, in the numbers the demo prints.
     pub fn outcome(&mut self) -> Result<Outcome, BackendError> {
         let observation = self.host.backend_mut().observe()?;
         Ok(Outcome {

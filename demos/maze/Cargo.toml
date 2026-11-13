@@ -7,13 +7,16 @@ license.workspace = true
 publish = false
 
 # The host: the action, the session and the viewer. It links the body for the
-# default mode and opens the other two through `dylib:` / `rpc:`.
+# default mode and opens the other two through `dylib:` / `rpc:`. The arbiter
+# loop is `cyberspine-host`, the same one `cyinevm` uses.
 [dependencies]
 clap = { version = "4.6.7", features = ["derive"] }
+cyberspine-arbiter = { path = "../../crates/cyberspine-arbiter" }
 cyberspine-asm = { path = "../../crates/cyberspine-asm" }
 cyberspine-backend = { path = "../../crates/cyberspine-backend", features = ["dylib", "rpc"] }
 cyberspine-core = { path = "../../crates/cyberspine-core" }
 cyberspine-demo-maze-world = { path = "world" }
+cyberspine-host = { path = "../../crates/cyberspine-host" }
 cyberspine-manifest = { path = "../../crates/cyberspine-manifest" }
 cyberspine-vm = { path = "../../crates/cyberspine-vm" }
 thiserror = "2.0.21"

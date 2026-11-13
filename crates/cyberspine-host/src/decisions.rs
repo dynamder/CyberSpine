@@ -239,6 +239,7 @@ mod tests {
     fn event(seq: u64) -> InterruptEvent {
         InterruptEvent {
             event: EventId::new(seq),
+            instance: cyberspine_arbiter::InstanceRef::new(0),
             pc: 0,
             tick: 0,
             format: "x".into(),

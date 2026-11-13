@@ -306,10 +306,12 @@ name = "cyberspine-demo-maze"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "cyberspine-arbiter",
  "cyberspine-asm",
  "cyberspine-backend",
  "cyberspine-core",
  "cyberspine-demo-maze-world",
+ "cyberspine-host",
  "cyberspine-manifest",
  "cyberspine-vm",
  "serde_json",
@@ -361,6 +363,19 @@ name = "cyberspine-frame"
 version = "0.1.0"
 
 [[package]]
+name = "cyberspine-host"
+version = "0.1.0"
+dependencies = [
+ "cyberspine-arbiter",
+ "cyberspine-core",
+ "cyberspine-testkit",
+ "cyberspine-vm",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "cyberspine-isa"
 version = "0.1.0"
 dependencies = [
@@ -395,10 +410,10 @@ dependencies = [
  "cyberspine-asm",
  "cyberspine-backend",
  "cyberspine-core",
+ "cyberspine-host",
  "cyberspine-manifest",
  "cyberspine-testkit",
  "cyberspine-vm",
- "serde",
  "serde_json",
  "thiserror",
 ]

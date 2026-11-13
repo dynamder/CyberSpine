@@ -84,6 +84,8 @@ impl ActionResolver for ActionDirectory {
 /// Why an action reference could not become an image.
 #[derive(Debug, thiserror::Error)]
 pub enum ActionError {
+    #[error("`{0}` is not an action this host offers")]
+    Unknown(String),
     #[error("`{0}` is not a single file name inside the action directory")]
     Outside(String),
     #[error("`{0}` is not a directory")]

@@ -128,13 +128,25 @@ fn animate(mut session: Session) -> ExitCode {
 
 fn headless(mut session: Session) -> ExitCode {
     let dt = f64::from(session.dt());
+    let mut printed = 0;
     while session.running() && session.ticks() < MAX_TICKS {
         if let Err(error) = session.advance(dt) {
             eprintln!("error: {error}");
             return ExitCode::FAILURE;
         }
+        printed = report(&session, printed);
     }
     finish(&mut session)
+}
+
+/// Print the rulings this frame produced, oldest first.
+fn report(session: &Session, printed: usize) -> usize {
+    for report in &session.reports()[printed..] {
+        if !report.is_silent() {
+            eprintln!("{report}");
+        }
+    }
+    session.reports().len()
 }
 
 fn draw(session: &mut Session, style: Style, interactive: bool) -> Result<(), ExitCode> {

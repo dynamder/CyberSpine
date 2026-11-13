@@ -93,9 +93,10 @@ impl Heading {
 
 /// `#` wall, `.` floor, `S` start, `*` goal, `R` turn left, `B` turn right.
 ///
-/// Every marker sits on a four-way junction with two decoy branches, so the
-/// program has to read the color to pick one. The start and `(2,11)` are
-/// marker-less junctions where going straight is the rule.
+/// The unsigned junction at `(4,11)` has no marker and the cell straight ahead
+/// is a wall, so the colour rule cannot decide there. The left branch is the way
+/// on and the right branch is a dead end. The start and `(2,11)` are marker-less
+/// junctions where going straight is the rule.
 pub const DEFAULT_LAYOUT: [&str; 15] = [
     "#####################",
     "############.########",
@@ -108,7 +109,7 @@ pub const DEFAULT_LAYOUT: [&str; 15] = [
     "####.###.############",
     "##.#.###.############",
     "##.#.################",
-    "#S..R..##############",
+    "#S...################",
     "#.##.################",
     "#.##.################",
     "#####################",

@@ -1,4 +1,4 @@
-# maze.csa — the action program for the maze body.
+# maze.csa — the colour follower, with a no-progress probe at an unsigned junction.
 #
 # Reading guide:
 #   FSENSE fN, name   read sensor `name` into float register fN
@@ -6,6 +6,8 @@
 #   FEXCITE name, fN  write fN to muscle `name`
 #   FLUSH             publish this tick's writes to the body
 #   YIELD             end this tick; resume on the next one
+#   ISENSE iN, name   read integer sensor `name` into iN
+#   IVGET / IVSET     read / write an integer instance variable
 #
 # The runner has no map. It reacts to the floor:
 #   red marker -> turn left
@@ -13,16 +15,21 @@
 #   no marker  -> keep going straight
 #   goal       -> stop
 #
-# The only names this program knows are the ones in maze.rig.json.
+# At the unsigned junction straight is a wall. The runner keeps pressing forward
+# for a few ticks (the body only bumps), then asks the host. A `maze_left` or
+# `maze_right` image is the same program with `turn` pre-set; the host loads it
+# to decide the direction.
 
 .rig      "maze.rig.json" # the body this action is assembled for
-
-# hz is the control-loop rate: one tick is 1/4 s, which is also what the
-# viewer uses to pace the animation.
 .layer    0
 .clock    hz = 4
 .fuel     4096
 .max_wait 600.0
+
+# 0: ask, 1: turn left, 2: turn right
+.var_i    turn = 0
+# ticks spent pressing into the wall
+.var_i    probe = 0
 
 .text
 entry:
@@ -74,8 +81,58 @@ L_forward:
     FLUSH
     JMP     step
 
+# No marker and straight is a wall. A loaded left/right image turns once and
+# consumes the choice; the plain image probes the wall for a few ticks and
+# asks the host. The probe is the no-progress detection: `moves` does not
+# change, only `bumps` grows.
 L_stuck:
+    IVGET   i4, turn
+    IMOVI   i5, 1
+    IEQ     i4, i5, L_turn_left
+    IMOVI   i5, 2
+    IEQ     i4, i5, L_turn_right
+
+    FEXCITE forward, f1
+    FLUSH
+    YIELD
+    FEXCITE forward, f0
+    FLUSH
+
+    IVGET   i4, probe
+    IMOVI   i5, 1
+    IADD    i4, i4, i5
+    IVSET   probe, i4
+    IMOVI   i5, 4
+    ILT     i4, i5, L_probe
+
+    ISENSE  i1, x
+    ISENSE  i2, y
+    ISENSE  i3, heading
+    ISENSE  i6, bumps
+    IVSET   probe, i0
+    INTR    "no progress: x={i1} y={i2} heading={i3} bumps={i6}"
     HALT
+
+L_probe:
+    JMP     L_stuck
+
+L_turn_left:
+    FEXCITE turn_left, f1
+    FLUSH
+    YIELD
+    FEXCITE turn_left, f0
+    FLUSH
+    IVSET   turn, i0
+    JMP     step
+
+L_turn_right:
+    FEXCITE turn_right, f1
+    FLUSH
+    YIELD
+    FEXCITE turn_right, f0
+    FLUSH
+    IVSET   turn, i0
+    JMP     step
 
 L_done:
     HALT

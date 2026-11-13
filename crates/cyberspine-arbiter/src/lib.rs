@@ -106,6 +106,9 @@ pub struct InstanceView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InterruptEvent {
     pub event: EventId,
+    /// The instance that raised the interrupt. `Stop` addresses it implicitly;
+    /// `Silence` and `Restore` may name it explicitly, like any other instance.
+    pub instance: InstanceRef,
     /// The `INTR` instruction; the resume point is `pc + 1`.
     pub pc: usize,
     pub tick: u64,

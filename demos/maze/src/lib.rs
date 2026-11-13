@@ -10,10 +10,12 @@
 //! Only [`Body`] knows which one is behind it; the host and the renderer read
 //! the rig and never the struct.
 
+pub mod actions;
+pub mod arbiter;
 pub mod body;
 pub mod render;
 pub mod session;
 
 pub use body::{Body, Observation, Odometer};
 pub use cyberspine_demo_maze_world::MANIFEST;
-pub use session::{Error, MAX_TICKS, Outcome, SOURCE, Scene, Session, assemble};
+pub use session::{Error, MAX_TICKS, Outcome, REVERSE_SOURCE, SOURCE, Scene, Session, assemble};

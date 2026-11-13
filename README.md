@@ -17,21 +17,28 @@ marked on the floor (red = turn left, blue = turn right). The action is a `.csa`
 program; the body is a Rust `Backend` implementation, and the two only meet
 through the rig's muscle and sensor names.
 
+The default run also demonstrates the interrupt boundary. At a junction with no
+marker the straight cell is a wall: the runner presses forward for a few ticks
+(only `bumps` grows), raises `INTR`, and a linked arbiter backs it off, waits,
+then loads a left/right image. The host loop is `cyberspine-host`, the same one
+`cyinevm` uses.
+
 The same body ships three ways — linked, as a shared library, and as a process
 speaking the wire protocol — and all three draw the same walk from the same rig.
 The body, the two boundary packagings and the host are separate crates under
 `demos/maze`, and the library path loads a real `cdylib` at run time:
 
 ```bash
-cargo run -p cyberspine-demo-maze                          # linked
+cargo run -p cyberspine-demo-maze                          # linked, unsigned-junction handover
 cargo build -p cyberspine-demo-maze-dylib                  # emits the cdylib
 cargo run -p cyberspine-demo-maze -- -b dylib:self         # dynamic library
 cargo run -p cyberspine-demo-maze-rpc                      # terminal A
 cargo run -p cyberspine-demo-maze -- -b rpc:127.0.0.1:7777 # terminal B
 ```
 
-See [`demos/maze/README.md`](demos/maze/README.md) for the crate layout, how the
-viewer reads the body, and what to expect when it runs.
+See [`demos/maze/README.md`](demos/maze/README.md) for the crate layout, the
+unsigned-junction handover, how the viewer reads the body, and what to expect
+when it runs.
 
 ## Toolchain
 
@@ -57,7 +64,9 @@ one body. An `INTR` in a program suspends that instance until the host answers;
 the built-in arbiter is `--on-interrupt stop` (unload it) or `continue`, and
 `--interrupt dylib:…|rpc:…` replaces it with a plugin that may rule in several
 rounds, load or unload actions, or silence one. `--decisions <path>` records
-every ruling and `--replay <path>` re-runs from the record.
+every ruling and `--replay <path>` re-runs from the record. The maze demo's
+default run is a two-round example of the same stream; see
+[`docs/interrupt.md`](docs/interrupt.md) §14.
 See [`docs/runtime.md`](docs/runtime.md) for the lifetime, pacing, trace, interrupt
 and static-linking rules, and [`docs/interrupt.md`](docs/interrupt.md) for the
 interrupt model, the reason templates, and the arbiter boundary.

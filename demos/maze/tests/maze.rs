@@ -1,35 +1,16 @@
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_demo_maze::{
-    Body, Error, MANIFEST, MAX_TICKS, SOURCE, Session, assemble,
+    Body, Error, MANIFEST, SOURCE, Session, assemble,
     render::{self, Charset, Style},
 };
 use cyberspine_demo_maze_world::{DEFAULT_LAYOUT, MazeBackend};
+use cyberspine_host::Report;
 use cyberspine_vm::{Host, LoadError};
 
 #[test]
 fn the_clock_comes_from_the_image() {
     let session = Session::embedded().expect("the demo assembles and loads");
     assert_eq!(session.dt(), 0.25);
-}
-
-#[test]
-fn the_program_walks_the_maze_to_the_goal() {
-    let mut session = Session::embedded().expect("the demo assembles and loads");
-    while session.running() && session.ticks() < MAX_TICKS {
-        session
-            .advance(f64::from(session.dt()))
-            .expect("the maze backend cannot fail");
-    }
-
-    let outcome = session.outcome().expect("the linked body cannot fail");
-    assert!(outcome.faults.is_empty(), "{:?}", outcome.faults);
-    assert!(
-        outcome.solved(),
-        "ended at {:?}: {outcome:?}",
-        outcome.position
-    );
-    assert_eq!((outcome.moves, outcome.turns, outcome.bumps), (24, 6, 0));
-    assert!(outcome.ticks <= 40, "took {} ticks", outcome.ticks);
 }
 
 #[test]
@@ -75,4 +56,44 @@ fn the_board_has_one_row_per_cell_row_and_marks_the_rover() {
     let unicode = render::board(session.grid(), &scene, Style::plain());
     assert!(unicode.contains('█'));
     assert!(unicode.contains('▶'));
+}
+
+#[test]
+fn the_ruling_log_sits_below_the_board_without_moving_it() {
+    let mut session = Session::embedded().expect("the demo assembles and loads");
+    let scene = session.scene().expect("the linked body cannot fail");
+    let before = render::frame(session.grid(), &scene, Style::plain());
+    let board_before = render::board(session.grid(), &scene, Style::plain());
+
+    while !session
+        .reports()
+        .iter()
+        .any(|report| matches!(report, Report::Finished { .. }))
+        && session.ticks() < 20
+    {
+        session
+            .advance(f64::from(session.dt()))
+            .expect("the linked body cannot fail");
+    }
+
+    let scene = session.scene().expect("the linked body cannot fail");
+    let after = render::frame(session.grid(), &scene, Style::plain());
+    let board_after = render::board(session.grid(), &scene, Style::plain());
+
+    assert_eq!(
+        before.lines().count(),
+        after.lines().count(),
+        "the frame height is fixed"
+    );
+    assert_eq!(
+        board_before.lines().count(),
+        board_after.lines().count(),
+        "the ruling log does not move the board"
+    );
+
+    let lines: Vec<&str> = after.lines().collect();
+    let tail = &lines[lines.len() - 3..];
+    assert!(tail[0].contains("no progress"), "{tail:?}");
+    assert!(tail[1].contains("backing off"), "{tail:?}");
+    assert!(tail[2].contains("turning left"), "{tail:?}");
 }

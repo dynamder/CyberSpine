@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 
 use cyberspine_demo_maze_world::{Cell, Grid, Heading, RIG_NAME, RIG_VERSION};
+use cyberspine_host::Report;
 
 use crate::session::Scene;
 
@@ -41,8 +42,11 @@ impl Style {
     }
 }
 
-/// Header, senses, board and legend. Everything drawn here comes from the rig;
-/// the tick and the map come from the caller because the body publishes neither.
+/// Header, senses, board, legend and the last three rulings.
+///
+/// Everything drawn here comes from the rig; the tick and the map come from the
+/// caller because the body publishes neither. The ruling area is a fixed three
+/// lines below the board, so a new ruling never moves the map.
 pub fn frame(grid: &Grid, scene: &Scene, style: Style) -> String {
     let observation = &scene.observation;
     let (x, y) = (observation.x, observation.y);
@@ -73,7 +77,41 @@ pub fn frame(grid: &Grid, scene: &Scene, style: Style) -> String {
     out.push_str(&board(grid, scene, style));
     out.push('\n');
     let _ = writeln!(out, "{INDENT}{}", legend(style));
+    for line in ruling_lines(scene) {
+        let _ = writeln!(out, "{INDENT}ruling  {line}");
+    }
     out
+}
+
+const RULING_LINES: usize = 3;
+
+fn ruling_lines(scene: &Scene) -> [String; RULING_LINES] {
+    let mut lines: Vec<String> = scene.reports.iter().filter_map(describe).collect();
+    if lines.len() > RULING_LINES {
+        lines.drain(..lines.len() - RULING_LINES);
+    }
+    while lines.len() < RULING_LINES {
+        lines.insert(0, String::new());
+    }
+    lines.try_into().expect("padded to RULING_LINES")
+}
+
+fn describe(report: &Report) -> Option<String> {
+    match report {
+        Report::Interrupt { event, reason, .. } => Some(format!("interrupt {event}: {reason}")),
+        Report::Round {
+            event, round, note, ..
+        } => Some(format!("interrupt {event} round {round}: {note}")),
+        Report::Finished { event, note, .. } if !note.is_empty() => {
+            Some(format!("interrupt {event} finished: {note}"))
+        }
+        Report::Finished { event, .. } => Some(format!("interrupt {event} finished")),
+        Report::Unknown { event } => Some(format!("interrupt {event}: unknown event")),
+        Report::Action { event, message } => Some(format!("interrupt {event}: {message}")),
+        Report::Carry { .. } | Report::Verdict { .. } | Report::Failed { .. } => {
+            Some(report.to_string())
+        }
+    }
 }
 
 /// One two-column cell per grid cell: terrain on the left, occupant on the
