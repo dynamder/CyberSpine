@@ -95,16 +95,18 @@ dummy 是内置的，不需要也不接受 `dummy:` 前缀；`cyinevm -b dummy:�
 **HALT 不会结束进程。** 动作结束后实例被移除，合并向量变成全 `None`，但宿主继续
 `sample` / `commit` / `step`；这是 `isa.md` §8.4 的“保持”语义：停止 tick 等于停止驱动身体。
 
-**中断不会结束进程。** `INTR` 让该实例挂起，`cyinevm` 在 tick 之后用内置策略回答：
-`--on-interrupt stop`（默认）把它卸载，`--on-interrupt continue` 让它下一 tick 从 `INTR`
-之后继续。事件本身（实例、路径、pc、tick、插值后的原因）打印到 stderr，例如：
+**中断不会结束进程。** `INTR` 让该实例挂起，`cyinevm` 在 tick 之后裁决：内置仲裁器用
+`--on-interrupt stop`（默认）把它卸载、`--on-interrupt continue` 让它下一 tick 从 `INTR`
+之后继续；`--interrupt dylib:<path>` 或 `--interrupt rpc:<host>:<port>` 换成外部仲裁器，
+`--actions <DIR>` 给它一个可 `load` 的动作目录。事件本身（实例、路径、pc、tick、插值后的
+原因）打印到 stderr，例如：
 
 ```text
 interrupt: instance 0 (actions/idle.csp) at pc 3 tick 12: obstacle: x=0.32 y=0.90
 ```
 
-退出码仍是 `0`：中断是程序与宿主之间的正常通信，不是错误。需要真正的仲裁器（让外部程序
-给出裁决流，可以是多轮）属于宿主集成，不在本 CLI 的 v1 范围内；边界设计见
+退出码仍是 `0`：中断是程序与宿主之间的正常通信，不是错误。`--decisions <PATH>` 把每一轮
+裁决记成 JSON Lines，`--replay <PATH>` 用记录代替仲裁器重跑同一段轨迹。模型与边界见
 [`interrupt.md`](interrupt.md)。
 
 Ctrl-C 由 `ctrlc` 捕获，设置停止标志；当前循环结束后进程以 `0` 退出。
@@ -170,12 +172,12 @@ tick	brow_l	brow_r
 
 ```toml
 default = ["dylib", "rpc"]
-dylib   = ["cyberspine-backend/dylib"]
-rpc     = ["cyberspine-backend/rpc"]
+dylib   = ["cyberspine-backend/dylib", "cyberspine-arbiter/dylib"]
+rpc     = ["cyberspine-backend/rpc", "cyberspine-arbiter/rpc"]
 ```
 
-默认构建的 `cyinevm` 同时包含两种外部后端。缺少某个 feature 时，指定对应后端会在
-打开前失败：
+默认构建的 `cyinevm` 同时包含两种外部后端和两种外部仲裁器。缺少某个 feature 时，指定
+对应后端或仲裁器会在打开前失败：
 
 ```text
 error: this `cyinevm` was built without the `rpc` feature, so it cannot connect to a remote body
@@ -231,9 +233,6 @@ pub type Official = MyBody;
 
 ## 8. 非目标（v1）
 
-- 仲裁器插件：v1 只有 `--on-interrupt stop|continue` 这一条内置策略，即退化成单轮的
-  `Arbiter`；把中断转发给 dylib / rpc 形式的裁决器、以及“停止并换一个动作”的 `Switch`，
-  属于后续的宿主集成层。裁决可以是多轮的，完成性由 `Ruling` 标记。
 - `--permissive`：外部 body 始终 strict；dummy 的 permissive 是类型 `Policy` 决定的，
   不是命令行开关。
 - `inspect` / 反汇编：加载失败的报错已经包含 rig 与 shape；调试信息是 `asm.md` §8 的独立任务。

@@ -54,10 +54,13 @@ cyinevm -i idle.csp -i walk.csp --ticks 300   # several images, one session
 `cyinevm` without `--backend` uses the built-in dummy body and prints a warning.
 `-i` may be repeated; the images load in argument order and share one clock and
 one body. An `INTR` in a program suspends that instance until the host answers;
-the CLI's built-in policy is `--on-interrupt stop` (unload it) or `continue`.
+the built-in arbiter is `--on-interrupt stop` (unload it) or `continue`, and
+`--interrupt dylib:…|rpc:…` replaces it with a plugin that may rule in several
+rounds, load or unload actions, or silence one. `--decisions <path>` records
+every ruling and `--replay <path>` re-runs from the record.
 See [`docs/runtime.md`](docs/runtime.md) for the lifetime, pacing, trace, interrupt
 and static-linking rules, and [`docs/interrupt.md`](docs/interrupt.md) for the
-interrupt model, the reason templates, and the planned arbiter boundary.
+interrupt model, the reason templates, and the arbiter boundary.
 
 ```bash
 cargo install --path crates/cyberspine-asm

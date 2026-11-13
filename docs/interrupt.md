@@ -1,6 +1,6 @@
 # 中断：设计规范
 
-状态：**S1、S2 已实现**（dylib 打包与 `Switch` 动作解析除外）；S3 设计冻结、尚未实现
+状态：**S1、S2、S2+、S3 全部已实现**
 依赖：[`isa.md`](isa.md) §4.8、[`binfmt.md`](binfmt.md) §6.6、[`exec.md`](exec.md) §3、[`runtime.md`](runtime.md)
 范围：guest 发起的中断、原因模板、宿主裁决 API、仲裁器边界、动态动作集合
 
@@ -13,14 +13,15 @@
 同样有 linked / dylib / rpc 三种打包。
 
 裁决是**流**而不是单次回答：一条中断可以被裁决多次（`Unfinished`），直到某一次给出原子的
-`Continue` / `Stop` / `Switch`（`Finished`）。原子裁决仍是三种，完成性是它们外面的一个独立标记。
+`Continue` / `Stop`（`Finished`）。完成性是裁决外面的一个独立标记；世界的变化由 `Action`
+原子操作承载。`Switch` 不是第三种裁决，它是 `Load` + `Stop` 的组合。
 
 | 部分 | 内容 | 状态 |
 |---|---|---|
 | **S1** | `INTR`、原因模板与插值、镜像 reason 表、`Session` 的 take/unload/parked、`cyinevm` 多镜像与内置策略 | 已实现 |
-| **S2** | `Ruling` / `Resolution`、裁决流、`cyberspine-arbiter`、`InterruptEvent` / `Batch` / `Decision`、linked 打包 | 已实现 |
-| **S2+** | dylib 打包、`Switch` 与动态动作解析 | 设计冻结 |
-| **S3** | RPC 仲裁器、非阻塞工作线程 | 设计冻结 |
+| **S2** | `Ruling` / `Completion` / `Action`、裁决流、`cyberspine-arbiter`、linked 打包、`--interrupt` / `--actions` | 已实现 |
+| **S2+** | dylib 打包、`Switch` 与动态动作解析、`Silence` / `Restore` | 已实现 |
+| **S3** | RPC 仲裁器、非阻塞工作线程、`--decisions` / `--replay` | 已实现 |
 
 ---
 
@@ -45,14 +46,14 @@ CSA 由 AI 在运行期生成，动作集合与失败类型都不是事先可枚
 CSA（guest）              宿主                              用户配置
 INTR reason ──▶ Interrupted ──▶ 票据 + 在途表 ──▶ 仲裁器（linked / dylib / rpc）
                     ▲                                   │
-                    │                          Unfinished*（轮）
+                    │                    Unfinished { actions }*（轮）
                     │                                   │
-                    └──── Finished(Continue/Stop/Switch) ◀┘
+                    └──────── Finished { actions, verdict } ◀┘
 ```
 
 - VM 只负责**挂起、交出票据、校验票据仍有效**；
 - `Session` 负责**渲染原因、排队票据、应用裁决**；
-- 宿主只维护**在途票据表**，把仲裁器回来的裁决逐条应用；
+- 宿主只维护**在途票据表**，把仲裁器回来的裁决逐条应用：先 `actions`，再 `completion`；
 - 仲裁器只看到事件、只回 `Ruling`，读改不到实例状态。
 
 "多次裁决"是裁决流变长，不是宿主多了一个状态机：宿主从头到尾只知道"这条事件终结了没有"。
@@ -84,11 +85,12 @@ Suspended ──INTR──▶ Interrupted ──resume_interrupted(reason)──
 - **fail-safe**：忘记裁决的宿主只会让实例永远停着，不会把它悄悄放回执行。固件这类不实现
   裁决的宿主，默认行为是"停"，不是"继续"。
 - 挂起期间实例仍参与命令合并（保持最后发布向量与层权）；`Stop` 是卸载，贡献随之消失。
+  唯一的例外是**被静默**的实例（§8.1）：它仍然存活、仍可裁决，只是不再参与合并。
 
 ### 3.3 不变量
 
-- 裁决可以是多轮的，但**轮次不进入 VM**：`Unfinished` 对实例是空操作，实例始终停在
-  `Interrupted`，只在终局那一次发生状态变化。
+- 裁决可以是多轮的，但**轮次不进入 VM**：`Unfinished` 本身不改变实例状态，一轮裁决对世界
+  的影响全部由该轮的 `Action` 表达，而不是隐含在"这是第几轮"里。
 
 `resume` 仍是纯函数。中断只增加了**恢复序列的一个外部输入**：裁决序列。给定相同的
 实例状态、sensor 快照、`now`、fuel 与裁决序列，激发流逐位可复现。
@@ -200,14 +202,14 @@ impl Session {
 ```
 
 - **未完成不是新的实例状态**：实例仍是 `Interrupted`，`Unfinished` 不写任何 VM 字段。
-- `Unfinished` 只校验、不改状态：实例在本 session、`pending_seq == seq`、仍是 `Interrupted`
-  且 reason 匹配，然后把票据原样交回。
+- `Unfinished` 只校验、不改状态：实例在本 session 且 `pending_seq == seq`，然后把票据原样交回。
+  `seq` 是唯一身份——`pending_seq` 与 `Interrupted` 是同一处设置、同一处清除的，所以
+  "seq 对但状态不对"在外部不可达，代码里只有 `debug_assert`。
 - 校验的意义是让宿主**下一轮就发现**实例已被 `unload`（`UnknownInstance`），清掉在途表项，
   而不是等到终局才知道。
 - 票据一次性不变：只有 `Finished` 清 `pending_seq`（`Continue`）或卸载实例（`Stop`）；
   终局之后旧票仍返回 `Stale`。
-- 不需要 `NotParked` 错误：`pending_seq` 只在实例进入 `Interrupted` 的同一处被置位，且
-  `Session` 不对外暴露 `&mut Instance`，所以"seq 对但状态不是 `Interrupted`"在外部不可达。
+- 不需要 `NotParked` 错误：原因同上，那个状态不可达。
 
 实现：[`crates/cyberspine-vm/src/host.rs`](../crates/cyberspine-vm/src/host.rs)。
 
@@ -217,66 +219,77 @@ impl Session {
 
 ### 7.1 一条中断 = 一条裁决流
 
-宿主投递一次事件，仲裁器回**若干条**裁决，最后一条是 `Finished`：
+宿主投递一次事件，仲裁器回**若干条**裁决，最后一条带 `Finished`：
 
 ```
 deliver(event) ──▶ arbiter
-                      ├─ Unfinished { source, note }   第 1 轮
-                      ├─ Unfinished { source, note }   第 2 轮
-                      └─ Finished(verdict)             终局
+                      ├─ { actions, completion: Unfinished }   第 1 轮
+                      ├─ { actions, completion: Unfinished }   第 2 轮
+                      └─ { actions, completion: Finished(v) }   终局
 ```
 
-链（fallback → LLM）、按 reason 分流、超时、升级全部是**仲裁器内部策略**。宿主不参与，
-也不知道有几轮——它只维护在途票据表，把回来的裁决逐条应用。
+每一轮由两个正交的部分组成：`actions` **塑形世界**（`Load` / `Unload` / `Silence` / `Restore`），
+`completion` 说明**票据的命有没有定**。链、按 reason 分流、超时、升级全部是仲裁器内部策略；
+宿主不参与，也不知道有几轮——它只维护在途票据表，把回来的裁决逐条应用。
 
 ### 7.2 类型
 
 ```rust
+pub struct InstanceView {
+    pub reference: InstanceRef,      // 不回卷的数字句柄
+    pub action: Box<str>,
+    pub layer: u16,
+}
+
 pub struct InterruptEvent {
-    pub event: EventId,          // = Interrupt::seq()
+    pub event: EventId,              // = Interrupt::seq()
     pub pc: usize,
     pub tick: u64,
-    pub format: Box<str>,        // 稳定判类 key
-    pub reason: Box<str>,        // 渲染文本
-    pub action: Box<str>,        // 被打断实例当前动作
-    pub actions: Vec<Box<str>>,  // 中断瞬间可见的动作快照
+    pub format: Box<str>,            // 稳定判类 key
+    pub reason: Box<str>,            // 渲染文本
+    pub action: Box<str>,            // 被打断实例当前动作
+    pub instances: Vec<InstanceView>,
+    pub actions: Vec<Box<str>>,      // 可 Load 的引用（提示，不是白名单）
     pub image_hash: [u8; 32],
 }
 
-pub enum Ruling {
-    Unfinished { source: Box<str>, note: Box<str> },
+pub enum Action {
+    Load { action: Box<str> },
+    Unload { instance: InstanceRef },
+    Silence { instance: InstanceRef },
+    Restore { instance: InstanceRef },
+}
+
+pub enum Verdict { Continue, Stop }  // 只有两个原子结局
+
+pub enum Completion {
+    Unfinished,
     Finished(Verdict),
 }
 
-pub enum Verdict {              // cyberspine-arbiter 的三值原子裁决
-    Continue,
-    Stop,
-    Switch { action: Box<str> },
+pub struct Ruling {
+    pub source: Box<str>,            // 观测用，不进重放
+    pub note: Box<str>,              // 观测用，不进重放
+    pub actions: Vec<Action>,        // 塑形世界，进重放
+    pub completion: Completion,      // 终结标记
 }
 
-pub struct Decision {
-    pub event: EventId,
-    pub ruling: Ruling,
-}
-
-pub struct Batch {
-    pub decisions: Vec<Decision>,
-    pub failure: Option<ArbiterError>,
-}
+pub struct Decision { pub event: EventId, pub ruling: Ruling }
+pub struct Batch { pub decisions: Vec<Decision>, pub failure: Option<ArbiterError> }
 
 pub trait Arbiter {
     fn deliver(&mut self, event: InterruptEvent); // 不得阻塞
-    fn take(&mut self) -> Batch;                  // 无裁决时返回空
+    fn take(&mut self, now: u64) -> Batch;        // 无裁决时返回空；now 是宿主时钟
 }
 ```
 
 `InterruptEvent` 带 `EventId` 而不是 `Interrupt`：票据的 `reason_id` / `seq` 是私有字段，
 本来就序列化不了；而且这样仲裁器在类型上**不可能持有或伪造票据**。
 
-> 命名说明：`Session::resolve` 收的是 `cyberspine-vm::Ruling`，它的 `Verdict` 只有
-> `Continue` / `Stop`；`cyberspine-arbiter::Ruling` 的 `Unfinished` 多两个载荷字段，
-> `Verdict` 多 `Switch`。两个同名类型分处两 crate，正是"VM 不知道动作"的落点；宿主是
-> 唯一的翻译点。
+> 命名说明：`Session::resolve` 收的是 `cyberspine-vm::Ruling`（一个只有 `Unfinished` /
+> `Finished(Verdict)` 的两态枚举）；`cyberspine-arbiter::Ruling` 是同名结构体，多了
+> `source` / `note` / `actions`。VM 那一层不认识动作，宿主把 `Completion` 翻译成
+> `vm::Ruling`，把 `actions` 自己执行掉——这正是"VM 不知道动作"的落点。
 
 ### 7.3 契约
 
@@ -284,43 +297,61 @@ pub trait Arbiter {
 2. 顺序有意义：同一个 `take` 返回的 `Vec` 按序应用；同一事件在一个 batch 里先 `Unfinished`
    后 `Finished` 是合法的（同步内部链不必为了"一轮一 tick"而缓存）。
 3. 实现可以延迟决定；`take` 返回空是正常状态——**静默不等于未完成**。
-4. 内部失败（断连、超时）时，实现为自己的每个未决事件合成 `Finished(Stop)`，并通过
+4. `take(now)` 每个 tick 被调用一次。`now` 是宿主时钟：异步仲裁器用它实现超时，重放用它
+   按 tick 释放每一轮。
+5. 内部失败（断连、超时）时，实现为自己的每个未决事件合成 `Finished(Stop)`，并通过
    `failure` 报告一次；宿主对仍未终结的事件再兜底一次。
-5. 线上回复引用未知 `event`（伪造或重放）：丢弃并报告。已被 `unload` 的实例仍会收到决定，
+6. 回复引用未知 `event`（伪造或重放）：丢弃并报告。已被 `unload` 的实例仍会收到决定，
    `resolve` 以 `UnknownInstance` / `Stale` 拒绝——票据的一次性由 `seq` 保证。
-6. **宿主不设超时、不做链尾兜底**：那是仲裁器的策略。宿主的唯一兜底是 `failure`。
+7. **宿主不设超时、不做链尾兜底**：那是仲裁器的策略。宿主的唯一兜底是 `failure`。
 
 ### 7.4 为什么非阻塞
 
 挂起期间身体仍需被 tick 驱动——停止 tick 不等于停住身体，只等于停止更新。仲裁器的延迟
-（RPC、AI 裁决）因此不能阻塞 tick 循环；这也是 `deliver` / `take` 的形状存在的原因。
+（RPC、AI 裁决）因此不能阻塞 tick 循环。
+
+三种打包都满足：`deliver` 一律只做本地入队；`take` 在 linked / dylib 下是一次进程内调用，
+在 rpc 下把这件事交给工作线程，宿主侧只读本地队列。
 
 ### 7.5 打包
 
 | 打包 | 机制 | 状态 |
 |---|---|---|
-| linked | 实现 `Arbiter`，直接返回 `Batch` | S2，已实现 |
-| dylib | `csp_arbiter_v1`，与 backend ABI 同构的 `create/destroy/call/last_error` | S2+，设计冻结 |
-| rpc | 独立于 body 的连接 + 工作线程；`deliver` 投递、`take` 收裁决 | S3，设计冻结 |
+| linked | 实现 `Arbiter`，直接返回 `Batch` | 已实现 |
+| dylib | `csp_arbiter_v1`，与 backend ABI 同构的 `create/destroy/call/last_error` | 已实现 |
+| rpc | 独立于 body 的连接 + 工作线程；`deliver` 投递、`take` 收裁决 | 已实现 |
 
-线上复用 `CSPB` 帧与 MessagePack，消息为 `Event` / `Ruling`（含 `event_id`）。适配器只保存
-`event_id → 事件` 的表，**自己从不构造票据**；连接失效时把表里所有未决事件合成
-`Finished(Stop)` 并置 `failure`。
+三类协议共享 [`cyberspine-frame`](../crates/cyberspine-frame/src/lib.rs) 的 12 字节帧头，
+各自钉自己的 magic：body 是 `CSPB`，仲裁器是 `CSPA`。所以把 body 帧喂给仲裁器会停在 magic，
+不会解码成错误的消息。载荷仍是 MessagePack。
+
+一次交换是一帧 `Tick { seq, now, events }` 换一帧 `Rulings { decisions, failure }`；握手是
+`Hello` / `Welcome { version, build_id }`。`seq` 让 ABI 难逃的"缓冲不够、重发一次"变成幂等：
+仲裁器缓存上一轮的回复，重发同一个 `seq` 不再投递事件。`source` / `note` / 动作引用各有
+`MAX_TEXT_LEN`（4 KiB）上限，超限的一律按协议错误拒绝。
 
 ### 7.6 失败策略
 
-- `failure`：宿主为所有在途事件合成 `Finished(Stop)`，session 不终止。
-- 未知 action、目标镜像加载失败：报错 + `Stop`（fail-closed）。
+- `failure`：宿主为所有在途事件合成一份**配置的默认裁决**（`--on-interrupt`，默认 `Stop`），
+  session 不终止。
+- 动作装载失败：报错并跳过该动作，`completion` 照常执行；`Load` + `Stop` 的 `Switch` 因此
+  fail-closed 成"没有新动作、旧实例已卸载"。
 - 仲裁器与 backend 同级可信；它只能回 `Ruling`，读改不到实例状态。
 
 ---
 
-## 8. 动作空间与 `Switch`（S2+，设计冻结）
+## 8. 动作空间与 `Switch`（S2+，已实现）
 
-- `Switch` 是**终局**裁决，只能作为 `Finished` 出现；`Unfinished` 不携带动作变更。
-- **不做启动时固定目录**：动作集合由宿主在运行期维护，AI 可以随时生成并注册新动作。
-- 每个事件携带**中断瞬间的可见动作快照**；不做握手目录，也不做 catalog 推送 / epoch 同步。
-- 动作引用是**不透明字符串**，由宿主的 `ActionResolver` 解释（注册表 id 或动作目录里的文件名）：
+- `Switch` 不是第三种裁决：它是 `actions: [Load { action }]` + `completion: Finished(Stop)`。
+  "先 load 后 unload"由"`actions` 在 `completion` 之前执行"保证，不靠约定。
+- `Action` 是原子集：每个操作只动一个对象，失败可跳过，宿主可重放，且都不决定票据的生死。
+- `Unload` 不得指向被裁决实例——那是 `Stop` 的职责。`Silence` / `Restore` 可以，它是
+  非终局的"停身"：实例退出命令合并、保持存活、仍可裁决。
+- 动作集合不固定：`--actions <DIR>` 指向一个目录，`ActionResolver::actions()` 列出它；AI 可以
+  在运行期往目录里写新动作，下一次中断的快照就会看到它。
+- 事件携带两样东西：`instances`（此刻在跑的实例，供 `Unload` / `Silence` / `Restore` 引用）
+  和 `actions`（可以 `Load` 的引用）。都是**中断瞬间的快照**，不做目录握手、不做 epoch 同步。
+- 动作引用是**不透明字符串**，由宿主的 `ActionResolver` 解释：
 
 ```rust
 pub trait ActionResolver {
@@ -329,8 +360,10 @@ pub trait ActionResolver {
 }
 ```
 
-- `Switch` 由 runtime 执行：解析 → 读文件 + loader → **先 `Session::load` 新实例，成功后再
-  `unload` 旧实例**。解析或装载失败时旧实例保持挂起，并回退默认策略。
+- CLI 的实现是"目录 + 文件名"：名字必须是单个路径分量（拒绝 `/`、`\`、`..`），再交给
+  `read_image`。这是卫生规则，不是安全边界——仲裁器与 body 同级可信。
+- `Load` 由 runtime 执行：解析 → 读文件 + loader → `Session::load`。装载失败时跳过该动作，
+  `completion` 照常执行。
 - 不通过 MessagePack 传镜像字节：动作集合在任一瞬时是确定的，用引用 + 宿主解析即可。
 
 ---
@@ -338,32 +371,31 @@ pub trait ActionResolver {
 ## 9. 确定性
 
 - `resume` 仍是纯函数；恢复序列多一个外部输入：**裁决序列**。
-- 重放需要记录 `(tick, instance, event, [(source, note)], decision)`；`Unfinished` 轮次
-  也进记录，否则无法重建仲裁器的内部状态转移。
-- `--trace` 仍只记每 tick 的命令向量。
-- 渲染文本依赖实例状态，属于运行产物，不进入 ISA 契约。
+- 记录的是**每一轮**裁决：`(event, tick, actions, completion)`。`tick` 是该轮被应用的 tick，
+  不是中断发生的 tick——同一事件的多轮可以落在不同 tick 上，副作用时序才可复现。
+- 不记录 `source` / `note`：那是观测数据，与 VM 重放无关。
+- 重放按 `tick <= now` 逐轮释放；缺失记录 = 该实例保持挂起，与原运行一致。
+- `--decisions <PATH>` 写 JSON Lines，`--replay <PATH>` 读回。
+- `--trace` 仍只记每 tick 的命令向量；渲染文本属于运行产物，不进入 ISA 契约。
 
 ---
 
 ## 10. CLI
 
-当前（S1）：
-
 ```bash
 cyinevm -i idle.csp -i walk.csp --ticks 300
 cyinevm -i interrupt.csp --on-interrupt continue --until-halt
+cyinevm -i interrupt.csp --actions actions/ --interrupt dylib:fallback.dll --decisions run.jsonl
+cyinevm -i interrupt.csp --replay run.jsonl --trace
 ```
 
 - `-i` 可重复，顺序 = 装载顺序；共享一个时钟与一个 body。
-- `--on-interrupt` 是**退化成单轮的内置仲裁器**：每次中断立刻回 `Finished(Continue|Stop)`，
-  不是链的简化版，而是 `Unfinished` 恒不出现的特例。
+- `--interrupt dylib:<path>|rpc:<host>:<port>` 选择仲裁器；省略时用内置单轮仲裁器。
+- `--on-interrupt stop|continue` 现在是**兜底默认裁决**：仲裁器整体失效时宿主用它回答。
+- `--actions <DIR>` 给仲裁器一个可 `Load` 的动作目录。
+- `--decisions <PATH>` 记录每一轮裁决；`--replay <PATH>` 用记录代替仲裁器。
+- 内置仲裁器是 `Unfinished` 恒不出现的特例，不是链的简化版。
 - 中断报告走 stderr（实例、路径、pc、tick、插值后的原因）；退出码不变。
-
-目标（S2）：
-
-```bash
-cyinevm -i a.csp -i b.csp --actions actions/ --interrupt dylib:handler.dll
-```
 
 ---
 
@@ -386,10 +418,13 @@ cyinevm -i a.csp -i b.csp --actions actions/ --interrupt dylib:handler.dll
 | `reasons` 表、头字段、M7/I9 | [`crates/cyberspine-binfmt/src/image.rs`](../crates/cyberspine-binfmt/src/image.rs)、[`load.rs`](../crates/cyberspine-binfmt/src/load.rs) |
 | 字符串操作数、模板改写、reason 表 | [`crates/cyberspine-asm/src/assembler.rs`](../crates/cyberspine-asm/src/assembler.rs)、[`text.rs`](../crates/cyberspine-asm/src/assembler/text.rs) |
 | 状态机、`resume_interrupted` | [`crates/cyberspine-exec/src/instance.rs`](../crates/cyberspine-exec/src/instance.rs) |
-| 渲染、票据、`resolve` / `unload` / `parked` | [`crates/cyberspine-vm/src/host.rs`](../crates/cyberspine-vm/src/host.rs) |
-| 裁决流、`InterruptEvent` / `Ruling` / `Batch` / `Arbiter` | [`crates/cyberspine-arbiter/src/lib.rs`](../crates/cyberspine-arbiter/src/lib.rs) |
-| 在途票据表、`failure` 兜底 | [`crates/cyberspine-runtime/src/run.rs`](../crates/cyberspine-runtime/src/run.rs) |
-| 多镜像、内置策略 | [`crates/cyberspine-runtime/src/run.rs`](../crates/cyberspine-runtime/src/run.rs)、[`cli.rs`](../crates/cyberspine-runtime/src/cli.rs) |
+| 渲染、票据、`resolve` / `unload` / `parked`、静默 | [`crates/cyberspine-vm/src/host.rs`](../crates/cyberspine-vm/src/host.rs) |
+| 裁决流、`InterruptEvent` / `Ruling` / `Action` / `Batch` / `Arbiter` | [`crates/cyberspine-arbiter/src/lib.rs`](../crates/cyberspine-arbiter/src/lib.rs) |
+| 帧头（`CSPB` / `CSPA` 共用） | [`crates/cyberspine-frame/src/lib.rs`](../crates/cyberspine-frame/src/lib.rs) |
+| ABI、dylib、rpc、线上消息 | [`crates/cyberspine-arbiter/src/`](../crates/cyberspine-arbiter/src/) 的 `abi.rs` / `dylib.rs` / `rpc.rs` / `wire.rs` |
+| 在途票据表、`failure` 兜底、`--interrupt` / `--actions` | [`crates/cyberspine-runtime/src/run.rs`](../crates/cyberspine-runtime/src/run.rs)、[`cli.rs`](../crates/cyberspine-runtime/src/cli.rs) |
+| 动作目录 | [`crates/cyberspine-runtime/src/actions.rs`](../crates/cyberspine-runtime/src/actions.rs) |
+| 决策日志与重放 | [`crates/cyberspine-runtime/src/decisions.rs`](../crates/cyberspine-runtime/src/decisions.rs) |
 
 ---
 
@@ -407,3 +442,6 @@ cyinevm -i a.csp -i b.csp --actions actions/ --interrupt dylib:handler.dll
 | 每个事件恰好一条 `Decision` | 改为 `Unfinished* + Finished`：多轮不必让宿主重投递事件 |
 | 链是宿主的配置 | 链下沉为仲裁器实现；宿主只维护在途表，不设超时、不做链尾兜底 |
 | `InterruptEvent` 携带票据 | 改为 `EventId` + 只读字段；票据留在宿主，仲裁器不可能持有或伪造 |
+| `Verdict::Switch` 当第三种裁决 | `Switch` 是 `Load` + `Stop`；原子集与完成性拆成两个正交维度 |
+| 每个 dylib 调用只执行一次 | ABI 在缓冲不够时会重发同一请求；加 `seq` 缓存，让重发幂等 |
+| 重放只记终局裁决 | 一轮 `Unfinished` 也可能带 `actions`；按轮记录、按 tick 释放 |

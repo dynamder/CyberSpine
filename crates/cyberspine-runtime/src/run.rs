@@ -357,6 +357,7 @@ fn run_session<B: Backend, P: RigPolicy>(
         open_arbiter(options)?,
         open_actions(options)?,
         open_decisions(options)?,
+        fallback(options.on_interrupt),
     );
 
     let stop = Arc::new(AtomicBool::new(false));
@@ -443,6 +444,14 @@ fn open_decisions(options: &Options) -> Result<Option<Log>, Error> {
     match &options.decisions {
         Some(path) => Ok(Some(Log::create(path)?)),
         None => Ok(None),
+    }
+}
+
+/// What the host answers when the arbiter itself cannot.
+fn fallback(policy: OnInterrupt) -> ArbiterVerdict {
+    match policy {
+        OnInterrupt::Stop => ArbiterVerdict::Stop,
+        OnInterrupt::Continue => ArbiterVerdict::Continue,
     }
 }
 
@@ -533,15 +542,23 @@ struct Interrupts<A: Arbiter> {
     inflight: HashMap<EventId, InFlight>,
     resolver: Option<Box<dyn ActionResolver>>,
     log: Option<Log>,
+    /// What the host answers when the arbiter itself is gone.
+    default: ArbiterVerdict,
 }
 
 impl<A: Arbiter> Interrupts<A> {
-    fn new(arbiter: A, resolver: Option<Box<dyn ActionResolver>>, log: Option<Log>) -> Self {
+    fn new(
+        arbiter: A,
+        resolver: Option<Box<dyn ActionResolver>>,
+        log: Option<Log>,
+        default: ArbiterVerdict,
+    ) -> Self {
         Self {
             arbiter,
             inflight: HashMap::new(),
             resolver,
             log,
+            default,
         }
     }
 
@@ -618,8 +635,8 @@ impl<A: Arbiter> Interrupts<A> {
             eprintln!("warning: the arbiter failed: {error}");
             for (_, inflight) in self.inflight.drain() {
                 let instance = inflight.ticket.instance;
-                let settled = settle(session, inflight.ticket, ArbiterVerdict::Stop);
-                forget(settled, ArbiterVerdict::Stop, context, instance);
+                let settled = settle(session, inflight.ticket, self.default);
+                forget(settled, self.default, context, instance);
             }
         }
 
@@ -844,6 +861,7 @@ mod tests {
             ]),
             None,
             None,
+            ArbiterVerdict::Stop,
         );
 
         interrupts
@@ -862,8 +880,12 @@ mod tests {
     #[test]
     fn an_unfinished_round_keeps_the_ticket_until_the_next_one() {
         let (mut session, id, mut context) = parked_session();
-        let mut interrupts =
-            Interrupts::new(Scripted::new(vec![unfinished("no rule")]), None, None);
+        let mut interrupts = Interrupts::new(
+            Scripted::new(vec![unfinished("no rule")]),
+            None,
+            None,
+            ArbiterVerdict::Stop,
+        );
 
         interrupts
             .pump(&mut session, &mut context)
@@ -910,6 +932,7 @@ mod tests {
             )]),
             None,
             None,
+            ArbiterVerdict::Stop,
         );
 
         interrupts
@@ -954,6 +977,7 @@ mod tests {
             )]),
             Some(Box::new(resolver)),
             None,
+            ArbiterVerdict::Stop,
         );
 
         interrupts
