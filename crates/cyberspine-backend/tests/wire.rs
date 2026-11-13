@@ -132,21 +132,21 @@ fn the_header_is_checked_before_the_payload() {
 
     assert!(matches!(
         wire::parse_header(&good[..4]),
-        Err(wire::WireError::ShortHeader(4))
+        Err(wire::WireError::Frame(wire::FrameError::ShortHeader(4)))
     ));
 
     let mut bad = good.clone();
     bad[0] = b'X';
     assert!(matches!(
         wire::parse_header(&bad),
-        Err(wire::WireError::Magic(magic)) if magic == *b"XSPB"
+        Err(wire::WireError::Frame(wire::FrameError::Magic(magic))) if magic == *b"XSPB"
     ));
 
     let mut bad = good.clone();
     bad[4] = 2;
     assert!(matches!(
         wire::parse_header(&bad),
-        Err(wire::WireError::Version(2))
+        Err(wire::WireError::Frame(wire::FrameError::Version(2)))
     ));
 
     let mut bad = good.clone();
@@ -160,17 +160,17 @@ fn the_header_is_checked_before_the_payload() {
     bad[7] = 1;
     assert!(matches!(
         wire::parse_header(&bad),
-        Err(wire::WireError::Flags(1))
+        Err(wire::WireError::Frame(wire::FrameError::Flags(1)))
     ));
 
     let mut bad = good.clone();
     bad[8] = 8;
     assert!(matches!(
         wire::split(&bad),
-        Err(wire::WireError::Length {
+        Err(wire::WireError::Frame(wire::FrameError::Length {
             declared: 8,
             actual: 7
-        })
+        }))
     ));
 }
 

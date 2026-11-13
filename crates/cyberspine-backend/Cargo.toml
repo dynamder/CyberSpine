@@ -15,6 +15,7 @@ rpc = ["dep:tokio"]
 export = []
 
 [dependencies]
+cyberspine-frame = { path = "../cyberspine-frame" }
 cyberspine-manifest = { path = "../cyberspine-manifest" }
 cyberspine-rig = { path = "../cyberspine-rig" }
 cyberspine-vm = { path = "../cyberspine-vm" }

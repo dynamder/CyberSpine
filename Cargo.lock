@@ -241,6 +241,7 @@ dependencies = [
 name = "cyberspine-backend"
 version = "0.1.0"
 dependencies = [
+ "cyberspine-frame",
  "cyberspine-manifest",
  "cyberspine-rig",
  "cyberspine-testkit",
@@ -340,6 +341,10 @@ dependencies = [
  "cyberspine-isa",
  "thiserror",
 ]
+
+[[package]]
+name = "cyberspine-frame"
+version = "0.1.0"
 
 [[package]]
 name = "cyberspine-isa"

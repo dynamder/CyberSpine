@@ -24,21 +24,23 @@
 //! That gives one command vector exactly one encoding, so a recorded trace can be
 //! compared or hashed without normalising it first.
 
+use cyberspine_frame as frame;
+pub use cyberspine_frame::{FrameError, HEADER_LEN, MAX_FRAME_LEN};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-/// The first four bytes of every frame.
+/// The first four bytes of every body frame.
 pub const MAGIC: [u8; 4] = *b"CSPB";
 
 /// The protocol version this crate speaks. A peer that disagrees is refused
 /// before a single message is interpreted.
 pub const VERSION: u16 = 1;
 
-/// `magic | version | kind | flags | payload_len`.
-pub const HEADER_LEN: usize = 12;
-
-/// The largest payload this crate will read or write.
-pub const MAX_FRAME_LEN: usize = 1 << 20;
+/// What this protocol pins in the shared frame head.
+const PROTOCOL: frame::Protocol = frame::Protocol {
+    magic: MAGIC,
+    version: VERSION,
+};
 
 /// The largest manifest a body may send in its [`Welcome`].
 pub const MAX_RIG_JSON: usize = 64 << 10;
@@ -159,20 +161,10 @@ pub struct Header {
 /// Why a frame or payload was refused.
 #[derive(Debug, thiserror::Error)]
 pub enum WireError {
-    #[error("a frame needs at least the {HEADER_LEN}-byte header, got {0}")]
-    ShortHeader(usize),
-    #[error("bad frame magic {0:02x?}")]
-    Magic([u8; 4]),
-    #[error("protocol version {0} is not {VERSION}")]
-    Version(u16),
+    #[error(transparent)]
+    Frame(#[from] FrameError),
     #[error("unknown frame kind {0}")]
     Kind(u8),
-    #[error("frame flags must be zero, got {0:#04x}")]
-    Flags(u8),
-    #[error("frame declares {declared} payload bytes but carries {actual}")]
-    Length { declared: usize, actual: usize },
-    #[error("a payload of {0} bytes is above the {MAX_FRAME_LEN}-byte cap")]
-    TooLarge(usize),
     #[error("the payload does not decode: {0}")]
     Decode(#[from] rmp_serde::decode::Error),
     #[error("the payload does not encode: {0}")]
@@ -191,56 +183,23 @@ pub fn encode<T: Serialize>(kind: Kind, value: &T, out: &mut Vec<u8>) -> Result<
     rmp_serde::encode::write(out, value)?;
 
     let len = out.len() - HEADER_LEN;
-    if len > MAX_FRAME_LEN {
-        return Err(WireError::TooLarge(len));
-    }
-    write_header(kind, len, out);
+    frame::write_header(&PROTOCOL, kind as u8, len, out)?;
     Ok(())
-}
-
-fn write_header(kind: Kind, len: usize, out: &mut [u8]) {
-    out[..4].copy_from_slice(&MAGIC);
-    out[4..6].copy_from_slice(&VERSION.to_le_bytes());
-    out[6] = kind as u8;
-    out[7] = 0;
-    out[8..12].copy_from_slice(&(len as u32).to_le_bytes());
 }
 
 /// Read a frame header, leaving the payload to the caller.
 pub fn parse_header(bytes: &[u8]) -> Result<Header, WireError> {
-    if bytes.len() < HEADER_LEN {
-        return Err(WireError::ShortHeader(bytes.len()));
-    }
-    let magic: [u8; 4] = bytes[..4].try_into().expect("four bytes");
-    if magic != MAGIC {
-        return Err(WireError::Magic(magic));
-    }
-    let version = u16::from_le_bytes([bytes[4], bytes[5]]);
-    if version != VERSION {
-        return Err(WireError::Version(version));
-    }
-    let kind = Kind::try_from(bytes[6])?;
-    if bytes[7] != 0 {
-        return Err(WireError::Flags(bytes[7]));
-    }
-    let len = u32::from_le_bytes(bytes[8..12].try_into().expect("four bytes")) as usize;
-    if len > MAX_FRAME_LEN {
-        return Err(WireError::TooLarge(len));
-    }
-    Ok(Header { kind, len })
+    let header = frame::parse_header(&PROTOCOL, bytes)?;
+    Ok(Header {
+        kind: Kind::try_from(header.kind)?,
+        len: header.len,
+    })
 }
 
 /// Split exactly one frame into its kind and payload.
 pub fn split(bytes: &[u8]) -> Result<(Kind, &[u8]), WireError> {
-    let header = parse_header(bytes)?;
-    let actual = bytes.len() - HEADER_LEN;
-    if header.len != actual {
-        return Err(WireError::Length {
-            declared: header.len,
-            actual,
-        });
-    }
-    Ok((header.kind, &bytes[HEADER_LEN..]))
+    let (kind, payload) = frame::split(&PROTOCOL, bytes)?;
+    Ok((Kind::try_from(kind)?, payload))
 }
 
 /// Decode a payload.
