@@ -458,3 +458,47 @@ fn continue_lets_the_instance_halt_on_the_next_tick() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(stderr(&output).contains("why 0.5"), "{}", stderr(&output));
 }
+
+#[test]
+fn a_decision_log_replays_the_same_run() {
+    let dir = scratch("replay");
+    let image = write_image(&dir, "interrupt.csp", INTERRUPT, MANIFEST);
+    let log = dir.join("decisions.jsonl");
+
+    let first = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("3"),
+        OsStr::new("--unpaced"),
+        OsStr::new("--quiet"),
+        OsStr::new("--trace"),
+        OsStr::new("--on-interrupt"),
+        OsStr::new("continue"),
+        OsStr::new("--decisions"),
+        log.as_os_str(),
+    ]);
+    assert!(first.status.success(), "stderr: {}", stderr(&first));
+
+    let text = fs::read_to_string(&log).expect("the log is written");
+    assert!(text.contains("\"finished\":\"continue\""), "log: {text}");
+    assert_eq!(text.lines().count(), 1, "one interrupt, one round: {text}");
+
+    let replay = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("3"),
+        OsStr::new("--unpaced"),
+        OsStr::new("--quiet"),
+        OsStr::new("--trace"),
+        OsStr::new("--replay"),
+        log.as_os_str(),
+    ]);
+    assert!(replay.status.success(), "stderr: {}", stderr(&replay));
+    assert_eq!(
+        stdout(&replay),
+        stdout(&first),
+        "the replayed trace is the recorded one"
+    );
+}

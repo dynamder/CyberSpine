@@ -31,6 +31,14 @@ pub struct Args {
     #[arg(long, value_name = "DIR")]
     pub actions: Option<PathBuf>,
 
+    /// Replay a decision log instead of consulting an arbiter.
+    #[arg(long, value_name = "PATH", conflicts_with = "interrupt")]
+    pub replay: Option<PathBuf>,
+
+    /// Record every applied ruling as JSON Lines.
+    #[arg(long, value_name = "PATH")]
+    pub decisions: Option<PathBuf>,
+
     /// What the arbiter falls back to when it cannot decide (`stop` or `continue`).
     #[arg(long, value_enum, default_value_t = OnInterrupt::Stop)]
     pub on_interrupt: OnInterrupt,
@@ -83,6 +91,8 @@ impl Args {
             on_interrupt: self.on_interrupt,
             interrupt: self.interrupt.clone(),
             actions: self.actions.clone(),
+            replay: self.replay.clone(),
+            decisions: self.decisions.clone(),
         }
     }
 }

@@ -21,6 +21,7 @@ use cyberspine_vm::{
 use thiserror::Error;
 
 use crate::actions::{ActionDirectory, ActionError, ActionResolver};
+use crate::decisions::{Log, LogError, Record, Replay};
 use crate::linked::{LinkedBody, Notice};
 use crate::trace::Trace;
 
@@ -60,6 +61,10 @@ pub struct Options {
     pub interrupt: Option<ArbiterSpec>,
     /// The directory an arbiter may `Load` from.
     pub actions: Option<PathBuf>,
+    /// Replay a decision log instead of consulting an arbiter.
+    pub replay: Option<PathBuf>,
+    /// Record every applied ruling here.
+    pub decisions: Option<PathBuf>,
 }
 
 /// A build capability an external backend needs.
@@ -118,6 +123,8 @@ pub enum Error {
     Arbiter(#[from] ArbiterError),
     #[error("the action directory is unusable: {0}")]
     Actions(#[from] ActionError),
+    #[error(transparent)]
+    Decisions(#[from] LogError),
 }
 
 /// Run the body linked into this binary.
@@ -346,7 +353,11 @@ fn run_session<B: Backend, P: RigPolicy>(
         return Ok(());
     }
 
-    let mut interrupts = Interrupts::new(open_arbiter(options)?, open_actions(options)?);
+    let mut interrupts = Interrupts::new(
+        open_arbiter(options)?,
+        open_actions(options)?,
+        open_decisions(options)?,
+    );
 
     let stop = Arc::new(AtomicBool::new(false));
     ctrlc::set_handler({
@@ -409,8 +420,12 @@ fn interrupted(stop: &AtomicBool) -> bool {
     stop.load(Ordering::SeqCst)
 }
 
-/// The arbiter this run will consult: the named one, or the built-in single round.
+/// The arbiter this run will consult: a replay, a named one, or the built-in
+/// single round.
 fn open_arbiter(options: &Options) -> Result<Box<dyn Arbiter>, Error> {
+    if let Some(path) = &options.replay {
+        return Ok(Box::new(Replay::load(path)?));
+    }
     match &options.interrupt {
         Some(spec) => Ok(spec.open()?),
         None => Ok(Box::new(BuiltinArbiter::new(options.on_interrupt))),
@@ -420,6 +435,13 @@ fn open_arbiter(options: &Options) -> Result<Box<dyn Arbiter>, Error> {
 fn open_actions(options: &Options) -> Result<Option<Box<dyn ActionResolver>>, Error> {
     match &options.actions {
         Some(root) => Ok(Some(Box::new(ActionDirectory::open(root)?))),
+        None => Ok(None),
+    }
+}
+
+fn open_decisions(options: &Options) -> Result<Option<Log>, Error> {
+    match &options.decisions {
+        Some(path) => Ok(Some(Log::create(path)?)),
         None => Ok(None),
     }
 }
@@ -438,7 +460,7 @@ fn observe<B: Backend, P: RigPolicy, A: Arbiter>(
     interrupts: &mut Interrupts<A>,
 ) -> Result<bool, Error> {
     report_faults(session)?;
-    interrupts.pump(session, context);
+    interrupts.pump(session, context)?;
 
     if let Some(trace) = trace {
         trace.drain(session)?;
@@ -510,14 +532,16 @@ struct Interrupts<A: Arbiter> {
     arbiter: A,
     inflight: HashMap<EventId, InFlight>,
     resolver: Option<Box<dyn ActionResolver>>,
+    log: Option<Log>,
 }
 
 impl<A: Arbiter> Interrupts<A> {
-    fn new(arbiter: A, resolver: Option<Box<dyn ActionResolver>>) -> Self {
+    fn new(arbiter: A, resolver: Option<Box<dyn ActionResolver>>, log: Option<Log>) -> Self {
         Self {
             arbiter,
             inflight: HashMap::new(),
             resolver,
+            log,
         }
     }
 
@@ -525,7 +549,7 @@ impl<A: Arbiter> Interrupts<A> {
         &mut self,
         session: &mut Session<B, P>,
         context: &mut RunContext,
-    ) {
+    ) -> Result<(), Error> {
         for ticket in session.take_interrupts() {
             let event = EventId::new(ticket.seq());
             let (action, instances, image_hash) = context.snapshot(ticket.instance);
@@ -562,6 +586,9 @@ impl<A: Arbiter> Interrupts<A> {
                 eprintln!("warning: the arbiter answered unknown event {event}");
                 continue;
             };
+            if let Some(log) = self.log.as_mut() {
+                log.write(&Record::new(event, now, &ruling))?;
+            }
             apply_actions(
                 session,
                 context,
@@ -595,6 +622,8 @@ impl<A: Arbiter> Interrupts<A> {
                 forget(settled, ArbiterVerdict::Stop, context, instance);
             }
         }
+
+        Ok(())
     }
 
     fn repark<B: Backend, P: RigPolicy>(
@@ -814,9 +843,12 @@ mod tests {
                 finished(ArbiterVerdict::Continue),
             ]),
             None,
+            None,
         );
 
-        interrupts.pump(&mut session, &mut context);
+        interrupts
+            .pump(&mut session, &mut context)
+            .expect("the pump runs");
 
         assert!(session.parked().is_empty());
         assert_eq!(session.instance(id).map(|instance| instance.pc()), Some(1));
@@ -830,16 +862,21 @@ mod tests {
     #[test]
     fn an_unfinished_round_keeps_the_ticket_until_the_next_one() {
         let (mut session, id, mut context) = parked_session();
-        let mut interrupts = Interrupts::new(Scripted::new(vec![unfinished("no rule")]), None);
+        let mut interrupts =
+            Interrupts::new(Scripted::new(vec![unfinished("no rule")]), None, None);
 
-        interrupts.pump(&mut session, &mut context);
+        interrupts
+            .pump(&mut session, &mut context)
+            .expect("the pump runs");
         assert_eq!(session.parked(), vec![id], "the first round did not decide");
 
         interrupts
             .arbiter
             .rounds
             .push(finished(ArbiterVerdict::Stop));
-        interrupts.pump(&mut session, &mut context);
+        interrupts
+            .pump(&mut session, &mut context)
+            .expect("the pump runs");
 
         assert!(session.instance(id).is_none());
         assert!(session.is_idle());
@@ -872,9 +909,12 @@ mod tests {
                 ArbiterVerdict::Continue,
             )]),
             None,
+            None,
         );
 
-        interrupts.pump(&mut session, &mut context);
+        interrupts
+            .pump(&mut session, &mut context)
+            .expect("the pump runs");
 
         assert!(
             session.instance(other).is_none(),
@@ -913,9 +953,12 @@ mod tests {
                 ArbiterVerdict::Stop,
             )]),
             Some(Box::new(resolver)),
+            None,
         );
 
-        interrupts.pump(&mut session, &mut context);
+        interrupts
+            .pump(&mut session, &mut context)
+            .expect("the pump runs");
 
         assert!(
             session.instance(interrupted).is_none(),

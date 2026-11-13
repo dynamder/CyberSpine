@@ -398,6 +398,8 @@ dependencies = [
  "cyberspine-manifest",
  "cyberspine-testkit",
  "cyberspine-vm",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 

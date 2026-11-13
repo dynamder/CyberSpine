@@ -7,6 +7,7 @@
 
 pub mod actions;
 pub mod cli;
+pub mod decisions;
 pub mod linked;
 pub mod run;
 mod trace;
@@ -14,5 +15,6 @@ mod trace;
 pub use actions::{ActionDirectory, ActionError, ActionResolver};
 pub use cli::Args;
 pub use cyberspine_core::binfmt::load::VerifiedImage;
+pub use decisions::{LogError, Record, Replay};
 pub use linked::{LinkedBody, Notice, Official};
 pub use run::{Error, Feature, OnInterrupt, Options, RunMode, Stop, run_external, run_linked};

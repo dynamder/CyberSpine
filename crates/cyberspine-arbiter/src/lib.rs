@@ -129,6 +129,7 @@ pub struct InterruptEvent {
 /// `Unload` of the interrupted instance is therefore not an action — it is
 /// [`Verdict::Stop`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Action {
     /// Resolve an action reference and load it as a new instance.
     Load { action: Box<str> },
@@ -143,6 +144,7 @@ pub enum Action {
 
 /// The fate of the interrupted instance. Exactly two atomic outcomes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Verdict {
     /// Release the instance; it resumes after the `INTR`.
     Continue,
@@ -156,6 +158,7 @@ pub enum Verdict {
 /// The marker sits on the ruling rather than in the verdict: the two verdicts
 /// stay atomic, and "this round did not decide" is not a third one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Completion {
     /// This round did not decide. The ticket stays live; the next round may
     /// still answer it.
