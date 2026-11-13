@@ -38,6 +38,9 @@ pub struct Server<B: Backend> {
     muscles: Vec<f32>,
     commands: Vec<Option<f32>>,
     reply: Vec<u8>,
+    /// The request sequence last executed, so a transport buffer retry does not
+    /// run `Commit` / `Step` a second time.
+    last_seq: Option<u32>,
 }
 
 impl<B: Backend> Server<B> {
@@ -70,6 +73,7 @@ impl<B: Backend> Server<B> {
             muscles: vec![0.0; shape.muscles],
             commands: vec![None; shape.muscles],
             reply: Vec::new(),
+            last_seq: None,
             body,
             rig,
             build_id,
@@ -136,6 +140,9 @@ impl<B: Backend> Server<B> {
 
             Kind::Sample => {
                 let request: Sample = wire::decode(payload).map_err(protocol)?;
+                if self.seen(request.seq) {
+                    return Ok(());
+                }
                 let mut snapshot = Snapshot {
                     f: &mut self.f,
                     i: &mut self.i,
@@ -156,6 +163,9 @@ impl<B: Backend> Server<B> {
 
             Kind::Commit => {
                 let request: Commit = wire::decode(payload).map_err(protocol)?;
+                if self.seen(request.seq) {
+                    return Ok(());
+                }
                 wire::validate_commit(&request, self.shape.muscles).map_err(protocol)?;
                 for (index, slot) in self.commands.iter_mut().enumerate() {
                     *slot = wire::is_set(&request.mask, index).then(|| request.values[index]);
@@ -169,6 +179,9 @@ impl<B: Backend> Server<B> {
 
             Kind::Step => {
                 let request: Step = wire::decode(payload).map_err(protocol)?;
+                if self.seen(request.seq) {
+                    return Ok(());
+                }
                 self.body
                     .step(request.dt)
                     .map_err(|error| refused(request.seq, error))?;
@@ -182,6 +195,20 @@ impl<B: Backend> Server<B> {
                 message: "a Failure is a reply, not a request".into(),
             }),
         }
+    }
+
+    /// Whether this request was already executed.
+    ///
+    /// The ABI reports a too-small reply buffer *after* running the request, so a
+    /// transport that retries would step the body twice. Sequence numbers make
+    /// the retry a lookup instead of a second execution; the reply it wants is
+    /// still in `self.reply`.
+    fn seen(&mut self, seq: u32) -> bool {
+        if self.last_seq == Some(seq) {
+            return true;
+        }
+        self.last_seq = Some(seq);
+        false
     }
 }
 

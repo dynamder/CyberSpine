@@ -2,7 +2,7 @@
 //!
 //! A [`RemoteArbiter`] is an ordinary [`Arbiter`]: the handshake pins the
 //! protocol version once, and every tick then becomes one request frame and one
-//! reply frame. The bytes are [`wire`](crate::wire)'s, so the same type drives a
+//! reply frame. The bytes are [`wire`]'s, so the same type drives a
 //! dynamic library and a TCP connection.
 //!
 //! # Delivery is local

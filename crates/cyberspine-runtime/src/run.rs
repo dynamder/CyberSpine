@@ -40,11 +40,13 @@ pub enum RunMode {
     UnpacedTicks(u64),
 }
 
-/// What the built-in arbiter does with an interrupt.
+/// What the built-in arbiter does with an interrupt, and what the host falls
+/// back to when an external arbiter is gone.
 ///
-/// A real host replaces this with a plugin (`docs/interrupt.md`); the CLI has no
-/// way to ask an external program, so it offers the two decisions that need no
-/// state: stop the instance, or let it continue.
+/// The built-in is the degenerate case of the stream: it answers every interrupt
+/// with one `Finished` round and never asks anyone. An external arbiter
+/// (`--interrupt`) may rule in several rounds, and `Stop` / `Continue` here only
+/// decide what happens when it cannot answer at all (`docs/interrupt.md` §7.6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum OnInterrupt {
     Stop,
@@ -67,7 +69,7 @@ pub struct Options {
     pub decisions: Option<PathBuf>,
 }
 
-/// A build capability an external backend needs.
+/// A build capability an external backend or arbiter needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Feature {
     Dylib,
