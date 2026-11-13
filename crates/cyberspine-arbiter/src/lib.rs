@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 pub mod abi;
 pub mod remote;
 pub mod server;
+pub mod spec;
 pub mod wire;
 
 #[cfg(feature = "dylib")]
@@ -34,8 +35,15 @@ pub mod dylib;
 #[cfg(feature = "export")]
 pub mod export;
 
+#[cfg(feature = "rpc")]
+pub mod rpc;
+
 pub use remote::{RemoteArbiter, Transport};
 pub use server::Server;
+pub use spec::{ArbiterSpec, SpecError};
+
+#[cfg(feature = "rpc")]
+pub use rpc::RpcArbiter;
 
 /// The host's name for one interrupt, stable for the life of the ticket.
 ///

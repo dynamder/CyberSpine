@@ -217,12 +217,14 @@ dependencies = [
 name = "cyberspine-arbiter"
 version = "0.1.0"
 dependencies = [
+ "cyberspine-arbiter-fixture",
  "cyberspine-frame",
  "libloading",
  "rmp-serde",
  "serde",
  "serde_json",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
