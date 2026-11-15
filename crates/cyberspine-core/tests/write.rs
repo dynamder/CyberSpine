@@ -59,7 +59,7 @@ fn a_halt_only_image_is_the_minimum_136_bytes() {
     // spec constant or derivable from a one-instruction, metadata-free image.
     let expected_header: [u8; 64] = [
         b'C', b'S', b'P', b'X', //  0  magic
-        0x00, 0x08, //  4  format_version = 1.0.0, packed 5/5/6
+        0x40, 0x08, //  4  format_version = 1.1.0, packed 5/5/6
         0x01, 0x00, //  6  isa_version = 1 (FLUSH landed without stepping it)
         0x00, 0x00, //  8  reserved_a = 0
         0x00, 0x00, // 10  flags = 0

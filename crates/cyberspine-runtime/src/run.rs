@@ -140,6 +140,7 @@ pub fn run_linked<L: LinkedBody>(paths: &[PathBuf], options: &Options) -> Result
     let mut context = Registry::new(&image);
     let layer = image.header().layer;
     let hash = image.content_hash();
+    let debug = image.debug().cloned();
     let (mut session, id) = host.load(image).map_err(|(_, source)| Error::Load {
         path: first.clone(),
         source,
@@ -149,6 +150,7 @@ pub fn run_linked<L: LinkedBody>(paths: &[PathBuf], options: &Options) -> Result
         layer,
         hash,
         first.display().to_string().into_boxed_str(),
+        debug,
     );
     load_rest(&mut session, &mut context, rest)?;
 
@@ -168,6 +170,7 @@ pub fn run_external(spec: &BackendSpec, paths: &[PathBuf], options: &Options) ->
     let mut context = Registry::new(&image);
     let layer = image.header().layer;
     let hash = image.content_hash();
+    let debug = image.debug().cloned();
     let (mut session, id) = host.load(image).map_err(|(_, source)| Error::Load {
         path: first.clone(),
         source,
@@ -177,6 +180,7 @@ pub fn run_external(spec: &BackendSpec, paths: &[PathBuf], options: &Options) ->
         layer,
         hash,
         first.display().to_string().into_boxed_str(),
+        debug,
     );
     load_rest(&mut session, &mut context, rest)?;
 
@@ -200,11 +204,18 @@ fn load_rest<B: Backend, P: RigPolicy>(
         })?;
         let layer = image.header().layer;
         let hash = image.content_hash();
+        let debug = image.debug().cloned();
         let id = session.load(image).map_err(|source| Error::Load {
             path: path.clone(),
             source,
         })?;
-        context.push(id, layer, hash, path.display().to_string().into_boxed_str());
+        context.push(
+            id,
+            layer,
+            hash,
+            path.display().to_string().into_boxed_str(),
+            debug,
+        );
     }
     Ok(())
 }
@@ -388,7 +399,7 @@ fn observe<B: Backend, P: RigPolicy, A: Arbiter>(
     trace: Option<&mut Trace>,
     interrupts: &mut Interrupts<A>,
 ) -> Result<bool, Error> {
-    report_faults(session)?;
+    report_faults(session, context)?;
     for report in interrupts.pump(session, context)? {
         if !report.is_silent() {
             eprintln!("{report}");
@@ -444,7 +455,10 @@ impl Arbiter for BuiltinArbiter {
     }
 }
 
-fn report_faults<B: Backend, P: RigPolicy>(session: &mut Session<B, P>) -> Result<(), Error> {
+fn report_faults<B: Backend, P: RigPolicy>(
+    session: &mut Session<B, P>,
+    context: &Registry,
+) -> Result<(), Error> {
     let faults = session.take_faults();
     if faults.is_empty() {
         return Ok(());
@@ -452,10 +466,20 @@ fn report_faults<B: Backend, P: RigPolicy>(session: &mut Session<B, P>) -> Resul
 
     let mut message = String::new();
     for record in faults {
-        message.push_str(&format!(
-            "  instance {}: {}\n",
-            record.instance, record.fault
-        ));
+        message.push_str(&format!("  instance {}: {}", record.instance, record.fault));
+        // §8 of asm.md: a debug build carries the source position; a release
+        // build says only the pc, and that is the whole difference.
+        if let Some(debug) = context.debug_of(record.instance)
+            && let Some(line) = debug.line(record.fault.pc())
+        {
+            message.push_str(&format!(
+                " ({}:{}:{})",
+                debug.source(),
+                line.line,
+                line.column
+            ));
+        }
+        message.push('\n');
     }
     Err(Error::Faulted(message))
 }

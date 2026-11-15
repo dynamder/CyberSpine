@@ -14,7 +14,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use cyberspine_asm::assembler::{generate_image, parse};
+use cyberspine_asm::assembler::{generate_image, generate_image_debug, parse};
 use cyberspine_core::binfmt::image::Image;
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::rig::Rig;
@@ -94,9 +94,14 @@ fn rig_of(text: &str) -> Rig {
 }
 
 /// The image the source is supposed to produce, straight from the library.
+///
+/// The CLI assembles a **debug** build by default (`docs/asm.md` §8); every test
+/// here writes `greet.csa` next to the output, so the recorded source path is
+/// exactly that file name.
 fn expected_image(manifest: &str) -> Image {
     let asm = parse(SOURCE).expect("the test source parses");
-    generate_image(&asm, &rig_of(manifest)).expect("the test source generates an image")
+    generate_image_debug(&asm, &rig_of(manifest), "greet.csa")
+        .expect("the test source generates an image")
 }
 
 #[test]
@@ -136,6 +141,82 @@ fn a_source_is_assembled_into_the_requested_file() {
         vec!["greet.csa", "greet.csp", "greet.rig.json"],
         "no temporary file is left"
     );
+}
+
+#[test]
+fn strip_produces_the_release_build() {
+    let dir = scratch("strip");
+    let source = write_file(&dir, "greet.csa", SOURCE);
+    write_file(&dir, "greet.rig.json", MANIFEST);
+    let target = dir.join("greet.csp");
+
+    let output = run(vec![
+        OsStr::new("-a"),
+        source.as_os_str(),
+        OsStr::new("-o"),
+        target.as_os_str(),
+        OsStr::new("--strip"),
+    ]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    let asm = parse(SOURCE).expect("the test source parses");
+    let release = generate_image(&asm, &rig_of(MANIFEST)).expect("the release build");
+    let written = fs::read(&target).expect("read the file");
+
+    assert_eq!(
+        written,
+        release.to_bytes(),
+        "a stripped image is byte for byte the release build"
+    );
+    let loaded = VerifiedImage::from_bytes(&written).expect("the loader accepts it");
+    assert!(
+        loaded.debug().is_none(),
+        "the release build carries no debug segment"
+    );
+}
+
+#[test]
+fn the_debug_build_writes_source_lines_that_name_their_rig() {
+    let dir = scratch("debug-lines");
+    let source = write_file(&dir, "greet.csa", SOURCE);
+    write_file(&dir, "greet.rig.json", MANIFEST);
+    let target = dir.join("greet.csp");
+
+    let output = run(vec![
+        OsStr::new("-a"),
+        source.as_os_str(),
+        OsStr::new("-o"),
+        target.as_os_str(),
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    let written = fs::read(&target).expect("read the file");
+    let loaded = VerifiedImage::from_bytes(&written).expect("the loader accepts it");
+    let debug = loaded.debug().expect("a debug build carries a segment");
+
+    assert_eq!(
+        debug.source(),
+        "greet.csa",
+        "the source is recorded relative to the image's own directory"
+    );
+    assert_eq!(
+        debug.lines().len(),
+        loaded.code().len(),
+        "the line map covers every instruction"
+    );
+
+    // §3.3 of asm.md: `FEXCITE brows` expands into one instruction per muscle, so
+    // pc 1 and pc 2 share a source position.
+    let first = debug.line(0).expect("pc 0 has a position");
+    assert_eq!(first.line, 11, "FMOVI is on the eleventh line");
+    assert_eq!(first.column, 5, "and starts at the instruction column");
+    assert_eq!(
+        debug.line(1),
+        debug.line(2),
+        "a group expansion shares one line"
+    );
+    assert_eq!(debug.line(1).expect("pc 1").line, 12);
 }
 
 #[test]

@@ -130,6 +130,7 @@ impl Session {
             maze.header().layer,
             maze.content_hash(),
             "maze.csa".into(),
+            maze.debug().cloned(),
         );
 
         let interrupts = Interrupts::new(

@@ -19,6 +19,8 @@ use cyberspine_isa::clock::{Hz, Seconds};
 use cyberspine_isa::{Insn, OpCode};
 use cyberspine_rig::{Fingerprint, Name};
 
+use crate::debug::{self, DebugInfo};
+
 /// The largest image the loader will accept (§9.1 C0).
 ///
 /// C5 already bounds the *counts* an image declares against its own length, so the
@@ -129,17 +131,22 @@ pub const MIN_FILE_LEN: usize = HEADER_LEN + INSN_LEN + HASH_LEN;
 /// 1.0.0 is the first published shape — nothing shipped before it, so no older
 /// minor is accepted for compatibility's sake. The last 32 bytes of the header
 /// carry the rig fingerprint ([`Fingerprint`]) rather than reserved zeros.
+/// 1.1.0 appends the optional debug segment (`docs/binfmt.md` §6.7) and defines
+/// `flags` bit 0 for it; the fixed header itself did not move.
 pub const FORMAT_MAJOR: u8 = 1;
-pub const FORMAT_MINOR: u8 = 0;
+pub const FORMAT_MINOR: u8 = 1;
 pub const FORMAT_PATCH: u8 = 0;
 
 const MAJOR_SHIFT: u32 = 11;
 const MINOR_SHIFT: u32 = 6;
 const PATCH_BITS: u16 = 0b0011_1111;
 
-pub const FORMAT_VERSION: u16 = ((FORMAT_MAJOR as u16) << MAJOR_SHIFT)
-    | ((FORMAT_MINOR as u16) << MINOR_SHIFT)
-    | (FORMAT_PATCH as u16);
+/// Pack `major.minor.patch` into the `u16` the fixed header carries (§4).
+pub const fn pack_version(major: u8, minor: u8, patch: u8) -> u16 {
+    ((major as u16) << MAJOR_SHIFT) | ((minor as u16) << MINOR_SHIFT) | (patch as u16 & PATCH_BITS)
+}
+
+pub const FORMAT_VERSION: u16 = pack_version(FORMAT_MAJOR, FORMAT_MINOR, FORMAT_PATCH);
 
 /// Split a packed `format_version` back into its three numbers.
 pub const fn format_parts(version: u16) -> (u8, u8, u8) {
@@ -285,6 +292,7 @@ pub struct Image {
     pub(crate) vars_f: Vec<VarF>,
     pub(crate) vars_i: Vec<VarI>,
     pub(crate) reasons: Vec<NameRef>,
+    pub(crate) debug: Option<DebugInfo>,
 }
 
 impl Image {
@@ -311,6 +319,7 @@ impl Image {
             vars_f: Vec::new(),
             vars_i: Vec::new(),
             reasons: Vec::new(),
+            debug: None,
         }
     }
 
@@ -373,6 +382,20 @@ impl Image {
     pub fn push_reason(&mut self, text: &str) {
         let name = self.names.push(text);
         self.reasons.push(name);
+    }
+
+    /// The debug segment this image would carry, if it is a debug build.
+    ///
+    /// `None` is the release build: the bytes on disk carry no segment and
+    /// `flags` is zero (`docs/binfmt.md` §6.7).
+    pub fn debug(&self) -> Option<&DebugInfo> {
+        self.debug.as_ref()
+    }
+
+    /// Mark this image as a debug build. The assembler is the only producer that
+    /// calls this; a stripped image simply never does.
+    pub fn set_debug(&mut self, debug: DebugInfo) {
+        self.debug = Some(debug);
     }
 
     /// Append a muscle on its own.
@@ -481,7 +504,13 @@ impl Image {
     /// than an input error.
     pub fn to_bytes(&self) -> Vec<u8> {
         let tables = self.encode_tables();
-        let file_len = HEADER_LEN + INSN_LEN * self.code.len() + tables.len() + HASH_LEN;
+        let segment = self
+            .debug
+            .as_ref()
+            .map(|debug| debug.encode(self.code.len()));
+        let segment_len = segment.as_ref().map_or(0, Vec::len);
+        let file_len =
+            HEADER_LEN + INSN_LEN * self.code.len() + tables.len() + segment_len + HASH_LEN;
 
         let mut out = Vec::with_capacity(file_len);
         self.write_fixed_header(&mut out, file_len);
@@ -490,6 +519,9 @@ impl Image {
             out.extend_from_slice(&insn.encode().to_le_bytes());
         }
         out.extend_from_slice(&tables);
+        if let Some(segment) = &segment {
+            out.extend_from_slice(segment);
+        }
 
         // §7: the hash covers every byte before it, which is the whole file minus
         // its last 32 bytes. No self-reference rule, no hole in the header.
@@ -511,7 +543,8 @@ impl Image {
         out.extend_from_slice(&self.header.format_version.to_le_bytes());
         out.extend_from_slice(&self.header.isa_version.to_le_bytes());
         out.extend_from_slice(&0u16.to_le_bytes()); // reserved_a: must be 0 (§9.1 C3)
-        out.extend_from_slice(&0u16.to_le_bytes()); // flags: must be 0 (§9.1 C3)
+        let flags = if self.debug.is_some() { debug::FLAG } else { 0 };
+        out.extend_from_slice(&flags.to_le_bytes()); // §4: bit 0 is the only defined one
         push_u32(out, file_len, "file_len");
         push_u32(out, self.code.len(), "code_len");
         out.extend_from_slice(&self.header.layer.to_le_bytes());

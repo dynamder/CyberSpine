@@ -24,6 +24,8 @@ pub enum Report {
         pc: usize,
         tick: u64,
         reason: Box<str>,
+        /// `file:line:column`, when the image is a debug build (`docs/asm.md` §8).
+        source: Option<Box<str>>,
     },
     Round {
         event: EventId,
@@ -80,11 +82,15 @@ impl fmt::Display for Report {
                 pc,
                 tick,
                 reason,
+                source,
                 ..
-            } => write!(
-                f,
-                "interrupt: instance {instance} ({action}) at pc {pc} tick {tick}: {reason}"
-            ),
+            } => {
+                write!(f, "interrupt: instance {instance} ({action}) at pc {pc}")?;
+                if let Some(source) = source {
+                    write!(f, " ({source})")?;
+                }
+                write!(f, " tick {tick}: {reason}")
+            }
             Self::Round {
                 event,
                 source,

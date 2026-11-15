@@ -27,6 +27,7 @@ use cyberspine_isa::clock::{Hz, Seconds};
 use cyberspine_isa::jump::jump_target;
 use cyberspine_isa::{DecodeError, Insn, OpCode};
 
+use super::debug::{self, DebugError};
 use super::diag::Warning;
 use super::image::{
     FORMAT_MAJOR, FORMAT_MINOR, FixedHeader, HASH_LEN, HEADER_LEN, INSN_LEN, ISA_VERSION, Image,
@@ -107,6 +108,8 @@ pub enum LoadError {
     CodeLenZero, // C8
     #[error("the tables end at byte {consumed}, but the hash begins at byte {expected}")]
     TrailingBytes { consumed: usize, expected: usize }, // C7
+    #[error(transparent)]
+    Debug(#[from] DebugError), // C9
     #[error("the last instruction must be HALT")]
     MissingTrailingHalt, // C8 / I8
     #[error(
@@ -313,12 +316,22 @@ impl VerifiedImage {
         let vars_i = read_table::<VarI>(&mut cursor, &mut names, Table::VarsI, raw.var_i_count)?;
         let reasons = read_reasons(&mut cursor, &mut names, raw.reason_count)?;
 
-        if cursor.pos != body_end {
-            return Err(LoadError::TrailingBytes {
-                consumed: cursor.pos,
-                expected: body_end,
-            }); // C7
-        }
+        // C7 + C9: the tables must end where the debug segment begins, and the
+        // segment (when the flag says there is one) must end exactly at the hash.
+        let debug = if raw.flags & debug::FLAG != 0 {
+            Some(
+                debug::DebugInfo::parse(&bytes[cursor.pos..body_end], raw.code_len as usize)
+                    .map_err(LoadError::Debug)?,
+            )
+        } else {
+            if cursor.pos != body_end {
+                return Err(LoadError::TrailingBytes {
+                    consumed: cursor.pos,
+                    expected: body_end,
+                }); // C7
+            }
+            None
+        };
 
         Self::finish(
             Image {
@@ -343,6 +356,7 @@ impl VerifiedImage {
                 vars_f,
                 vars_i,
                 reasons,
+                debug,
             },
             hash,
         )
@@ -413,6 +427,11 @@ impl Image {
         // ----- M, then I, the order §9 fixes -----
         let plan = check_metadata(self)?;
         check_code(self)?;
+        // C9: the debug segment is not executed, but an image this crate wrote
+        // and an image it accepted are held to the same rules.
+        if let Some(debug) = &self.debug {
+            debug.check(self.code.len())?;
+        }
         Ok(plan)
     }
 
@@ -574,7 +593,7 @@ fn check_container(
     }
 
     // C3 — undefined bits are refused, never ignored.
-    if raw.flags != 0 {
+    if raw.flags & !debug::FLAG != 0 {
         return Err(LoadError::ReservedNotZero { field: "flags" });
     }
     if raw.reserved_a != 0 {

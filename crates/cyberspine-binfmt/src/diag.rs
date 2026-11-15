@@ -32,6 +32,7 @@ impl DiagnosticKind for LoadError {
             Self::CountsExceedFileLen { .. } => "C5",
             Self::ContentHashMismatch { .. } => "C6",
             Self::TrailingBytes { .. } => "C7",
+            Self::Debug(_) => "C9",
             // The mirror of C7: the tables ran past the end instead of stopping
             // short of it. Both are "the declared layout and the bytes disagree",
             // which C1 is the rule for.

@@ -263,7 +263,10 @@ fn c2_a_patch_bump_is_not_even_a_diagnostic() {
     let mut diagnostics = Diagnostics::default();
     let bytes = forge(
         &image,
-        &[(OFF_FORMAT_VERSION, &((1u16 << 11) | 9).to_le_bytes())],
+        &[(
+            OFF_FORMAT_VERSION,
+            &((1u16 << 11) | (1u16 << 6) | 9).to_le_bytes(),
+        )],
     );
     VerifiedImage::from_bytes_with(&bytes, &mut diagnostics).expect("a patch bump is readable");
     assert!(
@@ -303,14 +306,16 @@ fn c3_every_reserved_field_must_be_zero() {
     // rig fingerprint.
     let image = Image::halt_only();
 
-    for (offset, field, width) in [
-        (OFF_RESERVED_A, "reserved_a", 2usize),
-        (OFF_FLAGS, "flags", 2),
-        (OFF_RESERVED0, "reserved0", 2),
-        (OFF_RESERVED_B, "reserved_b", 4),
+    for (offset, field, width, bit) in [
+        (OFF_RESERVED_A, "reserved_a", 2usize, 1u8),
+        // Bit 0 of `flags` is defined (`HAS_DEBUG`, `binfmt.md` §6.7); the first
+        // still-undefined bit is where "unknown bits are refused" is measured.
+        (OFF_FLAGS, "flags", 2, 0b10),
+        (OFF_RESERVED0, "reserved0", 2, 1),
+        (OFF_RESERVED_B, "reserved_b", 4, 1),
     ] {
         let mut patch = vec![0u8; width];
-        patch[0] = 1;
+        patch[0] = bit;
         let bytes = forge(&image, &[(offset, &patch)]);
         match reject(&bytes) {
             LoadError::ReservedNotZero { field: found } => {

@@ -515,7 +515,7 @@ L:  FSENSE  r0, tick
 
 ### 5.5 调试信息
 
-标签表与 `指令下标 → 源行号` 的 line_map 存放于**独立 debug section，不进入可执行镜像**。反汇编因此可显示 `JMP L_blink_end` 而非 `JMP +37`，而编码本身不为可读性付出代价。
+标签表与 `指令下标 → 源行号` 的 line_map 放进镜像尾部的一个**可选 debug 段**（`binfmt.md` §6.7），由 `flags` 的 bit 0 标记：debug 构建写入，release 构建剥离。反汇编因此可显示 `JMP L_blink_end` 而非 `JMP +37`，而**发布构建的编码不为可读性付出任何字节**——代价从文件级挪到了构建级。
 
 ---
 

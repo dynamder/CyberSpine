@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use cyberspine_asm::assembler::{generate_image, parse};
+use cyberspine_asm::assembler::{generate_image, generate_image_debug, parse};
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::rig::Rig;
 use cyberspine_testkit::scratch_dir;
@@ -77,9 +77,26 @@ fn image(source: &str, manifest: &str) -> Vec<u8> {
         .to_bytes()
 }
 
+/// A debug build: the same image plus a `pc → source position` table naming
+/// `probe.csa` (`docs/asm.md` §8).
+fn debug_image(source: &str, manifest: &str) -> Vec<u8> {
+    let asm = parse(source).expect("the test source parses");
+    let image = generate_image_debug(&asm, &rig_of(manifest), "probe.csa")
+        .expect("the test source generates");
+    VerifiedImage::verify(image)
+        .expect("the image is valid")
+        .to_bytes()
+}
+
 fn write_image(dir: &Path, name: &str, source: &str, manifest: &str) -> PathBuf {
     let path = dir.join(name);
     fs::write(&path, image(source, manifest)).expect("the image writes");
+    path
+}
+
+fn write_debug_image(dir: &Path, name: &str, source: &str, manifest: &str) -> PathBuf {
+    let path = dir.join(name);
+    fs::write(&path, debug_image(source, manifest)).expect("the image writes");
     path
 }
 
@@ -169,6 +186,27 @@ fn a_fault_is_reported_and_fails_the_run() {
         stderr(&output).contains("fuel exhausted"),
         "stderr: {}",
         stderr(&output)
+    );
+}
+
+#[test]
+fn a_fault_of_a_debug_build_names_its_source_line() {
+    let dir = scratch("fault-debug");
+    let image = write_debug_image(&dir, "loop.csp", LOOP, MANIFEST);
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("1"),
+        OsStr::new("--unpaced"),
+    ]);
+
+    let message = stderr(&output);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        message.contains("fuel exhausted at instruction 0 (probe.csa:8:5)"),
+        "a debug build names the line of the JMP: {message}"
     );
 }
 
@@ -439,6 +477,28 @@ fn an_interrupt_is_reported_and_the_default_policy_stops_it() {
     assert!(
         !message.contains("did not apply"),
         "the built-in policy must resolve the ticket: {message}"
+    );
+}
+
+#[test]
+fn an_interrupt_of_a_debug_build_names_its_source_line() {
+    let dir = scratch("interrupt-debug");
+    let image = write_debug_image(&dir, "interrupt.csp", INTERRUPT, MANIFEST);
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("1"),
+        OsStr::new("--unpaced"),
+        OsStr::new("--quiet"),
+    ]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let message = stderr(&output);
+    assert!(
+        message.contains("at pc 1 (probe.csa:8:5)"),
+        "a debug build names the line of the INTR: {message}"
     );
 }
 

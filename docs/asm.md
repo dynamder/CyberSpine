@@ -8,7 +8,7 @@
 
 ## 0. 定位
 
-- 输入：UTF-8 文本 `.csa`；输出：`Image`（`crates/cyberspine-binfmt/src/image.rs`）→ `.csp` 字节。调试信息（`DebugInfo { labels, line_map }`）是**尚未落地**的独立产物，见 §8。
+- 输入：UTF-8 文本 `.csa`；输出：`Image`（`crates/cyberspine-binfmt/src/image.rs`）→ `.csp` 字节。调试信息（标签表与 `pc → 源行`）默认写进镜像尾部，见 §8。
 - 汇编器**只读 manifest，不接触 rig 的实现**。manifest 声明肌肉、可观测量和身份（[`rig.md`](rig.md)）；名字在装配期解析成 **rig 的物理下标**，直接写进 `imm`（`isa.md` §13.2）。镜像因此与 rig 一一对应，加载期用指纹校验。
 - 指令语法由 `OpCode::signature()` 派生；助记符表由 `OpCode::ALL` + `mnemonic()` 反查生成。**加一条指令只改 `crates/cyberspine-isa/src/lib.rs`，不手抄任何清单。**
 - 装配期完成：标签→偏移、名字→物理下标、`group` 展开、隐式 `HALT` 补齐、所有静态可判定的校验。
@@ -236,7 +236,8 @@ pending 检查是一个布尔数据流：`FEXCITE` 置真，`FLUSH` 清假，在
 - CLI 输出 `path:line:col: error: …` + 源行 + 标记，并以非零退出码结束。
 
 ```bash
-cyinea -a greet.csa              # 输出 greet.csp
+cyinea -a greet.csa              # 输出 greet.csp（debug 构建，带调试段）
+cyinea -a greet.csa --strip      # release 构建，剥掉调试段
 cyinea -a greet.csa -o out.csp   # 指定输出路径
 ```
 
@@ -322,9 +323,10 @@ L_done:
 
 ## 8. 调试信息
 
-- 标签表与 `指令下标 → 源行号` 的 line_map 放独立 `.cspd`，不进入 `.csp`（`isa.md` §5.5）。
+- 默认（debug 构建）把标签表与 `指令下标 → 源行号` 的 line_map 写进镜像尾部（`binfmt.md` §6.7）；`cyinea --strip` 剥掉它，得到 release 构建。
+- 源路径按**相对输出 `.csp` 所在目录**记录；解析不到源文件时只显示位置，不显示源码文本。
 - 反汇编用标签表显示 `JMP L_brow_ok` 而非 `JMP +37`。
-- `.cspd` 字节格式**尚未规范**，属于独立任务。
+- `group` 在装配期展开，镜像里只有下标；debug 段不记录成员关系。
 
 ## 9. 与 opcode 表的绑定
 

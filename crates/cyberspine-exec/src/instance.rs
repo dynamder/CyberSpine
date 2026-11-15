@@ -64,6 +64,17 @@ pub enum Fault {
     FuelExhausted { pc: usize },
 }
 
+impl Fault {
+    /// The instruction the instance stopped on. Every fault has one: a fault is
+    /// reported after the instruction that could not run, so this is what a
+    /// source map turns into a line.
+    pub fn pc(self) -> usize {
+        match self {
+            Self::FuelExhausted { pc } => pc,
+        }
+    }
+}
+
 /// The interrupt an instance is parked on (`docs/isa.md` §4.8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PendingInterrupt {

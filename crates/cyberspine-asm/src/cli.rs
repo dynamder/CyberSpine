@@ -26,4 +26,11 @@ pub struct CliArgs {
     /// Treat readability warnings as errors.
     #[arg(long)]
     pub deny_warnings: bool,
+
+    /// Strip the debug segment: produce a release build (`docs/asm.md` §8).
+    ///
+    /// Without this flag the image carries a `pc → source position` table and a
+    /// label table (`docs/binfmt.md` §6.7); execution is identical either way.
+    #[arg(long)]
+    pub strip: bool,
 }

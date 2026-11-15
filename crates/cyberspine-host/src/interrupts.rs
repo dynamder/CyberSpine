@@ -73,6 +73,11 @@ impl<A: Arbiter> Interrupts<A> {
         for ticket in session.take_interrupts() {
             let event = EventId::new(ticket.seq());
             let (action, instances, image_hash) = registry.snapshot(ticket.instance);
+            let source = registry.debug_of(ticket.instance).and_then(|debug| {
+                debug.line(ticket.pc).map(|line| {
+                    format!("{}:{}:{}", debug.source(), line.line, line.column).into_boxed_str()
+                })
+            });
             let actions = self
                 .resolver
                 .as_ref()
@@ -85,6 +90,7 @@ impl<A: Arbiter> Interrupts<A> {
                 pc: ticket.pc,
                 tick: ticket.tick,
                 reason: ticket.reason.clone(),
+                source,
             });
             self.arbiter.deliver(InterruptEvent {
                 event,
@@ -235,8 +241,9 @@ fn apply_actions<B: Backend, P: RigPolicy>(
                 };
                 let layer = image.header().layer;
                 let hash = image.content_hash();
+                let debug = image.debug().cloned();
                 match session.load(image) {
-                    Ok(id) => registry.push(id, layer, hash, action),
+                    Ok(id) => registry.push(id, layer, hash, action, debug),
                     Err(error) => reports.push(action_report(
                         event,
                         format!("`{action}` does not fit: {error}"),
@@ -443,12 +450,12 @@ mod tests {
         let (mut session, interrupted) = Host::new(DummyBackend::new(rig.clone()))
             .load(first)
             .expect("assembled for this rig");
-        context.push(interrupted, 0, [0; 32], "a.csp".into());
+        context.push(interrupted, 0, [0; 32], "a.csp".into(), None);
 
         let other = session
             .load(verified(action(vec![yield_(), jump(-1)], &rig)))
             .expect("assembled for this rig");
-        context.push(other, 0, [0; 32], "b.csp".into());
+        context.push(other, 0, [0; 32], "b.csp".into(), None);
 
         session.tick().expect("the dummy backend cannot fail");
         let mut interrupts = Interrupts::new(
@@ -486,7 +493,7 @@ mod tests {
         let (mut session, interrupted) = Host::new(DummyBackend::new(rig.clone()))
             .load(first)
             .expect("assembled for this rig");
-        context.push(interrupted, 0, [0; 32], "a.csp".into());
+        context.push(interrupted, 0, [0; 32], "a.csp".into(), None);
         session.tick().expect("the dummy backend cannot fail");
 
         let dir = std::env::temp_dir().join(format!("csp-load-{}", std::process::id()));

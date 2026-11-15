@@ -102,8 +102,11 @@ dummy 是内置的，不需要也不接受 `dummy:` 前缀；`cyinevm -b dummy:�
 原因）打印到 stderr，例如：
 
 ```text
-interrupt: instance 0 (actions/idle.csp) at pc 3 tick 12: obstacle: x=0.32 y=0.90
+interrupt: instance 0 (actions/idle.csp) at pc 3 (idle.csa:12:5) tick 12: obstacle: x=0.32 y=0.90
 ```
+
+`pc` 之后的源位置只在 **debug 构建**里出现：`cyinea` 默认写调试段，`cyinea --strip` 的
+release 镜像只有 `pc`（`asm.md` §8、`binfmt.md` §6.7）。两种构建的执行完全一致。
 
 退出码仍是 `0`：中断是程序与宿主之间的正常通信，不是错误。`--decisions <PATH>` 把每一轮
 裁决记成 JSON Lines，`--replay <PATH>` 用记录代替仲裁器重跑同一段轨迹。模型与边界见

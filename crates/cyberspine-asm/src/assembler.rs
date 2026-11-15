@@ -9,6 +9,7 @@ use cyberspine_core::binfmt::image::{
     FORMAT_VERSION, FixedHeader as ImageFixedHeader, ISA_VERSION, Image, SensorSource,
 };
 use cyberspine_core::binfmt::reason::{MAX_REASON_LEN, Template, TemplateError};
+use cyberspine_core::binfmt::{DebugInfo, DebugLabel, DebugLine};
 use cyberspine_core::isa::clock::{Hz, Seconds};
 use cyberspine_core::isa::jump::{jump_offset, jump_target};
 use cyberspine_core::isa::{ImmType, Insn, OpCode, RegName};
@@ -169,6 +170,8 @@ pub enum ImageGenError {
     ReasonTooLong { len: usize, location: Location },
     #[error("the program is too large for the format's 32-bit instruction count")]
     TooManyInstructions,
+    #[error("line {line} or column {column} does not fit the debug format (line u32, column u16)")]
+    LocationTooLarge { line: usize, column: usize },
     /// A mismatch between the layout pass and the emitted code. No source can
     /// cause it: it means the assembler is wrong, and the CLI says so.
     #[error("emitted {emitted} instructions, the layout says {layout}")]
@@ -205,6 +208,7 @@ impl ImageGenError {
             | Self::ZeroHz
             | Self::InvalidMaxWait
             | Self::TooManyInstructions
+            | Self::LocationTooLarge { .. }
             | Self::Internal { .. } => None,
         }
     }
@@ -212,7 +216,20 @@ impl ImageGenError {
 
 /// Resolve names, labels and groups against `rig`, then produce the canonical
 /// `Image`.
+///
+/// This is the **release build**: no debug segment (`docs/asm.md` §8).
 pub fn generate_image(asm: &Asm, rig: &Rig) -> Result<Image, ImageGenError> {
+    generate(asm, rig, None)
+}
+
+/// The **debug build**: the same image plus a debug segment naming `source`
+/// (`docs/binfmt.md` §6.7). The bytes are otherwise identical to
+/// [`generate_image`]'s, so the two builds differ only by what a reader can see.
+pub fn generate_image_debug(asm: &Asm, rig: &Rig, source: &str) -> Result<Image, ImageGenError> {
+    generate(asm, rig, Some(source))
+}
+
+fn generate(asm: &Asm, rig: &Rig, source: Option<&str>) -> Result<Image, ImageGenError> {
     check_header(&asm.header)?;
     check_rig(rig)?;
 
@@ -283,7 +300,37 @@ pub fn generate_image(asm: &Asm, rig: &Rig) -> Result<Image, ImageGenError> {
     for reason in reasons.entries() {
         image.push_reason(reason);
     }
+
+    if let Some(source) = source {
+        let labels = layout
+            .labels
+            .iter()
+            .map(|(name, &(pc, _))| DebugLabel {
+                name: name.as_str().into(),
+                pc: pc as u32,
+            })
+            .collect();
+        let mut lines = Vec::with_capacity(locations.len());
+        for location in &locations {
+            lines.push(debug_line(location)?);
+        }
+        image.set_debug(DebugInfo::new(source, labels, lines));
+    }
+
     Ok(image)
+}
+
+/// One `pc → source position` entry, checked against the debug format's field
+/// widths rather than truncated into them.
+fn debug_line(location: &Location) -> Result<DebugLine, ImageGenError> {
+    let too_large = || ImageGenError::LocationTooLarge {
+        line: location.line,
+        column: location.column,
+    };
+    Ok(DebugLine {
+        line: u32::try_from(location.line).map_err(|_| too_large())?,
+        column: u16::try_from(location.column).map_err(|_| too_large())?,
+    })
 }
 
 /// The `INTR` reason table, built before emission so every instruction can be

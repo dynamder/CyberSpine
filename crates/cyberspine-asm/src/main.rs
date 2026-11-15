@@ -1,6 +1,6 @@
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::ExitCode,
 };
 
@@ -59,7 +59,14 @@ fn run(cli_args: &CliArgs) -> Result<(), String> {
 
     let rig = load_rig(cli_args, &asm)?;
 
-    let image = assembler::generate_image(&asm, &rig).map_err(|error| {
+    let output = cli_args
+        .output
+        .clone()
+        .unwrap_or_else(|| cli_args.asm_file.with_extension("csp"));
+
+    refuse_to_overwrite_source(&cli_args.asm_file, &output)?;
+
+    let render = |error: ImageGenError| -> String {
         let title = error.to_string();
         match error.location() {
             Some(location) => {
@@ -73,14 +80,14 @@ fn run(cli_args: &CliArgs) -> Result<(), String> {
             ),
             None => format!("{}: error: {title}\n", cli_args.asm_file.display()),
         }
-    })?;
+    };
 
-    let output = cli_args
-        .output
-        .clone()
-        .unwrap_or_else(|| cli_args.asm_file.with_extension("csp"));
-
-    refuse_to_overwrite_source(&cli_args.asm_file, &output)?;
+    let image = if cli_args.strip {
+        assembler::generate_image(&asm, &rig).map_err(render)?
+    } else {
+        let source = debug_source(&cli_args.asm_file, &output);
+        assembler::generate_image_debug(&asm, &rig, &source).map_err(render)?
+    };
 
     store::write_image(&image, &output).map_err(|error| match error {
         // The loader rejecting our own output is an assembler bug, not a
@@ -120,6 +127,61 @@ fn load_rig(cli_args: &CliArgs, asm: &Asm) -> Result<Rig, String> {
 
     cyberspine_manifest::from_json(&text)
         .map_err(|error| format!("{}: error: {error}\n", path.display()))
+}
+
+/// The path the debug segment records: the source relative to the image's
+/// directory, so a renderer resolves it next to the `.csp` no matter where the
+/// pair is moved (`docs/asm.md` §8). Separators are normalized to `/` so the same
+/// tree assembles to the same bytes on every platform; a source on another root
+/// stays absolute, which is all it can be.
+fn debug_source(source: &Path, image: &Path) -> String {
+    let base = image
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let source = absolute(source);
+    let base = absolute(base);
+    relative_to(&source, &base)
+        .unwrap_or(source)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+fn absolute(path: &Path) -> PathBuf {
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// `source` relative to `base`, when one exists. A `None` means the two share no
+/// root above the base (another drive on Windows).
+fn relative_to(source: &Path, base: &Path) -> Option<PathBuf> {
+    let mut source_parts = source.components().peekable();
+    let mut base_parts = base.components().peekable();
+
+    while let (Some(from_source), Some(from_base)) = (source_parts.peek(), base_parts.peek()) {
+        if from_source != from_base {
+            break;
+        }
+        source_parts.next();
+        base_parts.next();
+    }
+
+    // Walking up from `base` cannot reach a path that starts at a root or a
+    // drive prefix: the two diverge above it.
+    if matches!(
+        source_parts.peek(),
+        Some(Component::Prefix(_) | Component::RootDir)
+    ) {
+        return None;
+    }
+
+    let mut relative = PathBuf::new();
+    for _ in base_parts {
+        relative.push("..");
+    }
+    for part in source_parts {
+        relative.push(part);
+    }
+    Some(relative)
 }
 
 /// `-o` pointed at the source would replace a `.csa` with binary, and the atomic

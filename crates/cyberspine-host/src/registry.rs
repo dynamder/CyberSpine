@@ -2,6 +2,7 @@
 //! the arbiter's `InstanceRef`.
 
 use cyberspine_arbiter::{InstanceRef, InstanceView};
+use cyberspine_core::binfmt::DebugInfo;
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::rig::Fingerprint;
 use cyberspine_vm::InstanceId;
@@ -14,6 +15,10 @@ pub struct Loaded {
     pub layer: u16,
     pub action: Box<str>,
     hash: [u8; 32],
+    /// The image's debug segment, when it is a debug build (`docs/asm.md` §8).
+    /// Kept beside the instance because the image itself lives in the session,
+    /// which is where the host cannot reach for a rendering-only lookup.
+    debug: Option<DebugInfo>,
 }
 
 /// Every instance this host has loaded, in load order.
@@ -54,13 +59,27 @@ impl Registry {
         &self.instances
     }
 
-    pub fn push(&mut self, id: InstanceId, layer: u16, hash: [u8; 32], action: Box<str>) {
+    pub fn push(
+        &mut self,
+        id: InstanceId,
+        layer: u16,
+        hash: [u8; 32],
+        action: Box<str>,
+        debug: Option<DebugInfo>,
+    ) {
         self.instances.push(Loaded {
             id,
             layer,
             action,
             hash,
+            debug,
         });
+    }
+
+    /// The debug segment of the instance's image, when it has one.
+    pub fn debug_of(&self, id: InstanceId) -> Option<&DebugInfo> {
+        self.loaded_by_id(id)
+            .and_then(|loaded| loaded.debug.as_ref())
     }
 
     pub(crate) fn remove(&mut self, id: InstanceId) {

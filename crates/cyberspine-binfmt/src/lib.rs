@@ -9,12 +9,14 @@
 
 extern crate alloc;
 
+pub mod debug;
 pub mod diag;
 pub mod image;
 pub mod load;
 pub mod plan;
 pub mod reason;
 
+pub use debug::{DebugError, DebugInfo, DebugLabel, DebugLine};
 pub use diag::Warning;
 pub use image::{Image, MAX_IMAGE_LEN, NameRef, Names};
 pub use load::{LoadError, VerifiedImage};
