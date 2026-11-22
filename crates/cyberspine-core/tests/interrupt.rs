@@ -86,6 +86,39 @@ fn a_stored_index_must_be_inside_its_table() {
     );
 }
 
+/// `docs/binfmt.md` §6.6 allows non-ASCII reason text, so every byte index the
+/// parser takes must land on a character boundary.
+#[test]
+fn a_non_ascii_template_parses_and_round_trips() {
+    let template = Template::parse("héllo {f1:.1} — {{世界}}").expect("non-ascii text is legal");
+    assert_eq!(
+        Template::parse(&template.canonical()).expect("the canonical form parses back"),
+        template,
+        "escaped braces survive the round trip"
+    );
+
+    let view = View {
+        f1: 0.5,
+        i2: 0,
+        vf: 0.0,
+        vi: 0,
+    };
+    assert_eq!(template.render(&view), "héllo 0.5 — {世界}");
+
+    let plain = Template::parse("é").expect("a non-ascii literal is a template");
+    assert_eq!(plain.render(&view), "é");
+}
+
+#[test]
+fn a_non_ascii_stored_reason_loads() {
+    let image = interrupt_image("héllo {f1}");
+    assert_eq!(
+        image.reason(0),
+        "héllo {f1}",
+        "the loader accepts and keeps non-ascii reason text"
+    );
+}
+
 #[test]
 fn a_register_outside_0_to_63_is_refused() {
     assert_eq!(

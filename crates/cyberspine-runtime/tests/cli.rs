@@ -527,6 +527,41 @@ fn an_interrupt_of_a_debug_build_names_its_source_line() {
     );
 }
 
+/// `docs/binfmt.md` §6.6 allows non-ASCII reason text: it must survive the
+/// assembler, the loader, and the renderer.
+#[test]
+fn a_non_ascii_reason_assembles_loads_and_renders() {
+    const NON_ASCII: &str = "\
+.layer 10
+.clock hz = 1000
+.fuel 4096
+.max_wait 600.0
+
+.text
+    FMOVI   f1, 0.5
+    INTR    \"héllo {f1:.1} 世界\"
+    HALT
+";
+    let dir = scratch("non-ascii-reason");
+    let image = write_image(&dir, "nonascii.csp", NON_ASCII, MANIFEST);
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("1"),
+        OsStr::new("--unpaced"),
+        OsStr::new("--quiet"),
+    ]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stderr(&output).contains("héllo 0.5 世界"),
+        "the non-ascii reason renders verbatim: {}",
+        stderr(&output)
+    );
+}
+
 #[test]
 fn continue_lets_the_instance_halt_on_the_next_tick() {
     let dir = scratch("interrupt-continue");

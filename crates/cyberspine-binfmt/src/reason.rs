@@ -137,7 +137,8 @@ impl Template {
             } else if rest.starts_with('}') {
                 return Err(TemplateError::UnmatchedBrace { at: index });
             } else {
-                index += 1;
+                let character = rest.chars().next().expect("index < text.len()");
+                index += character.len_utf8();
             }
         }
         push_text(&mut segments, &text[run_start..]);

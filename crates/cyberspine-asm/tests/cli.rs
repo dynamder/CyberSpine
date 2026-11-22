@@ -152,6 +152,41 @@ fn a_source_is_assembled_into_the_requested_file() {
     );
 }
 
+/// `docs/binfmt.md` §6.6: reason text may be non-ASCII. The parser must walk
+/// characters, not bytes, or the assembler exits 101.
+#[test]
+fn a_non_ascii_reason_is_assembled_and_reloads() {
+    let dir = scratch("non-ascii-reason");
+    let source = write_file(
+        &dir,
+        "nonascii.csa",
+        "\
+.layer 10
+.clock hz = 60
+.fuel 4096
+.max_wait 600.0
+.rig \"greet.rig.json\"
+.text
+    INTR    \"héllo {f1}\"
+    HALT
+",
+    );
+    write_file(&dir, "greet.rig.json", MANIFEST);
+    let target = dir.join("nonascii.csp");
+
+    let output = run(vec![
+        OsStr::new("-a"),
+        source.as_os_str(),
+        OsStr::new("-o"),
+        target.as_os_str(),
+    ]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let loaded = VerifiedImage::from_bytes(&fs::read(&target).expect("read the file"))
+        .expect("the loader accepts the file");
+    assert_eq!(loaded.reason(0), "héllo {f1}");
+}
+
 #[test]
 fn strip_produces_the_release_build() {
     let dir = scratch("strip");
