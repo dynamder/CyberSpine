@@ -252,7 +252,7 @@ fn c2_a_newer_minor_is_reported_but_not_refused() {
     assert_eq!(diagnostics.items().len(), 1);
     let warning = &diagnostics.items()[0];
     assert_eq!(warning.level, Level::Warning);
-    assert_eq!(warning.code, "C2");
+    assert_eq!(warning.code.as_str(), "binfmt.C2");
 }
 
 #[test]

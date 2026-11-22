@@ -14,6 +14,7 @@ use cyberspine_core::isa::clock::{Hz, Seconds};
 use cyberspine_core::isa::jump::{jump_offset, jump_target};
 use cyberspine_core::isa::{ImmType, Insn, OpCode, RegName};
 use cyberspine_core::rig::{Name, Rig, RigError, is_reserved as is_reserved_name};
+use cyberspine_diag::{Anchor, Diagnostic};
 use smol_str::SmolStr;
 use thiserror::Error;
 use winnow::{Parser, combinator::trace, token::take_while};
@@ -178,7 +179,56 @@ pub enum ImageGenError {
     Internal { emitted: usize, layout: usize },
 }
 
+cyberspine_diag::codes! {
+    ImageGenError: Error {
+        Self::DuplicateLabel { .. } => "asm.duplicate-label",
+        Self::UndefinedLabel { .. } => "asm.undefined-label",
+        Self::LabelOutOfRange { .. } => "asm.label-out-of-range",
+        Self::JumpTargetOutOfRange { .. } => "asm.jump-out-of-range",
+        Self::JumpOffsetOverflow { .. } => "asm.jump-out-of-range",
+        Self::MissingIndexOperand { .. } => "asm.bad-operand",
+        Self::DuplicateName(_) => "asm.duplicate-name",
+        Self::ReservedName(_) => "asm.reserved-name",
+        Self::Rig(_) => "asm.rig",
+        Self::UnknownExciteTarget { .. } => "asm.name-not-in-rig",
+        Self::UnknownSensorF { .. } => "asm.name-not-in-rig",
+        Self::UnknownSensorI { .. } => "asm.name-not-in-rig",
+        Self::UnknownVarF { .. } => "asm.name-not-in-rig",
+        Self::UnknownVarI { .. } => "asm.name-not-in-rig",
+        Self::GroupOutsideExcite { .. } => "asm.name-not-in-rig",
+        Self::UnknownGroupMember { .. } => "asm.unknown-group-member",
+        Self::GroupNameCollision(_) => "asm.duplicate-name",
+        Self::PendingNotFlushed { .. } => "asm.pending-leak",
+        Self::InvalidWait { .. } => "asm.bad-wait",
+        Self::ZeroHz => "asm.bad-field",
+        Self::InvalidMaxWait => "asm.bad-field",
+        Self::MissingReason { .. } => "asm.bad-reason",
+        Self::InvalidReason { .. } => "asm.bad-reason",
+        Self::ReasonTooLong { .. } => "asm.bad-reason",
+        Self::TooManyInstructions => "asm.too-large",
+        Self::LocationTooLarge { .. } => "asm.too-large",
+        Self::Internal { .. } => "asm.internal",
+    }
+}
+
 impl ImageGenError {
+    /// This error as a diagnostic, located in `file`.
+    ///
+    /// Header, rig and size errors have no single line to point at, so they name
+    /// the file as a whole rather than inventing a position.
+    pub fn diagnostic(&self, file: &str) -> Diagnostic {
+        let anchor = match self.location() {
+            Some(location) => diagnostic::anchor(file, location),
+            None => Anchor::whole(file),
+        };
+        let diagnostic = Diagnostic::of(self).at(anchor);
+        if matches!(self, Self::Internal { .. }) {
+            diagnostic.note("this is an assembler bug, please report it")
+        } else {
+            diagnostic
+        }
+    }
+
     /// Where in the source this error belongs, when the source construct is
     /// known. Header, rig and size errors have no single line to point at.
     pub fn location(&self) -> Option<Location> {

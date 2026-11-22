@@ -65,7 +65,7 @@ impl Transport for TcpTransport {
 
             tokio::time::timeout(*timeout, exchange)
                 .await
-                .map_err(|_| ArbiterError("the arbiter did not answer in time".into()))?
+                .map_err(|_| ArbiterError::new("the arbiter did not answer in time"))?
         })
     }
 }
@@ -77,10 +77,9 @@ pub fn connect(address: &str) -> Result<RpcArbiter, ArbiterError> {
 
 pub fn connect_with_timeout(address: &str, timeout: Duration) -> Result<RpcArbiter, ArbiterError> {
     if Handle::try_current().is_ok() {
-        return Err(ArbiterError(
+        return Err(ArbiterError::new(
             "a remote arbiter blocks its worker; connect from a thread that is not running a \
-             tokio runtime"
-                .into(),
+             tokio runtime",
         ));
     }
 
@@ -99,8 +98,8 @@ fn connect_remote(
 
     let stream = runtime
         .block_on(async { tokio::time::timeout(timeout, TcpStream::connect(address)).await })
-        .map_err(|_| ArbiterError(format!("connecting to `{address}` timed out").into()))?
-        .map_err(|error| ArbiterError(format!("cannot connect to `{address}`: {error}").into()))?;
+        .map_err(|_| ArbiterError::new(format!("connecting to `{address}` timed out")))?
+        .map_err(|error| ArbiterError::new(format!("cannot connect to `{address}`: {error}")))?;
 
     stream.set_nodelay(true).map_err(failed)?;
 
@@ -206,7 +205,7 @@ impl Arbiter for RpcArbiter {
         if self.dead {
             if !self.reported {
                 self.reported = true;
-                failure = failure.or_else(|| Some(ArbiterError("the arbiter stopped".into())));
+                failure = failure.or_else(|| Some(ArbiterError::new("the arbiter stopped")));
             }
             return Batch { decisions, failure };
         }
@@ -219,7 +218,7 @@ impl Arbiter for RpcArbiter {
             } else {
                 self.dead = true;
                 self.reported = true;
-                failure = Some(ArbiterError("the arbiter worker stopped".into()));
+                failure = Some(ArbiterError::new("the arbiter worker stopped"));
             }
         }
 
@@ -259,7 +258,7 @@ pub fn spawn<A: Arbiter + Send + 'static>(
     let server = Server::new(arbiter, build_id);
 
     let listener = std::net::TcpListener::bind(address)
-        .map_err(|error| ArbiterError(format!("cannot listen on `{address}`: {error}").into()))?;
+        .map_err(|error| ArbiterError::new(format!("cannot listen on `{address}`: {error}")))?;
     listener.set_nonblocking(true).map_err(failed)?;
     let local = listener.local_addr().map_err(failed)?;
 
@@ -286,7 +285,7 @@ pub fn serve<A: Arbiter + Send + 'static>(
     let (_, thread) = spawn(address, arbiter, build_id)?;
     match thread.join() {
         Ok(result) => result,
-        Err(_) => Err(ArbiterError("the serving thread panicked".into())),
+        Err(_) => Err(ArbiterError::new("the serving thread panicked")),
     }
 }
 
@@ -333,5 +332,5 @@ async fn answer<A: Arbiter>(
 }
 
 fn failed(error: impl core::fmt::Display) -> ArbiterError {
-    ArbiterError(error.to_string().into_boxed_str())
+    ArbiterError::new(error.to_string().into_boxed_str())
 }

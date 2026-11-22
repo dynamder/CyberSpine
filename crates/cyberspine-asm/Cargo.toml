@@ -10,11 +10,11 @@ winnow = "1.0.4"
 cyberspine-core = { path = "../cyberspine-core" }
 cyberspine-diag = { path = "../cyberspine-diag" }
 cyberspine-manifest = { path = "../cyberspine-manifest" }
+cyberspine-report = { path = "../cyberspine-report" }
 cyberspine-store = { path = "../cyberspine-store" }
 clap = { version = "4.6.7", features = ["derive"] }
 thiserror = "2.0.21"
 smol_str = "0.3.6"
-annotate-snippets = "0.12.17"
 
 [[bin]]
 name = "cyinea"
@@ -23,3 +23,4 @@ path = "src/main.rs"
 [dev-dependencies]
 cyberspine-testkit = { path = "../cyberspine-testkit" }
 cyberspine-vm = { path = "../cyberspine-vm" }
+serde_json = "1"

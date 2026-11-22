@@ -38,6 +38,8 @@ cyinevm -i <IMAGE> [-i <IMAGE> ...] [-b <SPEC>] [--on-interrupt stop|continue]
 | `--until-halt` | 所有实例结束后退出；与 `--ticks` 互斥 |
 | `--unpaced` | 不按真实时间睡眠；必须与 `--ticks` 一起使用 |
 | `--trace` | 每个 tick 向 stdout 写一行命令向量 |
+| `--report <human\|json>` | 运行结束后向 stdout 写一次终态摘要；与 `--trace` 互斥 |
+| `--json` | 诊断与事件以 JSON Lines 写 stderr；隐含 `--quiet`（启动摘要会破坏 JSONL 流） |
 | `-q, --quiet` | 不打印启动摘要；dummy warning、fault 与中断报告仍然打印 |
 
 多个 `-i` 共享同一个时钟与同一个 body：每个镜像必须与第一个镜像的 `hz` 和 shape 一致，
@@ -49,8 +51,13 @@ cyinevm -i <IMAGE> [-i <IMAGE> ...] [-b <SPEC>] [--on-interrupt stop|continue]
 | 码 | 含义 |
 |---|---|
 | `0` | `--ticks`/`--until-halt` 正常结束、Ctrl-C、trace 管道关闭；中断本身不是错误 |
-| `1` | 镜像读取/校验/加载失败、后端握手或 tick 失败、fault、feature 缺失、信号处理器安装失败 |
 | `2` | 命令行用法错误（clap 的约定） |
+| `3` | 输入被拒绝：镜像读不出、格式或 rig/shape/hz 与本次运行不符 |
+| `4` | 运行异常结束：实例 fault |
+| `5` | 环境失败：后端、仲裁器、trace/裁决日志、信号处理器 |
+
+`--report json` 在每个退出码下都会写出终态（fault 也包括在内），字段见
+[`diagnostics.md`](diagnostics.md) §5。
 
 ---
 

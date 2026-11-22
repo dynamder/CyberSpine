@@ -77,8 +77,8 @@ fn dylib(path: &Path) -> Result<Box<dyn Arbiter>, ArbiterError> {
 
 #[cfg(not(feature = "dylib"))]
 fn dylib(_path: &Path) -> Result<Box<dyn Arbiter>, ArbiterError> {
-    Err(ArbiterError(
-        "this build has no `dylib` feature, so it cannot load a shared library".into(),
+    Err(ArbiterError::new(
+        "this build has no `dylib` feature, so it cannot load a shared library",
     ))
 }
 
@@ -89,7 +89,7 @@ fn rpc(address: &str) -> Result<Box<dyn Arbiter>, ArbiterError> {
 
 #[cfg(not(feature = "rpc"))]
 fn rpc(_address: &str) -> Result<Box<dyn Arbiter>, ArbiterError> {
-    Err(ArbiterError(
-        "this build has no `rpc` feature, so it cannot open a connection".into(),
+    Err(ArbiterError::new(
+        "this build has no `rpc` feature, so it cannot open a connection",
     ))
 }

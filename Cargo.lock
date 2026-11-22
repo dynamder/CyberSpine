@@ -218,6 +218,7 @@ name = "cyberspine-arbiter"
 version = "0.1.0"
 dependencies = [
  "cyberspine-arbiter-fixture",
+ "cyberspine-diag",
  "cyberspine-frame",
  "libloading",
  "rmp-serde",
@@ -238,14 +239,15 @@ dependencies = [
 name = "cyberspine-asm"
 version = "0.1.0"
 dependencies = [
- "annotate-snippets",
  "clap",
  "cyberspine-core",
  "cyberspine-diag",
  "cyberspine-manifest",
+ "cyberspine-report",
  "cyberspine-store",
  "cyberspine-testkit",
  "cyberspine-vm",
+ "serde_json",
  "smol_str",
  "thiserror",
  "winnow",
@@ -354,6 +356,7 @@ name = "cyberspine-exec"
 version = "0.1.0"
 dependencies = [
  "cyberspine-binfmt",
+ "cyberspine-diag",
  "cyberspine-isa",
  "thiserror",
 ]
@@ -368,6 +371,7 @@ version = "0.1.0"
 dependencies = [
  "cyberspine-arbiter",
  "cyberspine-core",
+ "cyberspine-diag",
  "cyberspine-testkit",
  "cyberspine-vm",
  "serde",
@@ -393,6 +397,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cyberspine-report"
+version = "0.1.0"
+dependencies = [
+ "annotate-snippets",
+ "cyberspine-arbiter",
+ "cyberspine-diag",
+ "cyberspine-host",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cyberspine-rig"
 version = "0.1.0"
 dependencies = [
@@ -410,8 +426,10 @@ dependencies = [
  "cyberspine-asm",
  "cyberspine-backend",
  "cyberspine-core",
+ "cyberspine-diag",
  "cyberspine-host",
  "cyberspine-manifest",
+ "cyberspine-report",
  "cyberspine-testkit",
  "cyberspine-vm",
  "serde_json",
@@ -439,6 +457,7 @@ name = "cyberspine-vm"
 version = "0.1.0"
 dependencies = [
  "cyberspine-core",
+ "cyberspine-diag",
  "cyberspine-testkit",
  "thiserror",
 ]

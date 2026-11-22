@@ -7,5 +7,6 @@ license.workspace = true
 
 [dependencies]
 cyberspine-binfmt = { path = "../cyberspine-binfmt" }
+cyberspine-diag = { path = "../cyberspine-diag" }
 cyberspine-isa = { path = "../cyberspine-isa" }
 thiserror = { version = "2.0.21", default-features = false }

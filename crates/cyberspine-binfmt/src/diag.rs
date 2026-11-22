@@ -1,71 +1,68 @@
 //! Where the loader's refusals meet the shared diagnostic vocabulary.
 //!
-//! Every [`LoadError`] is an error, and its `code` is the rule that rejected the
-//! image — the same identifier the doc comment on the variant carries, so the
-//! checklist in `docs/binfmt.md` §9 and the diagnostics a caller can filter by are
-//! one list rather than two.
+//! Every [`LoadError`] is an error, and its code is the rule that rejected the
+//! image — the same identifier the variant's doc comment carries, so the checklist
+//! in `docs/binfmt.md` §9 and the codes a caller can filter by are one list rather
+//! than two.
+//!
+//! The loader reports in image coordinates only. It never consults the debug
+//! segment to explain a refusal: at load time the debug segment is itself still a
+//! suspect (C9), and using it to locate another error would be circular. Turning a
+//! `pc` into a source line is the host's job, after the image has been accepted.
 
 use alloc::format;
 use alloc::string::ToString;
 use core::fmt;
 
-use cyberspine_diag::{DiagnosticKind, Level};
-
 use crate::load::LoadError;
 
-impl DiagnosticKind for LoadError {
-    fn level(&self) -> Level {
-        Level::Error
-    }
-
-    fn code(&self) -> &'static str {
-        match self {
-            Self::TooLarge { .. } => "C0",
-            Self::TooShort { .. } => "C1",
-            Self::BadMagic { .. } => "C1",
-            Self::FileLenMismatch { .. } => "C1",
-            Self::UnsupportedFormatVersion { .. } => "C2",
-            Self::UnsupportedIsaVersion { .. } => "C2",
-            Self::ReservedNotZero { .. } => "C3",
-            Self::ZeroHz => "C4",
-            Self::InvalidMaxWait { .. } => "C4",
-            Self::CountsExceedFileLen { .. } => "C5",
-            Self::ContentHashMismatch { .. } => "C6",
-            Self::TrailingBytes { .. } => "C7",
-            Self::Debug(_) => "C9",
-            // The mirror of C7: the tables ran past the end instead of stopping
-            // short of it. Both are "the declared layout and the bytes disagree",
-            // which C1 is the rule for.
-            Self::Truncated { .. } => "C1",
-            Self::CodeLenZero => "C8",
-            Self::MissingTrailingHalt => "C8",
-            Self::EmptyName { .. } => "M1",
-            Self::NameNotAnIdentifier { .. } => "M1",
-            Self::UnterminatedName { .. } => "M1",
-            Self::DuplicateName { .. } => "M2",
-            Self::SensorFCountBelowMuscleCount { .. } => "M3",
-            Self::ReadbackNameMismatch { .. } => "M4",
-            Self::ReadbackSourceMismatch { .. } => "M4",
-            Self::UnknownSensorSource { .. } => "M5",
-            Self::SensorSourceNotAllowedHere { .. } => "M5",
-            Self::DuplicateBuiltinDt { .. } => "M5",
-            Self::DuplicateBuiltinTick { .. } => "M5",
-            Self::MuscleSourceNotAllowedHere { .. } => "M6",
-            Self::UnterminatedReason { .. } => "M7",
-            Self::ReasonNotUtf8 { .. } => "M7",
-            Self::EmptyReason { .. } => "M7",
-            Self::ReasonTooLong { .. } => "M7",
-            Self::InvalidReason { .. } => "M7",
-            Self::InvalidInstruction { .. } => "I1",
-            Self::NonCanonicalInstruction { .. } => "I2",
-            Self::SensorIndexOutOfRange { .. } => "I3",
-            Self::VarIndexOutOfRange { .. } => "I4",
-            Self::MuscleIndexOutOfRange { .. } => "I5",
-            Self::ReasonIndexOutOfRange { .. } => "I9",
-            Self::JumpTargetOutOfRange { .. } => "I6",
-            Self::WaitNotFiniteOrNegative { .. } => "I7",
-            Self::WaitExceedsMaxWait { .. } => "I7",
-        }
+cyberspine_diag::codes! {
+    LoadError: Error {
+        Self::TooLarge { .. } => "binfmt.C0",
+        Self::TooShort { .. } => "binfmt.C1",
+        Self::BadMagic { .. } => "binfmt.C1",
+        Self::FileLenMismatch { .. } => "binfmt.C1",
+        Self::UnsupportedFormatVersion { .. } => "binfmt.C2",
+        Self::UnsupportedIsaVersion { .. } => "binfmt.C2",
+        Self::ReservedNotZero { .. } => "binfmt.C3",
+        Self::ZeroHz => "binfmt.C4",
+        Self::InvalidMaxWait { .. } => "binfmt.C4",
+        Self::CountsExceedFileLen { .. } => "binfmt.C5",
+        Self::ContentHashMismatch { .. } => "binfmt.C6",
+        Self::TrailingBytes { .. } => "binfmt.C7",
+        Self::Debug(_) => "binfmt.C9",
+        // The mirror of C7: the tables ran past the end instead of stopping short
+        // of it. Both are "the declared layout and the bytes disagree", which C1
+        // is the rule for.
+        Self::Truncated { .. } => "binfmt.C1",
+        Self::CodeLenZero => "binfmt.C8",
+        Self::MissingTrailingHalt => "binfmt.C8",
+        Self::EmptyName { .. } => "binfmt.M1",
+        Self::NameNotAnIdentifier { .. } => "binfmt.M1",
+        Self::UnterminatedName { .. } => "binfmt.M1",
+        Self::DuplicateName { .. } => "binfmt.M2",
+        Self::SensorFCountBelowMuscleCount { .. } => "binfmt.M3",
+        Self::ReadbackNameMismatch { .. } => "binfmt.M4",
+        Self::ReadbackSourceMismatch { .. } => "binfmt.M4",
+        Self::UnknownSensorSource { .. } => "binfmt.M5",
+        Self::SensorSourceNotAllowedHere { .. } => "binfmt.M5",
+        Self::DuplicateBuiltinDt { .. } => "binfmt.M5",
+        Self::DuplicateBuiltinTick { .. } => "binfmt.M5",
+        Self::MuscleSourceNotAllowedHere { .. } => "binfmt.M6",
+        Self::UnterminatedReason { .. } => "binfmt.M7",
+        Self::ReasonNotUtf8 { .. } => "binfmt.M7",
+        Self::EmptyReason { .. } => "binfmt.M7",
+        Self::ReasonTooLong { .. } => "binfmt.M7",
+        Self::InvalidReason { .. } => "binfmt.M7",
+        Self::InvalidInstruction { .. } => "binfmt.I1",
+        Self::NonCanonicalInstruction { .. } => "binfmt.I2",
+        Self::SensorIndexOutOfRange { .. } => "binfmt.I3",
+        Self::VarIndexOutOfRange { .. } => "binfmt.I4",
+        Self::MuscleIndexOutOfRange { .. } => "binfmt.I5",
+        Self::ReasonIndexOutOfRange { .. } => "binfmt.I9",
+        Self::JumpTargetOutOfRange { .. } => "binfmt.I6",
+        Self::WaitNotFiniteOrNegative { .. } => "binfmt.I7",
+        Self::WaitExceedsMaxWait { .. } => "binfmt.I7",
     }
 }
 
@@ -92,15 +89,9 @@ impl fmt::Display for Warning {
     }
 }
 
-impl DiagnosticKind for Warning {
-    fn level(&self) -> Level {
-        Level::Warning
-    }
-
-    fn code(&self) -> &'static str {
-        match self {
-            Self::NewerMinor { .. } => "C2",
-        }
+cyberspine_diag::codes! {
+    Warning: Warning {
+        Self::NewerMinor { .. } => "binfmt.C2",
     }
 }
 

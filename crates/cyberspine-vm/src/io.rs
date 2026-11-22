@@ -16,7 +16,11 @@ use std::path::{Path, PathBuf};
 
 use cyberspine_core::binfmt::image::MAX_IMAGE_LEN;
 use cyberspine_core::binfmt::load::{LoadError, VerifiedImage};
+use cyberspine_diag::{Anchor, Code, Diagnostic};
 use thiserror::Error;
+
+const RT_UNREADABLE_IMAGE: Code = Code::new("rt.unreadable-image");
+const BINFMT_TOO_LARGE: Code = Code::new("binfmt.C0");
 
 /// The largest file this loader will read, in bytes.
 ///
@@ -47,6 +51,24 @@ pub enum LoadFileError {
     /// The bytes were read but are not a valid image (§9).
     #[error(transparent)]
     Image(#[from] LoadError),
+}
+
+impl LoadFileError {
+    /// This failure as a diagnostic naming `path`.
+    ///
+    /// A format-level refusal keeps its own `binfmt.*` code: the file gate is a
+    /// door to the same room, not a different rule.
+    pub fn diagnostic(&self, path: &str) -> Diagnostic {
+        match self {
+            Self::Image(error) => Diagnostic::of(error),
+            Self::Io { source, .. } => Diagnostic::error(
+                RT_UNREADABLE_IMAGE,
+                format!("could not read the image: {source}"),
+            ),
+            Self::FileTooLarge { .. } => Diagnostic::error(BINFMT_TOO_LARGE, self.to_string()),
+        }
+        .at(Anchor::whole(path))
+    }
 }
 
 /// Read and fully verify a `.csp` file from disk.

@@ -91,7 +91,19 @@ pub struct Tick {
 pub struct Rulings {
     pub decisions: Vec<Decision>,
     /// Set when the arbiter itself gave up; the host fails the rest.
-    pub failure: Option<String>,
+    pub failure: Option<WireCause>,
+}
+
+/// A failure reported across the boundary: the code travels with it.
+///
+/// The code is a string on the wire, not a `Code`: the sender is another
+/// process, and its codes were minted at its compile time, not this one's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireCause {
+    pub code: String,
+    pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub help: Option<String>,
 }
 
 /// A refusal, in reply to any frame.
@@ -160,4 +172,28 @@ pub fn split(bytes: &[u8]) -> Result<(Kind, &[u8]), WireError> {
 /// Decode a payload.
 pub fn decode<T: serde::de::DeserializeOwned>(payload: &[u8]) -> Result<T, WireError> {
     Ok(rmp_serde::decode::from_slice(payload)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Kind, Rulings, WireCause, decode, encode};
+
+    #[test]
+    fn a_structured_failure_survives_a_round_trip() {
+        let rulings = Rulings {
+            decisions: Vec::new(),
+            failure: Some(WireCause {
+                code: "arbiter.llm-timeout".into(),
+                message: "no answer".into(),
+                help: Some("raise the deadline".into()),
+            }),
+        };
+
+        let mut bytes = Vec::new();
+        encode(Kind::Tick, &rulings, &mut bytes).expect("the frame encodes");
+        let (_, payload) = super::split(&bytes).expect("the frame splits");
+        let decoded: Rulings = decode(payload).expect("the payload decodes");
+
+        assert_eq!(decoded, rulings);
+    }
 }

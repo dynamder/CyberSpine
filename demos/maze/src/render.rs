@@ -96,7 +96,7 @@ fn ruling_lines(scene: &Scene) -> [String; RULING_LINES] {
     lines.try_into().expect("padded to RULING_LINES")
 }
 
-fn describe(report: &Report) -> Option<String> {
+pub fn describe(report: &Report) -> Option<String> {
     match report {
         Report::Interrupt { event, reason, .. } => Some(format!("interrupt {event}: {reason}")),
         Report::Round {
@@ -108,9 +108,11 @@ fn describe(report: &Report) -> Option<String> {
         Report::Finished { event, .. } => Some(format!("interrupt {event} finished")),
         Report::Unknown { event } => Some(format!("interrupt {event}: unknown event")),
         Report::Action { event, message } => Some(format!("interrupt {event}: {message}")),
-        Report::Carry { .. } | Report::Verdict { .. } | Report::Failed { .. } => {
-            Some(report.to_string())
+        Report::Carry { event, message } => {
+            Some(format!("interrupt {event} could not be carried: {message}"))
         }
+        Report::Verdict { message } => Some(format!("verdict did not apply: {message}")),
+        Report::Failed { cause } => Some(format!("arbiter failed: {cause}")),
     }
 }
 

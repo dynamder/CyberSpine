@@ -73,11 +73,7 @@ impl<A: Arbiter> Interrupts<A> {
         for ticket in session.take_interrupts() {
             let event = EventId::new(ticket.seq());
             let (action, instances, image_hash) = registry.snapshot(ticket.instance);
-            let source = registry.debug_of(ticket.instance).and_then(|debug| {
-                debug.line(ticket.pc).map(|line| {
-                    format!("{}:{}:{}", debug.source(), line.line, line.column).into_boxed_str()
-                })
-            });
+            let site = registry.source_of(ticket.instance, ticket.pc);
             let actions = self
                 .resolver
                 .as_ref()
@@ -90,7 +86,7 @@ impl<A: Arbiter> Interrupts<A> {
                 pc: ticket.pc,
                 tick: ticket.tick,
                 reason: ticket.reason.clone(),
-                source,
+                site,
             });
             self.arbiter.deliver(InterruptEvent {
                 event,
@@ -172,7 +168,7 @@ impl<A: Arbiter> Interrupts<A> {
 
         if let Some(error) = failure {
             reports.push(Report::Failed {
-                message: error.to_string().into_boxed_str(),
+                cause: error.cause().clone(),
             });
             for (_, inflight) in self.inflight.drain() {
                 let instance = inflight.ticket.instance;

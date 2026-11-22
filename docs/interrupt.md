@@ -281,12 +281,17 @@ pub struct Ruling {
 
 pub struct Decision { pub event: EventId, pub ruling: Ruling }
 pub struct Batch { pub decisions: Vec<Decision>, pub failure: Option<ArbiterError> }
+// ArbiterError 携带 Cause { code, message, help }：失败也有稳定码，见 diagnostics.md
 
 pub trait Arbiter {
     fn deliver(&mut self, event: InterruptEvent); // 不得阻塞
     fn take(&mut self, now: u64) -> Batch;        // 无裁决时返回空；now 是宿主时钟
 }
 ```
+
+通知不属于 `Arbiter`：[`NoticeSource`] 是独立 trait（`take_notices`），宿主在运行结束后
+通过安装时的第二个句柄取走——回放与录制不一致就是它的第一个用户。裁决是每个仲裁器都要
+做的，通知不是，所以两者不共用一个 trait。见 [`diagnostics.md`](diagnostics.md) §8。
 
 `InterruptEvent` 带 `EventId` 而不是 `Interrupt`：票据的 `reason_id` / `seq` 是私有字段，
 本来就序列化不了；而且这样仲裁器在类型上**不可能持有或伪造票据**。
@@ -334,7 +339,8 @@ pub trait Arbiter {
 各自钉自己的 magic：body 是 `CSPB`，仲裁器是 `CSPA`。所以把 body 帧喂给仲裁器会停在 magic，
 不会解码成错误的消息。载荷仍是 MessagePack。
 
-一次交换是一帧 `Tick { seq, now, events }` 换一帧 `Rulings { decisions, failure }`；握手是
+一次交换是一帧 `Tick { seq, now, events }` 换一帧 `Rulings { decisions, failure }`（`failure` 是
+`{ code, message, help }`）；握手是
 `Hello` / `Welcome { version, build_id }`。`seq` 让 ABI 难逃的"缓冲不够、重发一次"变成幂等：
 仲裁器缓存上一轮的回复，重发同一个 `seq` 不再投递事件。`source` / `note` / 动作引用各有
 `MAX_TEXT_LEN`（4 KiB）上限，超限的一律按协议错误拒绝。

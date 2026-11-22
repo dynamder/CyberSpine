@@ -64,14 +64,14 @@ impl<T: Transport> RemoteArbiter<T> {
         let len = transport.exchange(&request, &mut response)?;
         let (kind, payload) = wire::split(&response[..len]).map_err(failed)?;
         if kind != Kind::Hello {
-            return Err(ArbiterError(
+            return Err(ArbiterError::new(
                 format!("the arbiter answered a Hello with {kind:?}").into_boxed_str(),
             ));
         }
 
         let welcome: Welcome = wire::decode(payload).map_err(failed)?;
         if welcome.version != wire::VERSION {
-            return Err(ArbiterError(
+            return Err(ArbiterError::new(
                 format!(
                     "the arbiter speaks protocol {}, this host speaks {}",
                     welcome.version,
@@ -114,9 +114,9 @@ impl<T: Transport> RemoteArbiter<T> {
             Kind::Tick => wire::decode(payload).map_err(failed),
             Kind::Error => {
                 let failure: wire::Failure = wire::decode(payload).map_err(failed)?;
-                Err(ArbiterError(failure.message.into_boxed_str()))
+                Err(ArbiterError::new(failure.message.into_boxed_str()))
             }
-            other => Err(ArbiterError(
+            other => Err(ArbiterError::new(
                 format!("the arbiter answered a Tick with {other:?}").into_boxed_str(),
             )),
         }
@@ -150,13 +150,11 @@ impl<T: Transport> Arbiter for RemoteArbiter<T> {
                 decisions.extend(rulings.decisions);
                 Batch {
                     decisions,
-                    failure: rulings
-                        .failure
-                        .map(|text| ArbiterError(text.into_boxed_str())),
+                    failure: rulings.failure.map(from_wire),
                 }
             }
             Err(error) => {
-                self.terminal = Some(error.0.clone());
+                self.terminal = Some(error.to_string().into_boxed_str());
                 Batch {
                     decisions,
                     failure: Some(error),
@@ -166,6 +164,51 @@ impl<T: Transport> Arbiter for RemoteArbiter<T> {
     }
 }
 
+/// A cause that crossed the wire keeps its code: the sender minted it, and the
+/// host can only report what it said.
+fn from_wire(cause: wire::WireCause) -> ArbiterError {
+    let code = if cause.code.is_empty() {
+        crate::ARBITER_FAILED
+    } else {
+        cyberspine_diag::Code::owned(cause.code)
+    };
+    let error = ArbiterError::caused(code, cause.message);
+    match cause.help {
+        Some(help) => error.with_help(help),
+        None => error,
+    }
+}
+
 fn failed(error: wire::WireError) -> ArbiterError {
-    ArbiterError(error.to_string().into_boxed_str())
+    ArbiterError::new(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::from_wire;
+    use crate::wire::WireCause;
+
+    #[test]
+    fn a_wire_cause_keeps_its_code() {
+        let error = from_wire(WireCause {
+            code: "arbiter.llm-timeout".into(),
+            message: "no answer before the deadline".into(),
+            help: Some("raise the deadline".into()),
+        });
+
+        assert_eq!(error.cause().code.as_str(), "arbiter.llm-timeout");
+        assert_eq!(error.cause().message, "no answer before the deadline");
+        assert_eq!(error.cause().help.as_deref(), Some("raise the deadline"));
+    }
+
+    #[test]
+    fn an_arbiter_that_names_no_code_gets_the_default() {
+        let error = from_wire(WireCause {
+            code: String::new(),
+            message: "it stopped".into(),
+            help: None,
+        });
+
+        assert_eq!(error.cause().code.as_str(), "arbiter.failed");
+    }
 }

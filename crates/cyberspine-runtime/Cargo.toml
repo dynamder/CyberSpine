@@ -16,7 +16,9 @@ ctrlc = "3.5.2"
 cyberspine-arbiter = { path = "../cyberspine-arbiter" }
 cyberspine-backend = { path = "../cyberspine-backend", default-features = false }
 cyberspine-core = { path = "../cyberspine-core" }
+cyberspine-diag = { path = "../cyberspine-diag" }
 cyberspine-host = { path = "../cyberspine-host" }
+cyberspine-report = { path = "../cyberspine-report" }
 cyberspine-vm = { path = "../cyberspine-vm" }
 thiserror = "2.0.21"
 

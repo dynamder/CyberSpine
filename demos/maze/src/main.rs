@@ -142,8 +142,8 @@ fn headless(mut session: Session) -> ExitCode {
 /// Print the rulings this frame produced, oldest first.
 fn report(session: &Session, printed: usize) -> usize {
     for report in &session.reports()[printed..] {
-        if !report.is_silent() {
-            eprintln!("{report}");
+        if let Some(text) = render::describe(report) {
+            eprintln!("{text}");
         }
     }
     session.reports().len()

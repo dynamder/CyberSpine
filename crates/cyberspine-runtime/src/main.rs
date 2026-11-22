@@ -1,22 +1,69 @@
 use std::process::ExitCode;
 
 use clap::Parser;
+use cyberspine_diag::Diagnostics;
+use cyberspine_report::{Format, Renderer};
+
 use cyberspine_runtime::{Args, linked, run_external, run_linked};
 
 fn main() -> ExitCode {
     let args = Args::parse();
-    let options = args.options();
+    let mut options = match args.options() {
+        Ok(options) => options,
+        Err(error) => error.exit(),
+    };
+    // The startup summary is human text; on a JSON stream it would be the one
+    // line a reader cannot parse. `--json` therefore implies `--quiet`.
+    if args.json {
+        options.quiet = true;
+    }
 
-    let result = match &args.backend {
-        Some(spec) => run_external(spec, &args.image, &options),
-        None => run_linked::<linked::Official>(&args.image, &options),
+    let diagnostics_format = if args.json {
+        Format::Json
+    } else {
+        Format::Human
+    };
+    let mut renderer = Renderer::new(diagnostics_format);
+    let mut sink = Diagnostics::new(false);
+
+    // The interrupt/ruling stream is rendered where it happens: long runs show
+    // progress, and JSON mode gets one `kind: "event"` line per event.
+    let result = {
+        let mut on_event = |report: &cyberspine_runtime::Report| {
+            let _ = renderer.event(report, &mut std::io::stderr().lock());
+        };
+        match &args.backend {
+            Some(spec) => run_external(spec, &args.image, &options, &mut sink, &mut on_event),
+            None => run_linked::<linked::Official>(&args.image, &options, &mut sink, &mut on_event),
+        }
+    };
+    let (class, report) = match result {
+        Ok((report, None)) => (0, Some(report)),
+        Ok((report, Some(error))) => {
+            sink.push_all(error.diagnostics());
+            (error.class(), Some(report))
+        }
+        Err(error) => {
+            sink.push_all(error.diagnostics());
+            (error.class(), None)
+        }
     };
 
-    match result {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(error) => {
-            eprintln!("error: {error}");
-            ExitCode::FAILURE
-        }
+    // Diagnostics always go to stderr: stdout is the product (the trace or the
+    // report), and mixing the two makes a run impossible to parse. `--json`
+    // changes the format, not the stream.
+    let _ = renderer.diagnostics(sink.items(), &mut std::io::stderr().lock());
+
+    // The run report has its own format flag, independent of `--json`: a caller
+    // may want a machine-readable report and human diagnostics, or the reverse.
+    if let Some(format) = args.report
+        && let Some(report) = report
+        && Renderer::new(format.format())
+            .run(&report, &mut std::io::stdout().lock())
+            .is_err()
+    {
+        return ExitCode::from(5);
     }
+
+    ExitCode::from(class)
 }

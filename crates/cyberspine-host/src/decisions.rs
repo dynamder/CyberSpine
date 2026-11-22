@@ -7,14 +7,18 @@
 //!
 //! JSON Lines, one ruling per line, in the order the host applied them.
 
+use std::cell::Cell;
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use cyberspine_arbiter::{
-    Action, Arbiter, Batch, Completion, Decision, EventId, InterruptEvent, Ruling,
+    Action, Arbiter, Batch, Completion, Decision, EventId, InterruptEvent, Notice, NoticeSource,
+    Ruling,
 };
+use cyberspine_diag::Code;
 use serde::{Deserialize, Serialize};
 
 /// One applied round.
@@ -78,9 +82,19 @@ pub struct Replay {
     path: PathBuf,
     script: HashMap<u64, VecDeque<Record>>,
     live: Vec<EventId>,
-    applied: usize,
+    stats: Rc<ReplayStats>,
+}
+
+/// The counters a [`Replay`] and its [`ReplayReport`] share.
+///
+/// `total` is fixed at load; the other two move as the run goes. Cells rather
+/// than plain fields because the report outlives the arbiter's box and has to
+/// read the final values without owning the run.
+#[derive(Debug, Default)]
+struct ReplayStats {
     total: usize,
-    orphans: usize,
+    applied: Cell<usize>,
+    orphans: Cell<usize>,
 }
 
 impl Replay {
@@ -115,42 +129,29 @@ impl Replay {
             path: path.to_path_buf(),
             script,
             live: Vec::new(),
-            applied: 0,
-            total,
-            orphans: 0,
+            stats: Rc::new(ReplayStats {
+                total,
+                ..ReplayStats::default()
+            }),
         })
     }
 
     /// Rounds in the file that this run never reached.
     pub fn unused(&self) -> usize {
-        self.total - self.applied
+        self.stats.total - self.stats.applied.get()
     }
 
     /// Interrupts this run raised that the file says nothing about.
     pub fn orphans(&self) -> usize {
-        self.orphans
+        self.stats.orphans.get()
     }
 
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for Replay {
-    fn drop(&mut self) {
-        if self.unused() > 0 {
-            eprintln!(
-                "warning: {} recorded round(s) in {} were never applied; the run diverged",
-                self.unused(),
-                self.path.display()
-            );
-        }
-        if self.orphans > 0 {
-            eprintln!(
-                "warning: {} interrupt(s) had no record in {}; they stayed parked",
-                self.orphans,
-                self.path.display()
-            );
+    /// A handle that can report what this replay did, after it is boxed away.
+    pub fn report(&self) -> ReplayReport {
+        ReplayReport {
+            path: self.path.clone(),
+            stats: Rc::clone(&self.stats),
+            drained: Cell::new(false),
         }
     }
 }
@@ -160,7 +161,7 @@ impl Arbiter for Replay {
         if self.script.contains_key(&event.event.get()) {
             self.live.push(event.event);
         } else {
-            self.orphans += 1;
+            self.stats.orphans.set(self.stats.orphans.get() + 1);
         }
     }
 
@@ -177,7 +178,7 @@ impl Arbiter for Replay {
                     break;
                 }
                 let record = rounds.pop_front().expect("a front exists");
-                self.applied += 1;
+                self.stats.applied.set(self.stats.applied.get() + 1);
                 let done = matches!(record.completion, Completion::Finished(_));
                 decisions.push(Decision {
                     event: *event,
@@ -197,6 +198,60 @@ impl Arbiter for Replay {
 
         self.live.retain(|event| !finished.contains(event));
         Batch::from(decisions)
+    }
+}
+
+/// What a replay has to say once the run is over.
+///
+/// It holds a shared view of the counters, not the arbiter: the arbiter is gone
+/// by then, and a notice is a fact about the run, not a method on the thing that
+/// produced it.
+pub struct ReplayReport {
+    path: PathBuf,
+    stats: Rc<ReplayStats>,
+    drained: Cell<bool>,
+}
+
+pub const REPLAY_UNUSED: Code = Code::new("rt.replay-unused");
+pub const REPLAY_ORPHAN: Code = Code::new("rt.replay-orphan");
+
+impl NoticeSource for ReplayReport {
+    fn take_notices(&mut self) -> Vec<Notice> {
+        if self.drained.replace(true) {
+            return Vec::new();
+        }
+
+        let artifact = self.path.display().to_string();
+        let mut notices = Vec::new();
+
+        let unused = self.stats.total - self.stats.applied.get();
+        if unused > 0 {
+            notices.push(
+                Notice::new(
+                    REPLAY_UNUSED,
+                    format!("{unused} recorded round(s) were never applied"),
+                )
+                .with_help(
+                    "the run diverged from the recording: the same action against the same body \
+                     should reproduce it",
+                )
+                .about(artifact.clone()),
+            );
+        }
+
+        let orphans = self.stats.orphans.get();
+        if orphans > 0 {
+            notices.push(
+                Notice::new(
+                    REPLAY_ORPHAN,
+                    format!("{orphans} interrupt(s) had no record"),
+                )
+                .with_help("the recording was made from a different run, or the body changed")
+                .about(artifact),
+            );
+        }
+
+        notices
     }
 }
 
@@ -316,6 +371,52 @@ mod tests {
 
         assert!(replay.take(100).decisions.is_empty());
         assert_eq!(replay.orphans(), 1);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_short_replay_reports_the_rounds_it_never_applied() {
+        let root = scratch("notices-unused");
+        let path = root.join("run.jsonl");
+        let mut log = Log::create(&path).expect("the log is created");
+        log.write(&Record::new(
+            EventId::new(1),
+            0,
+            &ruling(Completion::Finished(Verdict::Stop)),
+        ))
+        .expect("the round is written");
+        drop(log);
+
+        let replay = Replay::load(&path).expect("the log is read");
+        let mut report = replay.report();
+
+        let notices = report.take_notices();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert_eq!(notices[0].cause.code.as_str(), "rt.replay-unused");
+        assert_eq!(
+            notices[0].artifact.as_deref(),
+            Some(path.display().to_string().as_str())
+        );
+        assert!(report.take_notices().is_empty(), "the source drains");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_unrecorded_interrupt_is_a_notice() {
+        let root = scratch("notices-orphan");
+        let path = root.join("run.jsonl");
+        Log::create(&path).expect("the log is created");
+
+        let mut replay = Replay::load(&path).expect("the log is read");
+        let mut report = replay.report();
+        replay.deliver(event(7));
+
+        let notices = report.take_notices();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        assert_eq!(notices[0].cause.code.as_str(), "rt.replay-orphan");
+        assert!(notices[0].cause.help.is_some());
 
         let _ = std::fs::remove_dir_all(&root);
     }

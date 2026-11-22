@@ -4,7 +4,7 @@
 //! server — are thin wrappers around [`Server`], so an arbiter behaves the same
 //! whichever way it is packaged.
 
-use crate::wire::{self, Failure, Hello, Kind, Rulings, Tick, Welcome};
+use crate::wire::{self, Failure, Hello, Kind, Rulings, Tick, Welcome, WireCause};
 use crate::{Action, Arbiter, Decision};
 
 /// An arbiter plus the buffer its replies are built in.
@@ -84,7 +84,14 @@ impl<A: Arbiter> Server<A> {
                 let batch = self.arbiter.take(tick.now);
                 let rulings = Rulings {
                     decisions: batch.decisions,
-                    failure: batch.failure.map(|error| error.0.into_string()),
+                    failure: batch.failure.map(|error| {
+                        let cause = error.cause();
+                        WireCause {
+                            code: cause.code.as_str().to_owned(),
+                            message: cause.message.clone(),
+                            help: cause.help.clone(),
+                        }
+                    }),
                 };
                 if let Some(overlong) = first_overlong(&rulings.decisions) {
                     return Err(protocol(overlong));

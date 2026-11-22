@@ -578,13 +578,10 @@ fn check_container(
         });
     }
     if minor != FORMAT_MINOR {
-        diagnostics.push(
-            &Warning::NewerMinor {
-                declared: minor,
-                known: FORMAT_MINOR,
-            },
-            None,
-        );
+        diagnostics.push_of(&Warning::NewerMinor {
+            declared: minor,
+            known: FORMAT_MINOR,
+        });
     }
     if raw.isa_version != ISA_VERSION {
         return Err(LoadError::UnsupportedIsaVersion {

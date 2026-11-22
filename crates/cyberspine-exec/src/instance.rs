@@ -64,6 +64,12 @@ pub enum Fault {
     FuelExhausted { pc: usize },
 }
 
+cyberspine_diag::codes! {
+    Fault: Error {
+        Self::FuelExhausted { .. } => "exec.fuel-exhausted",
+    }
+}
+
 impl Fault {
     /// The instruction the instance stopped on. Every fault has one: a fault is
     /// reported after the instruction that could not run, so this is what a

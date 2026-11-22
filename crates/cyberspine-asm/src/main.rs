@@ -6,127 +6,205 @@ use std::{
 
 use clap::Parser;
 use cyberspine_asm::{
-    assembler::{self, Asm, ImageGenError, diagnostic},
+    assembler::{self, Asm},
     cli::CliArgs,
 };
+use cyberspine_core::binfmt::Image;
 use cyberspine_core::rig::Rig;
-use cyberspine_diag::Diagnostics;
+use cyberspine_diag::{Anchor, Code, Diagnostic, Diagnostics};
+use cyberspine_report::{Format, Renderer};
 use cyberspine_store::{self as store, WriteError};
 
-fn main() -> ExitCode {
-    let cli_args = CliArgs::parse();
+/// The image was produced and written.
+const EXIT_OK: u8 = 0;
+/// The input was rejected: bad source, bad manifest, a `-o` that would eat it.
+const EXIT_REJECTED: u8 = 3;
+/// The environment failed: a file could not be read or written.
+const EXIT_ENVIRONMENT: u8 = 5;
 
-    match run(&cli_args) {
-        Ok(()) => ExitCode::SUCCESS,
-        Err(message) => {
-            eprint!("{message}");
-            ExitCode::FAILURE
+// Codes for the failures that come from the CLI's own work rather than from an
+// error enum. They live here, next to the only code that reports them.
+const MISSING_RIG: Code = Code::new("asm.missing-rig");
+const UNREADABLE_RIG: Code = Code::new("asm.unreadable-rig");
+const BAD_RIG: Code = Code::new("asm.bad-rig");
+const UNREADABLE_SOURCE: Code = Code::new("asm.unreadable-source");
+const UNWRITABLE_OUTPUT: Code = Code::new("asm.unwritable-output");
+const SOURCE_OVERWRITE: Code = Code::new("asm.source-overwrite");
+const DENIED_WARNINGS: Code = Code::new("asm.denied-warnings");
+const INTERNAL: Code = Code::new("asm.internal");
+
+fn main() -> ExitCode {
+    let cli = CliArgs::parse();
+    let format = if cli.json {
+        Format::Json
+    } else {
+        Format::Human
+    };
+    let mut sink = Diagnostics::new(cli.deny_warnings);
+
+    let source = match fs::read_to_string(&cli.asm_file) {
+        Ok(text) => Some(text),
+        Err(error) => {
+            sink.push(
+                Diagnostic::error(
+                    UNREADABLE_SOURCE,
+                    format!("cannot read the source: {error}"),
+                )
+                .at(Anchor::whole(cli.asm_file.display().to_string())),
+            );
+            None
+        }
+    };
+
+    let class = match &source {
+        Some(text) => run(&cli, text, &mut sink),
+        None => EXIT_ENVIRONMENT,
+    };
+
+    let mut renderer = Renderer::new(format);
+    if let Some(text) = &source {
+        renderer.remember(&cli.asm_file, text.clone());
+    }
+    // Diagnostics always go to stderr; `--json` changes the format, not the
+    // stream. stdout stays free for whatever the tool produces (`cyinea`
+    // produces nothing there today, which keeps a pipeline readable).
+    let _ = renderer.diagnostics(sink.items(), &mut std::io::stderr().lock());
+
+    ExitCode::from(class)
+}
+
+fn run(cli: &CliArgs, source: &str, sink: &mut Diagnostics) -> u8 {
+    let path = &cli.asm_file;
+
+    let asm = match assembler::parse(source) {
+        Ok(asm) => asm,
+        Err(errors) => {
+            sink.push_all(errors.diagnostics(&path.display().to_string()));
+            return EXIT_REJECTED;
+        }
+    };
+
+    let artifact = path.display().to_string();
+    for warning in assembler::lint(&asm) {
+        sink.push(warning.diagnostic(&artifact));
+    }
+
+    // The only point that decides whether the run continues: an error always
+    // stops it, a warning stops it only under `--deny-warnings`.
+    if sink.failed() {
+        deny_warnings(sink);
+        return EXIT_REJECTED;
+    }
+
+    let rig = match load_rig(cli, &asm, sink) {
+        Ok(rig) => rig,
+        Err(class) => return class,
+    };
+
+    let output = cli
+        .output
+        .clone()
+        .unwrap_or_else(|| cli.asm_file.with_extension("csp"));
+
+    if let Err(class) = refuse_to_overwrite_source(&cli.asm_file, &output, sink) {
+        return class;
+    }
+
+    let Some(image) = build_image(cli, &asm, &rig, &output, sink) else {
+        return EXIT_REJECTED;
+    };
+
+    match store::write_image(&image, &output) {
+        Ok(()) => EXIT_OK,
+        Err(error) => {
+            let diagnostic = match error {
+                WriteError::NotCanonical { source } => {
+                    Diagnostic::error(INTERNAL, source.to_string())
+                        .at(Anchor::whole(output.display().to_string()))
+                        .note("this is an assembler bug, please report it")
+                }
+                other => Diagnostic::error(UNWRITABLE_OUTPUT, other.to_string())
+                    .at(Anchor::whole(output.display().to_string())),
+            };
+            sink.push(diagnostic);
+            EXIT_ENVIRONMENT
         }
     }
 }
 
-fn run(cli_args: &CliArgs) -> Result<(), String> {
-    let asm_str = fs::read_to_string(&cli_args.asm_file).map_err(|error| {
-        format!(
-            "error: cannot read `{}`: {error}\n",
-            cli_args.asm_file.display()
-        )
-    })?;
-
-    let asm =
-        assembler::parse(&asm_str).map_err(|errors| errors.render(&cli_args.asm_file, &asm_str))?;
-
-    // One sink for everything the run noticed, so "warnings exist" and "warnings
-    // are fatal" are the same question asked twice rather than two flags.
-    let mut diagnostics = Diagnostics::new(cli_args.deny_warnings);
-    for warning in assembler::lint(&asm) {
-        diagnostics.push(&warning, Some(warning.location));
+fn deny_warnings(sink: &mut Diagnostics) {
+    if sink.has_errors() || !sink.has_warnings() {
+        return;
     }
-    for item in diagnostics.items() {
-        if let Some(location) = item.location {
-            eprint!(
-                "{}",
-                diagnostic::render_warning(&item.message, location, &cli_args.asm_file, &asm_str,)
-            );
-        }
-    }
-    if diagnostics.denies_warnings() && diagnostics.has_warnings() {
-        return Err(format!(
-            "error: {} warning(s) treated as errors\n",
-            diagnostics.items().len()
-        ));
-    }
+    let count = sink.items().len();
+    sink.push(Diagnostic::error(
+        DENIED_WARNINGS,
+        format!("{count} warning(s) treated as errors"),
+    ));
+}
 
-    let rig = load_rig(cli_args, &asm)?;
-
-    let output = cli_args
-        .output
-        .clone()
-        .unwrap_or_else(|| cli_args.asm_file.with_extension("csp"));
-
-    refuse_to_overwrite_source(&cli_args.asm_file, &output)?;
-
-    let render = |error: ImageGenError| -> String {
-        let title = error.to_string();
-        match error.location() {
-            Some(location) => {
-                diagnostic::render_error(&title, location, &cli_args.asm_file, &asm_str)
-            }
-            // A bug in the assembler, not in the source: say which one it is so
-            // the report does not read like a user error.
-            None if matches!(error, ImageGenError::Internal { .. }) => format!(
-                "{}: error: {title}\nthis is an assembler bug, please report it\n",
-                cli_args.asm_file.display()
-            ),
-            None => format!("{}: error: {title}\n", cli_args.asm_file.display()),
-        }
-    };
-
-    let image = if cli_args.strip {
-        assembler::generate_image(&asm, &rig).map_err(render)?
+fn build_image(
+    cli: &CliArgs,
+    asm: &Asm,
+    rig: &Rig,
+    output: &Path,
+    sink: &mut Diagnostics,
+) -> Option<Image> {
+    let built = if cli.strip {
+        assembler::generate_image(asm, rig)
     } else {
-        let source = debug_source(&cli_args.asm_file, &output);
-        assembler::generate_image_debug(&asm, &rig, &source).map_err(render)?
+        let source = debug_source(&cli.asm_file, output);
+        assembler::generate_image_debug(asm, rig, &source)
     };
 
-    store::write_image(&image, &output).map_err(|error| match error {
-        // The loader rejecting our own output is an assembler bug, not a
-        // property of the user's source, so say so instead of blaming the input.
-        WriteError::NotCanonical { source } => format!(
-            "{}: internal error: refusing to write an image the loader rejects: {source}\n",
-            cli_args.asm_file.display()
-        ),
-        other => format!("error: {other}\n"),
-    })?;
-
-    Ok(())
+    match built {
+        Ok(image) => Some(image),
+        Err(error) => {
+            sink.push(error.diagnostic(&cli.asm_file.display().to_string()));
+            None
+        }
+    }
 }
 
 /// `docs/asm.md` §3.2: `--rig` overrides the `.rig` directive, and a relative
 /// path is resolved against the `.csa`'s directory rather than the cwd.
-fn load_rig(cli_args: &CliArgs, asm: &Asm) -> Result<Rig, String> {
+fn load_rig(cli: &CliArgs, asm: &Asm, sink: &mut Diagnostics) -> Result<Rig, u8> {
     let declared = asm.header.rig.as_ref().map(PathBuf::from);
-    let path = cli_args.rig.clone().or(declared).ok_or_else(|| {
-        format!(
-            "{}: error: no rig manifest; add a `.rig` directive or pass `--rig`\n",
-            cli_args.asm_file.display()
-        )
-    })?;
+    let Some(path) = cli.rig.clone().or(declared) else {
+        sink.push(Diagnostic::error(
+            MISSING_RIG,
+            "no rig manifest; add a `.rig` directive or pass `--rig`",
+        ));
+        return Err(EXIT_REJECTED);
+    };
 
-    let path = match cli_args.asm_file.parent() {
+    let path = match cli.asm_file.parent() {
         Some(base) if !path.is_absolute() => base.join(path),
         _ => path,
     };
+    let artifact = path.display().to_string();
 
-    let text = fs::read_to_string(&path).map_err(|error| {
-        format!(
-            "error: cannot read the rig manifest `{}`: {error}\n",
-            path.display()
-        )
-    })?;
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) => {
+            sink.push(
+                Diagnostic::error(
+                    UNREADABLE_RIG,
+                    format!("cannot read the rig manifest: {error}"),
+                )
+                .at(Anchor::whole(artifact)),
+            );
+            return Err(EXIT_REJECTED);
+        }
+    };
 
-    cyberspine_manifest::from_json(&text)
-        .map_err(|error| format!("{}: error: {error}\n", path.display()))
+    match cyberspine_manifest::from_json(&text) {
+        Ok(rig) => Ok(rig),
+        Err(error) => {
+            sink.push(Diagnostic::error(BAD_RIG, error.to_string()).at(Anchor::whole(artifact)));
+            Err(EXIT_REJECTED)
+        }
+    }
 }
 
 /// The path the debug segment records: the source relative to the image's
@@ -187,25 +265,54 @@ fn relative_to(source: &Path, base: &Path) -> Option<PathBuf> {
 /// `-o` pointed at the source would replace a `.csa` with binary, and the atomic
 /// rename makes that loss permanent. Comparing the *resolved* paths also catches
 /// a relative alias or a symlink between the two.
-fn refuse_to_overwrite_source(source: &Path, output: &Path) -> Result<(), String> {
+fn refuse_to_overwrite_source(
+    source: &Path,
+    output: &Path,
+    sink: &mut Diagnostics,
+) -> Result<(), u8> {
     if !output.exists() {
         return Ok(());
     }
 
     // A path that exists but cannot be resolved is not a reason to skip the
     // check: failing open here is what would let `-o` destroy the source.
-    let resolve = |path: &Path| {
-        fs::canonicalize(path)
-            .map_err(|error| format!("error: cannot resolve `{}`: {error}\n", path.display()))
+    let resolve = |path: &Path| fs::canonicalize(path);
+    let source_real = match resolve(source) {
+        Ok(real) => real,
+        Err(error) => {
+            sink.push(
+                Diagnostic::error(
+                    UNREADABLE_SOURCE,
+                    format!("cannot resolve the source: {error}"),
+                )
+                .at(Anchor::whole(source.display().to_string())),
+            );
+            return Err(EXIT_REJECTED);
+        }
     };
-    let source_real = resolve(source)?;
-    let output_real = resolve(output)?;
+    let output_real = match resolve(output) {
+        Ok(real) => real,
+        Err(error) => {
+            sink.push(
+                Diagnostic::error(
+                    UNWRITABLE_OUTPUT,
+                    format!("cannot resolve the output: {error}"),
+                )
+                .at(Anchor::whole(output.display().to_string())),
+            );
+            return Err(EXIT_REJECTED);
+        }
+    };
 
     if source_real == output_real {
-        return Err(format!(
-            "error: `{}` is the source file; refusing to overwrite it with the assembled image\n",
-            output.display()
-        ));
+        sink.push(
+            Diagnostic::error(
+                SOURCE_OVERWRITE,
+                "refusing to overwrite the source file with the assembled image",
+            )
+            .at(Anchor::whole(output.display().to_string())),
+        );
+        return Err(EXIT_REJECTED);
     }
 
     Ok(())

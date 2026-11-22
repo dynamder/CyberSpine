@@ -36,7 +36,7 @@
 |---|---|---|
 | R0.1 ✅ | `cyinea` 默认产出 debug 构建：镜像尾部内嵌调试段（`flags` bit 0，标签表 + `pc → 行:列`）；`--strip` 产出 release 构建 | debug / release 执行一致，哈希不同；`--strip` 的字节等于 release |
 | R0.2 ✅ | `cyinevm` 在 fault 与 `INTR` 事件中渲染 `file:line:col`；`--trace` 是冻结的观察格式，不动 | 测试钉住 `(probe.csa:8:5)` 形式的输出 |
-| R0.3 | `cyinevm --report json`：退出原因、实例末态、fault（pc + 源行）、裁决流、trace 摘要 | `--report json \| jq .` 可读，CI 一条端到端用例 |
+| R0.3 ✅ | `cyinevm --report json`：终态（`budget`/`halted`/`stopped`/`faulted`/`environment`）、tick 数、实例列表；诊断统一 `--json`（stderr JSONL），退出码分 `3/4/5` | 端到端用例钉住两条记录与三个退出码 |
 | R0.4 | 助记符前缀一致性进 `cyinea`（[`isa.md`](docs/isa.md) §11） | 违反规则的镜像被拒绝 |
 
 依赖：无。格式定在 [`binfmt.md`](docs/binfmt.md) §6.7。
@@ -132,3 +132,5 @@ R1.3 改动 arbiter 线格式：升 `ABI_VERSION`，或引入 v2 帧。
 
 - 2026-11-15：草案：H0–H4 的范围与验收；D1–D5 未定。
 - 2026-11-16：R0.1 / R0.2 落地；调试信息改为内嵌调试段（`binfmt.md` §6.7），不再用 `.cspd` 旁路。
+- 2026-11-21：诊断重构（[`diagnostics.md`](docs/diagnostics.md)）：单一 `Diagnostic` 载体、每 crate 稳定码、`cyberspine-report` 唯一渲染器；`cyinea`/`cyinevm` 的 `--json` 与 `--report json`；退出码改为 `3/4/5`；fault/INTR 的源行路径按镜像目录解析（此前打印的是相对路径）。R0.3 完成。
+- 2026-11-21：body 与 arbiter 的失败携带 `Cause`（码 + 消息 + help）；仲裁器失败跨线带码（预发布阶段不 bump 线上版本）。中断/裁决事件流搬进 `cyberspine-report`，`--json` 下与诊断、终态同一套记录。`Code` 支持运行时拥有的字符串，插件可以给自己的失败起名。

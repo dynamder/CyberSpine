@@ -12,10 +12,9 @@
 //! invariant under slicing, so an error raised deep inside an operand parser can
 //! be located correctly by the outer line loop.
 
-use std::{fmt, ops::Range, path::Path};
+use std::fmt;
 
-use annotate_snippets::{AnnotationKind, Level, Origin, Renderer, Snippet, renderer::DecorStyle};
-use cyberspine_diag::{DiagnosticKind, Level as DiagLevel};
+use cyberspine_diag::{Anchor, Diagnostic, Site};
 use smol_str::SmolStr;
 use thiserror::Error;
 use winnow::error::{ErrMode, ParserError};
@@ -118,11 +117,12 @@ impl ParseError {
     pub fn new(location: Location, kind: ParseErrorKind) -> Self {
         Self { location, kind }
     }
+}
 
-    /// Render this error against `source` with a source line and a caret.
-    pub fn render(&self, path: &Path, source: &str) -> String {
-        render_errors(std::slice::from_ref(self), path, source)
-    }
+/// The one way a source location becomes an anchor: the artifact is the file the
+/// caller read, and the site is the location the parser recorded.
+pub(crate) fn anchor(file: &str, location: Location) -> Anchor {
+    Anchor::new(file, Site::from(location))
 }
 
 impl fmt::Display for ParseError {
@@ -137,15 +137,28 @@ impl fmt::Display for ParseError {
 
 impl std::error::Error for ParseError {}
 
-impl DiagnosticKind for ParseError {
-    fn level(&self) -> DiagLevel {
-        DiagLevel::Error
-    }
-}
-
-impl DiagnosticKind for ParseErrorKind {
-    fn level(&self) -> DiagLevel {
-        DiagLevel::Error
+cyberspine_diag::codes! {
+    ParseErrorKind: Error {
+        Self::UnknownDirective(_) => "asm.unknown-directive",
+        Self::MissingDirectiveName { .. } => "asm.bad-directive",
+        Self::LateDirective(_) => "asm.late-directive",
+        Self::DuplicateField(_) => "asm.duplicate-field",
+        Self::MissingField(_) => "asm.missing-field",
+        Self::MissingFieldValue { .. } => "asm.bad-field",
+        Self::InvalidFieldValue { .. } => "asm.bad-field",
+        Self::MissingDescription => "asm.bad-description",
+        Self::DescriptionMisaligned { .. } => "asm.bad-description",
+        Self::UnterminatedString => "asm.bad-literal",
+        Self::UnknownMnemonic(_) => "asm.unknown-mnemonic",
+        Self::MissingOperand { .. } => "asm.bad-operand",
+        Self::MissingComma { .. } => "asm.bad-operand",
+        Self::InvalidOperand { .. } => "asm.bad-operand",
+        Self::RegisterOutOfRange { .. } => "asm.bad-register",
+        Self::RegisterFileMismatch { .. } => "asm.bad-register",
+        Self::ExpectedInstruction(_) => "asm.bad-statement",
+        Self::TrailingTokens(_) => "asm.bad-statement",
+        Self::ReservedName(_) => "asm.reserved-name",
+        Self::Unexpected => "asm.syntax",
     }
 }
 
@@ -171,17 +184,15 @@ impl AsmParseErrors {
         self.errors.len()
     }
 
-    /// Render every error against `source`, separated by a blank line.
-    pub fn render(&self, path: &Path, source: &str) -> String {
-        let mut out = render_errors(&self.errors, path, source);
-        if !out.is_empty() && !out.ends_with('\n') {
-            out.push('\n');
-        }
-        if self.errors.len() > 1 {
-            out.push('\n');
-            out.push_str(&format!("{} errors emitted\n", self.errors.len()));
-        }
-        out
+    /// Every error as a diagnostic, located in `file`.
+    ///
+    /// Rendering is not this crate's job: this is the one conversion, and the
+    /// report crate turns the result into a caret block or a JSON line.
+    pub fn diagnostics(&self, file: &str) -> Vec<Diagnostic> {
+        self.errors
+            .iter()
+            .map(|error| Diagnostic::of(&error.kind).at(anchor(file, error.location)))
+            .collect()
     }
 }
 
@@ -286,96 +297,4 @@ pub(crate) fn token_snippet(input: &str) -> SmolStr {
         .find(|c: char| c.is_whitespace() || c == ',' || c == '#')
         .unwrap_or(trimmed.len());
     snippet(&trimmed[..end])
-}
-
-/// Byte offset of `location` in `source`; `None` when the line does not exist.
-fn byte_offset(source: &str, location: Location) -> Option<usize> {
-    let mut offset = 0usize;
-    for (index, line) in source.split_inclusive('\n').enumerate() {
-        if index + 1 == location.line {
-            let chars = location.column.saturating_sub(1);
-            let byte = line
-                .char_indices()
-                .nth(chars)
-                .map_or(line.len(), |(index, _)| index);
-            return Some(offset + byte);
-        }
-        offset += line.len();
-    }
-    None
-}
-
-/// Byte range to annotate. Normally one character; a missing token at the end of
-/// a line becomes a zero-length span so the reported column is exact.
-fn span_at(source: &str, location: Location) -> Option<Range<usize>> {
-    let start = byte_offset(source, location)?;
-
-    if start >= source.len() || matches!(source[start..].chars().next(), Some('\n' | '\r')) {
-        return Some(start..start);
-    }
-
-    let end = start + source[start..].chars().next()?.len_utf8();
-    Some(start..end)
-}
-
-fn render_errors(errors: &[ParseError], path: &Path, source: &str) -> String {
-    let mut out = String::new();
-
-    for (index, error) in errors.iter().enumerate() {
-        if index > 0 {
-            out.push('\n');
-        }
-        out.push_str(&render_one(
-            Level::ERROR,
-            &error.kind.to_string(),
-            error.location,
-            path,
-            source,
-        ));
-    }
-
-    out
-}
-
-/// Render one diagnostic at `location`, with the source line and a caret.
-///
-/// Shared by the parse stage (which has a `ParseErrorKind`) and the generation
-/// stage (which has an `ImageGenError` and, sometimes, no line at all — that case
-/// is handled by the caller, not here).
-pub fn render_error(title: &str, location: Location, path: &Path, source: &str) -> String {
-    render_one(Level::ERROR, title, location, path, source)
-}
-
-/// A readability diagnostic: same rendering, warning level.
-pub fn render_warning(title: &str, location: Location, path: &Path, source: &str) -> String {
-    render_one(Level::WARNING, title, location, path, source)
-}
-
-fn render_one(level: Level, title: &str, location: Location, path: &Path, source: &str) -> String {
-    let path = path.display().to_string();
-    let renderer = Renderer::plain().decor_style(DecorStyle::Unicode);
-    let title = level.primary_title(title);
-
-    let group = match span_at(source, location) {
-        Some(span) => title.element(
-            Snippet::source(source)
-                .path(path.clone())
-                .line_start(1)
-                .annotation(AnnotationKind::Primary.span(span)),
-        ),
-        // The line is past the end of the source (for example a missing header
-        // field at EOF). Keep the file:line:column location even though there is
-        // no line to quote.
-        None => title.element(
-            Origin::path(path)
-                .line(location.line)
-                .char_column(location.column),
-        ),
-    };
-
-    let mut out = renderer.render(&[group]);
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out
 }

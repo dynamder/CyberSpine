@@ -20,6 +20,11 @@ use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::rig::Rig;
 use cyberspine_testkit::scratch_dir;
 
+/// The input was understood and rejected (`docs/diagnostics.md`).
+const REJECTED: i32 = 3;
+/// The environment failed: a file could not be read or written.
+const ENVIRONMENT: i32 = 5;
+
 const SOURCE: &str = "\
 .layer 10
 .clock hz = 60
@@ -87,6 +92,10 @@ fn run(args: Vec<&OsStr>) -> Output {
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+fn stdout(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
 fn rig_of(text: &str) -> Rig {
@@ -336,7 +345,7 @@ fn a_source_without_a_manifest_is_reported() {
 
     let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(REJECTED));
     assert!(
         stderr(&output).contains("no rig manifest"),
         "stderr: {}",
@@ -353,7 +362,7 @@ fn a_missing_manifest_file_is_reported() {
 
     let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(REJECTED));
     assert!(
         stderr(&output).contains("cannot read the rig manifest"),
         "stderr: {}",
@@ -371,7 +380,7 @@ fn a_broken_manifest_is_reported_against_its_own_path() {
 
     let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(REJECTED));
     assert!(
         stderr(&output).contains("greet.rig.json"),
         "the manifest path is named, not the source: {}",
@@ -393,9 +402,9 @@ fn a_parse_error_produces_no_file() {
 
     let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(REJECTED));
     assert!(
-        stderr(&output).contains("error:"),
+        stderr(&output).contains("error[asm.missing-field]"),
         "stderr: {}",
         stderr(&output)
     );
@@ -426,7 +435,7 @@ fn a_generation_error_produces_no_file() {
 
     let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(REJECTED));
     assert!(
         stderr(&output).contains("FLUSH is missing"),
         "stderr: {}",
@@ -460,7 +469,7 @@ fn a_generation_error_is_rendered_at_its_line() {
 
     let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(REJECTED));
     let message = stderr(&output);
     assert!(message.contains("undefined label"), "stderr: {message}");
     assert!(
@@ -504,7 +513,7 @@ never_used:
         source.as_os_str(),
         OsStr::new("--deny-warnings"),
     ]);
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(REJECTED));
 }
 
 #[test]
@@ -521,7 +530,7 @@ fn an_unwritable_destination_is_reported() {
         target.as_os_str(),
     ]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(ENVIRONMENT));
     assert!(
         stderr(&output).contains("cannot write"),
         "stderr: {}",
@@ -571,7 +580,7 @@ fn the_source_file_is_never_overwritten() {
         source.as_os_str(),
     ]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(REJECTED));
     assert!(
         stderr(&output).contains("refusing to overwrite"),
         "stderr: {}",
@@ -588,7 +597,7 @@ fn a_missing_source_file_is_reported() {
 
     let output = run(vec![OsStr::new("-a"), missing.as_os_str()]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(ENVIRONMENT));
     assert!(
         stderr(&output).contains("cannot read"),
         "stderr: {}",
@@ -604,4 +613,38 @@ fn a_missing_argument_is_a_usage_error() {
     let output = run(Vec::new());
 
     assert_eq!(output.status.code(), Some(2));
+}
+
+/// The machine contract: one JSON object per line on stdout, nothing on stderr.
+#[test]
+fn json_diagnostics_are_one_object_per_line() {
+    let dir = scratch("json");
+    let source = write_file(&dir, "bad.csa", ".layer 10\n");
+
+    let output = run(vec![
+        OsStr::new("-a"),
+        source.as_os_str(),
+        OsStr::new("--json"),
+    ]);
+
+    assert_eq!(output.status.code(), Some(REJECTED));
+    assert!(
+        stdout(&output).is_empty(),
+        "diagnostics never go to stdout, got: {}",
+        stdout(&output)
+    );
+
+    let text = stderr(&output);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 3, "three missing header fields, three records");
+    for line in lines {
+        let value: serde_json::Value = serde_json::from_str(line).expect("each line is json");
+        assert_eq!(value["schema"], 1);
+        assert_eq!(value["kind"], "diagnostic");
+        assert_eq!(value["code"], "asm.missing-field");
+        assert_eq!(
+            value["primary"]["artifact"].as_str().unwrap(),
+            source.display().to_string()
+        );
+    }
 }

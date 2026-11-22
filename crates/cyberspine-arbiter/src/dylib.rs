@@ -35,13 +35,13 @@ impl DylibTransport {
     /// arbiter that needs it after `create` must copy it.
     pub fn load(path: &Path, config: Option<&str>) -> Result<Self, ArbiterError> {
         let library = unsafe { Library::new(path) }.map_err(|error| {
-            ArbiterError(format!("cannot load `{}`: {error}", path.display()).into_boxed_str())
+            ArbiterError::new(format!("cannot load `{}`: {error}", path.display()).into_boxed_str())
         })?;
 
         let abi = {
             let entry: libloading::Symbol<Entry> = unsafe { library.get(abi::ENTRY_SYMBOL) }
                 .map_err(|error| {
-                    ArbiterError(
+                    ArbiterError::new(
                         format!(
                             "`{}` does not export `{}`: {error}",
                             path.display(),
@@ -52,13 +52,13 @@ impl DylibTransport {
                 })?;
             let abi = unsafe { entry() };
             if abi.is_null() {
-                return Err(ArbiterError(
+                return Err(ArbiterError::new(
                     format!("`{}` returned no function table", path.display()).into_boxed_str(),
                 ));
             }
             let table = unsafe { &*abi };
             if table.version != abi::ABI_VERSION {
-                return Err(ArbiterError(
+                return Err(ArbiterError::new(
                     format!(
                         "`{}` speaks ABI {}, this host speaks {}",
                         path.display(),
@@ -69,7 +69,7 @@ impl DylibTransport {
                 ));
             }
             if (table.size as usize) < std::mem::size_of::<AbiV1>() {
-                return Err(ArbiterError(
+                return Err(ArbiterError::new(
                     format!(
                         "`{}` exports a {}-byte table, this host reads {}",
                         path.display(),
@@ -85,7 +85,7 @@ impl DylibTransport {
         let config = config
             .map(CString::new)
             .transpose()
-            .map_err(|_| ArbiterError("the config argument contains a NUL byte".into()))?;
+            .map_err(|_| ArbiterError::new("the config argument contains a NUL byte"))?;
         let arbiter = unsafe {
             ((*abi).create)(
                 config
@@ -94,7 +94,7 @@ impl DylibTransport {
             )
         };
         if arbiter.is_null() {
-            return Err(ArbiterError(
+            return Err(ArbiterError::new(
                 format!("`{}` could not create an arbiter", path.display()).into_boxed_str(),
             ));
         }
@@ -129,9 +129,9 @@ impl DylibTransport {
         };
         let detail = self.last_error();
         if detail.is_empty() {
-            ArbiterError(format!("{what} ({code})").into_boxed_str())
+            ArbiterError::new(format!("{what} ({code})").into_boxed_str())
         } else {
-            ArbiterError(format!("{what} ({code}): {detail}").into_boxed_str())
+            ArbiterError::new(format!("{what} ({code}): {detail}").into_boxed_str())
         }
     }
 }
@@ -155,22 +155,21 @@ impl Transport for DylibTransport {
             match code {
                 status::OK => {
                     if needed > capacity {
-                        return Err(ArbiterError(
-                            "the arbiter reported a reply larger than the buffer it was given"
-                                .into(),
+                        return Err(ArbiterError::new(
+                            "the arbiter reported a reply larger than the buffer it was given",
                         ));
                     }
                     return Ok(needed);
                 }
                 status::RESPONSE_TOO_SMALL => {
                     if needed <= capacity {
-                        return Err(ArbiterError(
-                            "the arbiter asked for a bigger buffer without naming a size".into(),
+                        return Err(ArbiterError::new(
+                            "the arbiter asked for a bigger buffer without naming a size",
                         ));
                     }
                     if needed > crate::wire::MAX_FRAME_LEN + crate::wire::HEADER_LEN {
-                        return Err(ArbiterError(
-                            "the arbiter asked for a reply above the frame cap".into(),
+                        return Err(ArbiterError::new(
+                            "the arbiter asked for a reply above the frame cap",
                         ));
                     }
                     response.resize(needed, 0);

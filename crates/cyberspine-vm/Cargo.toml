@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 cyberspine-core = { path = "../cyberspine-core" }
+cyberspine-diag = { path = "../cyberspine-diag" }
 thiserror = "2.0.21"
 
 [dev-dependencies]

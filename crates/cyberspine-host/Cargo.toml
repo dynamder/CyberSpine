@@ -11,6 +11,7 @@ license.workspace = true
 [dependencies]
 cyberspine-arbiter = { path = "../cyberspine-arbiter" }
 cyberspine-core = { path = "../cyberspine-core" }
+cyberspine-diag = { path = "../cyberspine-diag" }
 cyberspine-vm = { path = "../cyberspine-vm" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

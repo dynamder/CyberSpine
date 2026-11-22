@@ -27,6 +27,11 @@ pub struct CliArgs {
     #[arg(long)]
     pub deny_warnings: bool,
 
+    /// Emit diagnostics as JSON Lines on stdout instead of a terminal rendering
+    /// on stderr. One stream, one record per line (`docs/diagnostics.md`).
+    #[arg(long)]
+    pub json: bool,
+
     /// Strip the debug segment: produce a release build (`docs/asm.md` §8).
     ///
     /// Without this flag the image carries a `pc → source position` table and a

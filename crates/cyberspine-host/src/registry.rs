@@ -1,10 +1,13 @@
 //! The host's record of what is loaded, addressed both by `InstanceId` and by
 //! the arbiter's `InstanceRef`.
 
+use std::path::Path;
+
 use cyberspine_arbiter::{InstanceRef, InstanceView};
 use cyberspine_core::binfmt::DebugInfo;
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::rig::Fingerprint;
+use cyberspine_diag::{Anchor, Site};
 use cyberspine_vm::InstanceId;
 
 /// One loaded instance. The arbiter never sees this type; it sees the
@@ -86,8 +89,28 @@ impl Registry {
         self.instances.retain(|loaded| loaded.id != id);
     }
 
-    pub(crate) fn action_of(&self, id: InstanceId) -> Option<&str> {
+    /// The image path the instance was loaded from, as the user spelled it.
+    pub fn action_of(&self, id: InstanceId) -> Option<&str> {
         self.loaded_by_id(id).map(|loaded| &*loaded.action)
+    }
+
+    /// Where instruction `pc` of `id` came from, when the image is a debug build
+    /// that covers it.
+    ///
+    /// This is the only place a `pc` becomes a source position: the debug segment
+    /// stores the source path relative to the image, so resolving it — not just
+    /// printing it — belongs where the image path is known.
+    pub fn source_of(&self, id: InstanceId, pc: usize) -> Option<Anchor> {
+        let loaded = self.loaded_by_id(id)?;
+        let debug = loaded.debug.as_ref()?;
+        let line = debug.line(pc)?;
+        Some(Anchor::new(
+            resolve_debug_path(&loaded.action, debug.source()),
+            Site::Source {
+                line: line.line,
+                column: u32::from(line.column),
+            },
+        ))
     }
 
     pub(crate) fn id_of(&self, reference: InstanceRef) -> Option<InstanceId> {
@@ -118,5 +141,17 @@ impl Registry {
             .map(|loaded| loaded.hash)
             .unwrap_or([0; 32]);
         (action, instances, hash)
+    }
+}
+
+/// The source path a debug segment records is relative to the image's
+/// directory; a reader needs a path it can open from where it is.
+fn resolve_debug_path(image: &str, source: &str) -> Box<str> {
+    let image = Path::new(image);
+    match image.parent() {
+        Some(dir) if !dir.as_os_str().is_empty() => {
+            dir.join(source).display().to_string().into_boxed_str()
+        }
+        _ => source.into(),
     }
 }

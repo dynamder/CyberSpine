@@ -1,9 +1,8 @@
 //! What the host did with one ruling, kept as data so a terminal, a screen and
 //! a test all read the same stream.
 
-use core::fmt;
-
 use cyberspine_arbiter::{Action, EventId, Verdict};
+use cyberspine_diag::{Anchor, Cause};
 use cyberspine_vm::InstanceId;
 
 /// The last `Unfinished` round of an event, as the stderr line quotes it.
@@ -24,8 +23,9 @@ pub enum Report {
         pc: usize,
         tick: u64,
         reason: Box<str>,
-        /// `file:line:column`, when the image is a debug build (`docs/asm.md` §8).
-        source: Option<Box<str>>,
+        /// The source position the debug segment maps `pc` to, resolved against
+        /// the image's directory (`docs/asm.md` §8).
+        site: Option<Anchor>,
     },
     Round {
         event: EventId,
@@ -59,7 +59,7 @@ pub enum Report {
         message: Box<str>,
     },
     Failed {
-        message: Box<str>,
+        cause: Cause,
     },
 }
 
@@ -70,68 +70,5 @@ impl Report {
     /// ordinary answer; printing "finished after 0 rounds" would be noise.
     pub fn is_silent(&self) -> bool {
         matches!(self, Self::Finished { last: None, note, .. } if note.is_empty())
-    }
-}
-
-impl fmt::Display for Report {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Interrupt {
-                instance,
-                action,
-                pc,
-                tick,
-                reason,
-                source,
-                ..
-            } => {
-                write!(f, "interrupt: instance {instance} ({action}) at pc {pc}")?;
-                if let Some(source) = source {
-                    write!(f, " ({source})")?;
-                }
-                write!(f, " tick {tick}: {reason}")
-            }
-            Self::Round {
-                event,
-                source,
-                note,
-                ..
-            } => write!(f, "interrupt {event}: {source}: {note}"),
-            Self::Finished {
-                event,
-                rounds,
-                last: Some(last),
-                note,
-                ..
-            } => {
-                write!(
-                    f,
-                    "interrupt {event}: finished after {rounds} round(s), last: {}: {}",
-                    last.source, last.note
-                )?;
-                if !note.is_empty() && note.as_ref() != last.note.as_ref() {
-                    write!(f, " · {note}")?;
-                }
-                Ok(())
-            }
-            Self::Finished {
-                event,
-                last: None,
-                note,
-                ..
-            } if !note.is_empty() => write!(f, "interrupt {event}: {note}"),
-            Self::Finished { .. } => Ok(()),
-            Self::Unknown { event } => {
-                write!(f, "warning: the arbiter answered unknown event {event}")
-            }
-            Self::Action { event, message } => write!(f, "warning: event {event}: {message}"),
-            Self::Carry { event, message } => {
-                write!(f, "warning: event {event} could not be carried: {message}")
-            }
-            Self::Verdict { message } => {
-                write!(f, "warning: the interrupt verdict did not apply: {message}")
-            }
-            Self::Failed { message } => write!(f, "warning: the arbiter failed: {message}"),
-        }
     }
 }

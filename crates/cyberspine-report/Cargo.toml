@@ -1,0 +1,14 @@
+[package]
+name = "cyberspine-report"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+cyberspine-arbiter = { path = "../cyberspine-arbiter" }
+cyberspine-diag = { path = "../cyberspine-diag" }
+cyberspine-host = { path = "../cyberspine-host" }
+annotate-snippets = "0.12.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

@@ -7,7 +7,15 @@
 //! every observation travels in a single [`Snapshot`], so the host never
 //! interrogates the body piecewise.
 
+use core::fmt;
+
 use cyberspine_core::rig::BoundFingerprint;
+use cyberspine_diag::{Cause, Code};
+
+/// The code a body's failure gets when it does not name one itself. A body may
+/// mint its own under `backend.<name>.<what>`; the host only requires the
+/// namespace.
+const BACKEND_FAILED: Code = Code::new("backend.failed");
 
 /// Why a backend could not finish this tick.
 ///
@@ -16,11 +24,13 @@ use cyberspine_core::rig::BoundFingerprint;
 /// Those failures had nowhere to go, so a backend had to panic or silently lie.
 /// One concrete error type keeps `Box<dyn Backend>` possible while still
 /// carrying a concrete adapter's error inside it.
-#[derive(Debug, thiserror::Error)]
-#[error("{message}")]
+///
+/// The payload is a [`Cause`]: a code, a message and an optional help line. The
+/// wrapper stays because a body often wraps an `io::Error`, and dropping the
+/// source chain to gain a code would be a bad trade.
+#[derive(Debug)]
 pub struct BackendError {
-    message: Box<str>,
-    #[source]
+    cause: Cause,
     source: Option<Box<dyn std::error::Error + Send + Sync>>,
 }
 
@@ -28,17 +38,49 @@ impl BackendError {
     /// Wrap a concrete failure, keeping its text and its source chain.
     pub fn new(error: impl std::error::Error + Send + Sync + 'static) -> Self {
         Self {
-            message: error.to_string().into_boxed_str(),
+            cause: Cause::new(BACKEND_FAILED, error.to_string()),
             source: Some(Box::new(error)),
         }
     }
 
     /// A failure with no error type behind it.
-    pub fn message(message: impl Into<Box<str>>) -> Self {
+    pub fn message(message: impl Into<String>) -> Self {
         Self {
-            message: message.into(),
+            cause: Cause::new(BACKEND_FAILED, message),
             source: None,
         }
+    }
+
+    /// A failure the body names with its own code.
+    pub fn caused(code: Code, message: impl Into<String>) -> Self {
+        Self {
+            cause: Cause::new(code, message),
+            source: None,
+        }
+    }
+
+    pub fn with_help(mut self, help: impl Into<String>) -> Self {
+        self.cause.help = Some(help.into());
+        self
+    }
+
+    /// The part the host turns into a diagnostic; the caller adds where.
+    pub fn cause(&self) -> &Cause {
+        &self.cause
+    }
+}
+
+impl fmt::Display for BackendError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.cause.fmt(f)
+    }
+}
+
+impl std::error::Error for BackendError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source
+            .as_ref()
+            .map(|error| &**error as &(dyn std::error::Error + 'static))
     }
 }
 

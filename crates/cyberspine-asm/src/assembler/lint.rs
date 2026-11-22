@@ -3,13 +3,12 @@
 //! This is a pass over the instruction section's own text — no codegen, no rig —
 //! so everything it reports is located exactly. See [`Warning`].
 //!
-//! It lives beside `diagnostic` rather than inside it: that module owns how a
-//! diagnostic is *rendered* (a source line, a caret, a terminal), and this one owns
-//! a *pass* that produces them. Both speak `cyberspine_diag`'s vocabulary, which is
-//! what makes them one family without being one module.
+//! It produces [`cyberspine_diag::Diagnostic`] values and nothing else: rendering
+//! belongs to `cyberspine-report`, so a warning and an error reach a terminal
+//! through exactly one path.
 
 use cyberspine_core::isa::OpCode;
-use cyberspine_diag::{DiagnosticKind, Level as DiagLevel};
+use cyberspine_diag::Diagnostic;
 use smol_str::SmolStr;
 
 use super::Asm;
@@ -47,15 +46,17 @@ impl std::fmt::Display for Warning {
     }
 }
 
-impl DiagnosticKind for Warning {
-    fn level(&self) -> DiagLevel {
-        DiagLevel::Warning
+cyberspine_diag::codes! {
+    WarningKind: Warning {
+        Self::UnusedLabel(_) => "asm.unused-label",
+        Self::SingleMemberGroup(_) => "asm.single-member-group",
     }
 }
 
-impl DiagnosticKind for WarningKind {
-    fn level(&self) -> DiagLevel {
-        DiagLevel::Warning
+impl Warning {
+    /// This warning as a diagnostic, located in `file`.
+    pub fn diagnostic(&self, file: &str) -> Diagnostic {
+        Diagnostic::of(&self.kind).at(super::diagnostic::anchor(file, self.location))
     }
 }
 

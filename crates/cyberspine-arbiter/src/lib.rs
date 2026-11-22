@@ -21,6 +21,9 @@
 //! `cyberspine_vm::Backend`: linked (implement it), dynamic library, and remote.
 //! A body and an arbiter differ in what they answer, not in how they are loaded.
 
+use core::fmt;
+
+use cyberspine_diag::{Cause, Code};
 use serde::{Deserialize, Serialize};
 
 pub mod abi;
@@ -246,9 +249,54 @@ impl From<Vec<Decision>> for Batch {
 ///
 /// Reporting it obliges the arbiter to have synthesized `Finished(Stop)` for
 /// every event it still owed an answer; the host finishes the rest.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{0}")]
-pub struct ArbiterError(pub Box<str>);
+///
+/// The payload is a [`Cause`] for the same reason a body's is: the arbiter knows
+/// what broke, never where in the run, and the host is the one that knows where.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ArbiterError {
+    cause: Cause,
+}
+
+/// The code an arbiter failure gets when the arbiter does not name one.
+pub const ARBITER_FAILED: Code = Code::new("arbiter.failed");
+
+impl ArbiterError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self {
+            cause: Cause::new(ARBITER_FAILED, message),
+        }
+    }
+
+    /// A failure the arbiter names with its own code (`arbiter.<what>`).
+    pub fn caused(code: Code, message: impl Into<String>) -> Self {
+        Self {
+            cause: Cause::new(code, message),
+        }
+    }
+
+    pub fn with_help(mut self, help: impl Into<String>) -> Self {
+        self.cause.help = Some(help.into());
+        self
+    }
+
+    pub fn cause(&self) -> &Cause {
+        &self.cause
+    }
+}
+
+impl From<Cause> for ArbiterError {
+    fn from(cause: Cause) -> Self {
+        Self { cause }
+    }
+}
+
+impl fmt::Display for ArbiterError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.cause.fmt(f)
+    }
+}
+
+impl std::error::Error for ArbiterError {}
 
 /// A host's adjudicator (`docs/interrupt.md` §7.3).
 ///
@@ -273,5 +321,54 @@ impl<T: Arbiter + ?Sized> Arbiter for Box<T> {
 
     fn take(&mut self, now: u64) -> Batch {
         (**self).take(now)
+    }
+}
+
+/// Something the host should tell the operator when the run ends.
+///
+/// Not an error: the run succeeded. A replay that diverged from its recording is
+/// the canonical case — the arbiter knows *what* diverged and *which file*, and
+/// the host decides that it is a warning and renders it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notice {
+    pub cause: Cause,
+    /// The artifact the notice is about, when the arbiter knows one.
+    pub artifact: Option<Box<str>>,
+}
+
+impl Notice {
+    pub fn new(code: Code, message: impl Into<String>) -> Self {
+        Self {
+            cause: Cause::new(code, message),
+            artifact: None,
+        }
+    }
+
+    pub fn with_help(mut self, help: impl Into<String>) -> Self {
+        self.cause.help = Some(help.into());
+        self
+    }
+
+    pub fn about(mut self, artifact: impl Into<Box<str>>) -> Self {
+        self.artifact = Some(artifact.into());
+        self
+    }
+}
+
+/// An adjudicator that accumulates notices for the host to report.
+///
+/// Separate from [`Arbiter`] on purpose: adjudication is what every arbiter must
+/// do, noticing is not. The host holds the notifier as its own handle, so a
+/// `Box<dyn Arbiter>` never has to carry a method it will not use, and an
+/// arbiter that does notice something does not force every other one to.
+pub trait NoticeSource {
+    /// Take what accumulated. Empty is the normal answer, and a second call is
+    /// empty too: this drains, it does not read.
+    fn take_notices(&mut self) -> Vec<Notice>;
+}
+
+impl<T: NoticeSource + ?Sized> NoticeSource for Box<T> {
+    fn take_notices(&mut self) -> Vec<Notice> {
+        (**self).take_notices()
     }
 }

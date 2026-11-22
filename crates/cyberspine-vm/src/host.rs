@@ -179,6 +179,15 @@ pub enum LoadError {
     Hz { declared: u32, host: u32 },
 }
 
+cyberspine_diag::codes! {
+    LoadError: Error {
+        Self::RigMismatch { .. } => "rt.rig-mismatch",
+        Self::Unbound => "rt.rig-unbound",
+        Self::ShapeMismatch { .. } => "rt.shape-mismatch",
+        Self::Hz { .. } => "rt.hz-mismatch",
+    }
+}
+
 /// What a host demands of an image's identity.
 ///
 /// The fingerprint proves the image was assembled for *this* body; it does not

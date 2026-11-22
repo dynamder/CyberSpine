@@ -223,9 +223,12 @@ pending 检查是一个布尔数据流：`FEXCITE` 置真，`FLUSH` 清假，在
 - 生成阶段的错误（未定义标签、跳转越界、pending 泄漏、`WAIT` 越界）同样带 `path:line:col`，
   定位到对应的指令或标签；头段字段错误（`hz = 0`、`max_wait`）没有单行位置，只报字段名。
 - 可读性问题（未使用的标签、单成员 group）以 warning 输出，`--deny-warnings` 可让 CI 拒绝。
+- 每条诊断都有一个稳定码（`namespace.name`，这里是 `asm.`），由 `codes!` 从错误枚举生成。
+  码是机器契约，句子不是：工具按码分流，不解析消息。码表与消息分离见
+  [`diagnostics.md`](diagnostics.md)。
 - 渲染使用 [`annotate-snippets`](https://crates.io/crates/annotate-snippets)：
   ```
-  error: unknown mnemonic `FADDD`
+  error[asm.unknown-mnemonic]: unknown mnemonic `FADDD`
     ╭▸ bad.csa:7:5
     │
   7 │     FADDD f1, f2, f3
@@ -233,12 +236,14 @@ pending 检查是一个布尔数据流：`FEXCITE` 置真，`FLUSH` 清假，在
   ```
 - CLI 可执行文件统一命名为 `cyine` + 工具后缀：汇编器是 **`cyinea`**，虚拟机运行时是
   **`cyinevm`**（见 [`runtime.md`](runtime.md)）。asm 与 vm 是独立进程，不合并成单个二进制。
-- CLI 输出 `path:line:col: error: …` + 源行 + 标记，并以非零退出码结束。
+- CLI 把人读的诊断写 stderr（`错误级别[码]: 消息` + 源行 + 标记）；`--json` 把同一个流
+  改成每行一个 JSON 对象。两种模式退出码相同，stdout 都是空的。
 
 ```bash
 cyinea -a greet.csa              # 输出 greet.csp（debug 构建，带调试段）
 cyinea -a greet.csa --strip      # release 构建，剥掉调试段
 cyinea -a greet.csa -o out.csp   # 指定输出路径
+cyinea -a greet.csa --json       # 诊断走 stderr，一行一个对象
 ```
 
 ### 6.2 输出（落盘）
@@ -262,7 +267,8 @@ cyinea -a greet.csa -o out.csp   # 指定输出路径
 - **写前自检**：编码结果必须先通过加载器（`binfmt.md` §9）才会落盘；不通过按
   汇编器内部错误报告，不产生文件。
 - `-o` 指向输入源文件时拒绝执行（否则 `.csa` 会被二进制覆盖）。
-- 退出码：`0` 成功；`1` 汇编或写盘错误；`2` 命令行用法错误（clap 的约定）。
+- 退出码见 [`diagnostics.md`](diagnostics.md)：`0` 成功；`3` 输入被拒绝（源码、manifest、
+  `-o` 指向源文件）；`5` 环境失败（读写不了文件）；`2` 命令行用法错误（clap 的约定）。
 
 ## 7. 完整例子
 

@@ -26,4 +26,4 @@ pub use reason::{MAX_REASON_LEN, ReasonView, Segment, Template, TemplateError, V
 // The diagnostic vocabulary an image can be reported in. Re-exported because a
 // caller who has an image also has its diagnostics, and asking them to add a
 // second dependency to name `Diagnostics` would just be a second version of it.
-pub use cyberspine_diag::{Diagnostic, DiagnosticKind, Diagnostics, Level, Location};
+pub use cyberspine_diag::{Diagnostic, Diagnostics, Level, Location};

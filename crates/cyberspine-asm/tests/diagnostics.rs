@@ -5,9 +5,25 @@
 //! property that `parse()` coordinates them: instruction-section line numbers
 //! are shifted into file coordinates, and errors from both sections survive.
 
-use std::path::Path;
+use cyberspine_asm::assembler::{AsmParseErrors, Location, ParseErrorKind, parse};
+use cyberspine_diag::Diagnostics;
+use cyberspine_report::{Format, Renderer};
 
-use cyberspine_asm::assembler::{Location, ParseErrorKind, parse};
+/// The one path from parse errors to text: the library builds diagnostics, the
+/// report crate renders them. This test would have caught the assembler growing
+/// a second renderer.
+fn render(errors: &AsmParseErrors, file: &str, source: &str) -> String {
+    let mut sink = Diagnostics::new(false);
+    sink.push_all(errors.diagnostics(file));
+
+    let mut renderer = Renderer::new(Format::Human);
+    renderer.remember(file, source);
+    let mut out = Vec::new();
+    renderer
+        .diagnostics(sink.items(), &mut out)
+        .expect("rendering writes to a Vec");
+    String::from_utf8(out).expect("the rendering is utf-8")
+}
 
 const TWO_ERRORS: &str = "\
 .layer 10
@@ -76,14 +92,14 @@ fn every_missing_fixed_field_is_reported_once() {
 #[test]
 fn render_points_at_the_offending_lines() {
     let errors = parse(TWO_ERRORS).expect_err("the source contains two mistakes");
-    let rendered = errors.render(Path::new("bad.csa"), TWO_ERRORS);
+    let rendered = render(&errors, "bad.csa", TWO_ERRORS);
 
     assert!(
-        rendered.contains("error: unknown directive `.wobble`"),
+        rendered.contains("error[asm.unknown-directive]: unknown directive `.wobble`"),
         "{rendered}"
     );
     assert!(
-        rendered.contains("error: unknown mnemonic `FADDD`"),
+        rendered.contains("error[asm.unknown-mnemonic]: unknown mnemonic `FADDD`"),
         "{rendered}"
     );
     assert!(rendered.contains("bad.csa:5:1"), "{rendered}");
@@ -120,7 +136,7 @@ HALT
         "{errors:?}"
     );
 
-    let rendered = errors.render(Path::new("bad.csa"), src);
+    let rendered = render(&errors, "bad.csa", src);
     assert!(
         rendered.contains("expected column 5, found column 3"),
         "{rendered}"

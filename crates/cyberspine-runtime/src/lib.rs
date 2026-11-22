@@ -13,7 +13,7 @@ pub mod linked;
 pub mod run;
 mod trace;
 
-pub use cli::Args;
+pub use cli::{Args, ReportFormat};
 pub use cyberspine_core::binfmt::load::VerifiedImage;
 pub use cyberspine_host::{
     ActionDirectory, ActionError, ActionResolver, Interrupts, Log, LogError, Record, Registry,

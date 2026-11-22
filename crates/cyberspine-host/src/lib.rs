@@ -10,11 +10,13 @@
 pub mod actions;
 pub mod decisions;
 pub mod interrupts;
+pub mod notice;
 pub mod registry;
 pub mod report;
 
 pub use actions::{ActionDirectory, ActionError, ActionResolver};
-pub use decisions::{Log, LogError, Record, Replay};
+pub use decisions::{Log, LogError, Record, Replay, ReplayReport};
 pub use interrupts::Interrupts;
+pub use notice::into_diagnostic;
 pub use registry::{Loaded, Registry};
 pub use report::{Report, RoundTrace};

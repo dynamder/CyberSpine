@@ -11,6 +11,13 @@ use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::rig::Rig;
 use cyberspine_testkit::scratch_dir;
 
+/// The input was understood and rejected (`docs/diagnostics.md` §6).
+const REJECTED: i32 = 3;
+/// An instance faulted.
+const FAULTED: i32 = 4;
+/// The environment failed: a file, a body or an arbiter.
+const ENVIRONMENT: i32 = 5;
+
 const MANIFEST: &str = r#"{
   "rig": { "name": "probe", "version": 1 },
   "muscles": ["brow_l", "brow_r"],
@@ -115,6 +122,19 @@ fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// In `--json` mode every stderr line is one object; find the one with `code`.
+fn json_record_with_code(text: &str, code: &str) -> serde_json::Value {
+    let mut found = None;
+    for line in text.lines() {
+        let value: serde_json::Value =
+            serde_json::from_str(line).unwrap_or_else(|_| panic!("non-json stderr line: {line}"));
+        if value["code"] == code {
+            found = Some(value);
+        }
+    }
+    found.unwrap_or_else(|| panic!("no `{code}` record in:\n{text}"))
+}
+
 #[test]
 fn no_backend_uses_the_builtin_dummy_and_warns() {
     let dir = scratch("dummy");
@@ -181,7 +201,7 @@ fn a_fault_is_reported_and_fails_the_run() {
         OsStr::new("--unpaced"),
     ]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(FAULTED));
     assert!(
         stderr(&output).contains("fuel exhausted"),
         "stderr: {}",
@@ -203,10 +223,14 @@ fn a_fault_of_a_debug_build_names_its_source_line() {
     ]);
 
     let message = stderr(&output);
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(FAULTED));
     assert!(
-        message.contains("fuel exhausted at instruction 0 (probe.csa:8:5)"),
-        "a debug build names the line of the JMP: {message}"
+        message.contains("fuel exhausted at instruction 0"),
+        "the fault names the instruction: {message}"
+    );
+    assert!(
+        message.contains("probe.csa:8:5"),
+        "a debug build names the resolved source line: {message}"
     );
 }
 
@@ -236,7 +260,7 @@ fn a_missing_image_is_reported() {
         OsStr::new("0"),
     ]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(ENVIRONMENT));
     assert!(
         stderr(&output).contains("could not read"),
         "stderr: {}",
@@ -363,7 +387,7 @@ fn a_remote_body_with_the_wrong_rig_is_refused() {
         OsStr::new("0"),
     ]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(REJECTED));
     assert!(
         stderr(&output).contains("assembled for rig"),
         "stderr: {}",
@@ -386,7 +410,7 @@ fn a_dylib_backend_without_the_feature_says_so() {
         OsStr::new("0"),
     ]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(ENVIRONMENT));
     let message = stderr(&output);
     assert!(message.contains("without the `dylib` feature"), "{message}");
     assert!(message.contains("--features dylib"), "{message}");
@@ -407,7 +431,7 @@ fn an_rpc_backend_without_the_feature_says_so() {
         OsStr::new("0"),
     ]);
 
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(ENVIRONMENT));
     let message = stderr(&output);
     assert!(message.contains("without the `rpc` feature"), "{message}");
     assert!(message.contains("--features rpc"), "{message}");
@@ -497,8 +521,8 @@ fn an_interrupt_of_a_debug_build_names_its_source_line() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     let message = stderr(&output);
     assert!(
-        message.contains("at pc 1 (probe.csa:8:5)"),
-        "a debug build names the line of the INTR: {message}"
+        message.contains("probe.csa:8:5"),
+        "a debug build names the resolved line of the INTR: {message}"
     );
 }
 
@@ -636,4 +660,170 @@ fn a_dylib_arbiter_rules_in_two_rounds() {
         "the first round crossed the boundary: {}",
         stderr(&output)
     );
+}
+
+/// The run report is the machine answer to "did it finish, and why".
+#[test]
+fn a_halted_run_reports_its_outcome() {
+    let dir = scratch("report-halted");
+    let image = write_image(&dir, "halt.csp", HALT, MANIFEST);
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--until-halt"),
+        OsStr::new("--report"),
+        OsStr::new("json"),
+    ]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let line = stdout(&output);
+    let value: serde_json::Value = serde_json::from_str(line.trim()).expect("the report is json");
+    assert_eq!(value["schema"], 1);
+    assert_eq!(value["kind"], "run");
+    assert_eq!(value["outcome"], "halted");
+    assert!(value["ticks"].as_u64().expect("ticks is a number") >= 1);
+    assert_eq!(
+        value["instances"][0]["action"].as_str().unwrap(),
+        image.display().to_string()
+    );
+}
+
+/// A faulted run still produces a report: the failure is the most interesting
+/// outcome, not the one that goes unreported.
+#[test]
+fn a_faulted_run_reports_its_outcome_and_exits_four() {
+    let dir = scratch("report-faulted");
+    let image = write_image(&dir, "loop.csp", LOOP, MANIFEST);
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("1"),
+        OsStr::new("--unpaced"),
+        OsStr::new("--report"),
+        OsStr::new("json"),
+    ]);
+
+    assert_eq!(output.status.code(), Some(FAULTED));
+    let line = stdout(&output);
+    let value: serde_json::Value = serde_json::from_str(line.trim()).expect("the report is json");
+    assert_eq!(value["outcome"], "faulted");
+}
+
+/// `--json` changes the diagnostic format, never the stream.
+#[test]
+fn json_diagnostics_stay_on_stderr() {
+    let dir = scratch("json-diagnostics");
+    let missing = dir.join("absent.csp");
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        missing.as_os_str(),
+        OsStr::new("--json"),
+    ]);
+
+    assert_eq!(output.status.code(), Some(ENVIRONMENT));
+    assert!(
+        stdout(&output).is_empty(),
+        "stdout is for products, got: {}",
+        stdout(&output)
+    );
+
+    let text = stderr(&output);
+    let value = json_record_with_code(&text, "rt.unreadable-image");
+    assert_eq!(value["kind"], "diagnostic");
+    assert_eq!(
+        value["primary"]["artifact"].as_str().unwrap(),
+        missing.display().to_string()
+    );
+}
+
+/// Interrupts and rulings are records too: `--json` covers the whole run, not
+/// just its failures.
+#[test]
+fn json_events_are_one_object_per_line() {
+    let dir = scratch("json-events");
+    let image = write_image(&dir, "interrupt.csp", INTERRUPT, MANIFEST);
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("1"),
+        OsStr::new("--unpaced"),
+        OsStr::new("--quiet"),
+        OsStr::new("--json"),
+    ]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stderr(&output);
+    let record = text
+        .lines()
+        .find(|line| line.starts_with('{'))
+        .expect("an event record");
+    let value: serde_json::Value = serde_json::from_str(record).expect("the line is json");
+    assert_eq!(value["schema"], 1);
+    assert_eq!(value["kind"], "event");
+    assert_eq!(value["what"], "interrupt");
+    assert_eq!(value["instance"], 0);
+    assert_eq!(value["reason"], "why 0.5");
+}
+
+/// A replay that stops early is not an error, but it is not the recording
+/// either: the mismatch is a warning the caller has to be able to see.
+#[test]
+fn a_replay_that_diverges_is_reported_as_a_warning() {
+    let dir = scratch("replay-diverged");
+    let log = dir.join("run.jsonl");
+    std::fs::write(
+        &log,
+        "{\"event\":0,\"tick\":0,\"actions\":[],\"completion\":\"unfinished\"}\n",
+    )
+    .expect("the decision log is written");
+    let image = write_image(&dir, "halt.csp", HALT, MANIFEST);
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--until-halt"),
+        OsStr::new("--replay"),
+        log.as_os_str(),
+    ]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stderr(&output);
+    assert!(text.contains("warning[rt.replay-unused]"), "{text}");
+    assert!(
+        text.contains("1 recorded round(s) were never applied"),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_diverged_replay_is_a_json_warning_too() {
+    let dir = scratch("replay-diverged-json");
+    let log = dir.join("run.jsonl");
+    std::fs::write(
+        &log,
+        "{\"event\":0,\"tick\":0,\"actions\":[],\"completion\":\"unfinished\"}\n",
+    )
+    .expect("the decision log is written");
+    let image = write_image(&dir, "halt.csp", HALT, MANIFEST);
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--until-halt"),
+        OsStr::new("--replay"),
+        log.as_os_str(),
+        OsStr::new("--json"),
+    ]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    let text = stderr(&output);
+    let value = json_record_with_code(&text, "rt.replay-unused");
+    assert_eq!(value["kind"], "diagnostic");
+    assert_eq!(value["level"], "warning");
 }
