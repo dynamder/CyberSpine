@@ -409,8 +409,12 @@ fn c5_is_computed_in_u64_so_the_bound_does_not_wrap() {
 
     match reject(&bytes) {
         LoadError::CountsExceedFileLen { lower_bound, .. } => {
-            let entries = 5 * u32::MAX as u64;
-            assert_eq!(lower_bound, 96 + 8 * u32::MAX as u64 + 32 + 2 * entries);
+            let per_table = 2 + 3 + 3 + 6 + 6;
+            assert_eq!(
+                lower_bound,
+                96 + 8 * u32::MAX as u64 + 32 + per_table * u32::MAX as u64,
+                "every table contributes its own row width, not a shared minimum"
+            );
         }
         other => panic!("the wrapped bound was accepted: {other}"),
     }
@@ -534,6 +538,27 @@ fn m2_a_repeated_name_within_one_table_is_refused() {
         }
         other => panic!("a duplicate muscle name was not refused: {other}"),
     }
+}
+
+/// M2 is O(n log n): C5 bounds a table by the file length, so a legal 4 MiB
+/// image can declare tens of thousands of rows. The scan this replaced compared
+/// each row against every earlier one, which took minutes on a file this size.
+#[test]
+fn m2_is_linear_enough_for_a_large_table() {
+    let mut image = Image::halt_only();
+    for index in 0..40_000 {
+        image.push_var_f(&n(&format!("v{index}")), 0.0);
+    }
+    let bytes = image.to_bytes();
+
+    let started = std::time::Instant::now();
+    VerifiedImage::from_bytes(&bytes).expect("the image is legal");
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "loading 40k variables took {elapsed:?}"
+    );
 }
 
 #[test]

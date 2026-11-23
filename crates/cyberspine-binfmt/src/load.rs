@@ -306,14 +306,45 @@ impl VerifiedImage {
         // allocation.
         let tables_span = body_end - HEADER_LEN - INSN_LEN * raw.code_len as usize;
         let mut names = Names::with_capacity(tables_span);
-        let muscles =
-            read_table::<Muscle>(&mut cursor, &mut names, Table::Muscles, raw.muscle_count)?;
-        let sensors_f =
-            read_table::<Sensor>(&mut cursor, &mut names, Table::SensorsF, raw.sensor_f_count)?;
-        let sensors_i =
-            read_table::<Sensor>(&mut cursor, &mut names, Table::SensorsI, raw.sensor_i_count)?;
-        let vars_f = read_table::<VarF>(&mut cursor, &mut names, Table::VarsF, raw.var_f_count)?;
-        let vars_i = read_table::<VarI>(&mut cursor, &mut names, Table::VarsI, raw.var_i_count)?;
+        // One handle vector, reused by every table: M2 sorts handles, and reusing
+        // the buffer keeps the load's allocation count independent of the number
+        // of tables and entries the file declares.
+        let mut handles: Vec<(usize, NameRef)> = Vec::new();
+        let muscles = read_table::<Muscle>(
+            &mut cursor,
+            &mut names,
+            &mut handles,
+            Table::Muscles,
+            raw.muscle_count,
+        )?;
+        let sensors_f = read_table::<Sensor>(
+            &mut cursor,
+            &mut names,
+            &mut handles,
+            Table::SensorsF,
+            raw.sensor_f_count,
+        )?;
+        let sensors_i = read_table::<Sensor>(
+            &mut cursor,
+            &mut names,
+            &mut handles,
+            Table::SensorsI,
+            raw.sensor_i_count,
+        )?;
+        let vars_f = read_table::<VarF>(
+            &mut cursor,
+            &mut names,
+            &mut handles,
+            Table::VarsF,
+            raw.var_f_count,
+        )?;
+        let vars_i = read_table::<VarI>(
+            &mut cursor,
+            &mut names,
+            &mut handles,
+            Table::VarsI,
+            raw.var_i_count,
+        )?;
         let reasons = read_reasons(&mut cursor, &mut names, raw.reason_count)?;
 
         // C7 + C9: the tables must end where the debug segment begins, and the
@@ -633,28 +664,29 @@ fn check_container(
     }
 
     // C5 — the count bound, and the reason this whole function runs before step 2.
-    // Each instruction is 8 bytes and each metadata entry is at least 2 (a
-    // one-byte name and its NUL), so this is a lower bound on the file these
-    // counts imply. Computed in u64: counts are attacker-controlled u32 values,
-    // and `8 * 4e9` must not wrap.
+    // Each row has a floor on disk: a one-character name plus its NUL is 2 bytes
+    // for `muscles`, 3 for a sensor (the extra `src`), 6 for a `var` (the initial
+    // value), and 2 for a reason (one character plus its NUL). The counts
+    // therefore imply a minimum file length. Computed in u64: counts are
+    // attacker-controlled u32 values, and `6 * 4e9` must not wrap.
     //
     // C5 bounds the counts *relative to the file*; C0 bounds the file. Both are
     // needed, because C5 alone still permits a linear blow-up: a table entry costs
-    // 2–3 bytes on disk and 8–24 in memory, an ~4× expansion on the tight end. C0
-    // is what turns "four times a file someone handed us" into "four times 4 MiB".
+    // at most 12 bytes of memory for 3 on disk, and C0 is what turns "a multiple
+    // of a file someone handed us" into "a multiple of 4 MiB".
     //
-    // The 2-bytes-per-entry figure is exact for a *valid* file, because §6.1
-    // makes an empty name illegal. A file that does contain one is 1 byte short
-    // per empty name, so C5 can fire on it before M1 ever sees the name. That is
-    // still a rejection, and the bound is the spec's, so it is left as written.
-    let entries = raw.muscle_count as u64
-        + raw.sensor_f_count as u64
-        + raw.sensor_i_count as u64
-        + raw.var_f_count as u64
-        + raw.var_i_count as u64
-        + raw.reason_count as u64;
-    let lower_bound =
-        HEADER_LEN as u64 + INSN_LEN as u64 * raw.code_len as u64 + HASH_LEN as u64 + 2 * entries;
+    // The widths are exact for a *valid* file, because §6.1 makes an empty name
+    // illegal. A file that does contain one is 1 byte short per empty name, so C5
+    // can fire on it before M1 ever sees the name. That is still a rejection.
+    let lower_bound = HEADER_LEN as u64
+        + INSN_LEN as u64 * raw.code_len as u64
+        + HASH_LEN as u64
+        + 2 * raw.muscle_count as u64
+        + 3 * raw.sensor_f_count as u64
+        + 3 * raw.sensor_i_count as u64
+        + 6 * raw.var_f_count as u64
+        + 6 * raw.var_i_count as u64
+        + 2 * raw.reason_count as u64;
     if lower_bound > bytes.len() as u64 {
         return Err(LoadError::CountsExceedFileLen {
             lower_bound,
@@ -1135,9 +1167,13 @@ impl Entry for VarI {
 }
 
 /// Read `count` entries, enforcing M1 on each name and M2 across the table.
+///
+/// `handles` is scratch space the caller owns: the table itself keeps the file's
+/// order, so the duplicate check sorts a second view of it instead of the table.
 fn read_table<T: Entry>(
     cursor: &mut Cursor<'_>,
     names: &mut Names,
+    handles: &mut Vec<(usize, NameRef)>,
     table: Table,
     count: u32,
 ) -> Result<Vec<T>, LoadError> {
@@ -1146,24 +1182,29 @@ fn read_table<T: Entry>(
     let mut out = Vec::with_capacity(count as usize);
 
     for index in 0..count as usize {
-        let entry = T::read(cursor, names, table, index)?;
-        // O(n²) on purpose: the tables are tiny, and a `Vec` carries no iteration
-        // order that could leak into anything. §9.2 M2 only needs equality.
-        //
-        // Compared as text, not as handles: two equal names can occupy two
-        // separate regions of the arena, so a handle comparison would let a
-        // duplicate through.
-        if out
-            .iter()
-            .any(|existing: &T| names.get(existing.name()) == names.get(entry.name()))
-        {
+        out.push(T::read(cursor, names, table, index)?);
+    }
+
+    // M2 — no two rows may share a name. Sorting the handles and comparing
+    // neighbours is O(n log n); the comparison has to be text, not handles,
+    // because two equal names can occupy two separate regions of the arena.
+    handles.clear();
+    handles.extend(
+        out.iter()
+            .enumerate()
+            .map(|(index, entry)| (index, entry.name())),
+    );
+    handles.sort_unstable_by(|(_, left), (_, right)| names.get(*left).cmp(names.get(*right)));
+    for pair in handles.windows(2) {
+        let (first, left) = pair[0];
+        let (second, right) = pair[1];
+        if names.get(left) == names.get(right) {
             return Err(LoadError::DuplicateName {
                 table,
-                index,
-                name: names.get(entry.name()).to_string(),
+                index: first.max(second),
+                name: names.get(right).to_string(),
             });
         }
-        out.push(entry);
     }
 
     Ok(out)

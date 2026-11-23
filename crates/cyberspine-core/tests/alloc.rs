@@ -86,9 +86,10 @@ fn loading_allocates_a_constant_number_of_times() {
         small, large,
         "loading must not allocate per name: 4 muscles took {small}, 4096 took {large}"
     );
-    // One code vector, five table vectors, one name arena, two plan vectors.
+    // One code vector, five table vectors, one name arena, one reusable handle
+    // vector for the duplicate check, and the plan vectors built from them.
     assert!(
-        small <= 9,
+        small <= 11,
         "expected the constant load path, got {small} allocations"
     );
 }
