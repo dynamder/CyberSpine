@@ -149,9 +149,9 @@ impl Instance {
 
 三条结构约束：
 
-1. **`pc` 只由循环推进**。指令体只返回 `Flow`，绝不自己改 `pc`。「先 `pc += 1` 再挂起」这条约定（§4.8）因此只写一次。
+1. **`pc` 只由循环推进**。指令体只返回 `Flow`，绝不自己改 `pc`。「先 `pc += 1` 再挂起」这条约定（`isa.md` §4.8）因此只写一次。
 2. **`fuel` 在取指前扣**。`fuel = 0` 的镜像会在 `pc = 0` 处零条指令就 fault（§7.3）。
-3. **挂起的 `pc` 已经是下一条**。恢复点在 `YIELD` / `WAIT` / `INTR` 之后（§4.8）。
+3. **挂起的 `pc` 已经是下一条**。恢复点在 `YIELD` / `WAIT` / `INTR` 之后（`isa.md` §4.8）。
 
 ### 4.1 索引检查策略（v1）
 
@@ -364,7 +364,7 @@ pend_mask.clear_all();
 | fuel | 恰好 N 条后 fault 在同一 `pc`；`fuel = 0` 在 `pc = 0` 零条指令 fault |
 | `WAIT` | `0` / `1/64@64Hz = 1` / `0.3@60Hz = 19` / 上界 / 饱和 |
 | 挂起存活 | 寄存器与变量跨 `YIELD`/`WAIT` 不变 |
-| `FLUSH` | §8.2 的两个数组例子；`publish` 保持；`FEXCITE` 不动 `published` |
+| `FLUSH` | `isa.md` §8.2 的两个数组例子；`publish` 保持；`FEXCITE` 不动 `published` |
 | 纯函数性 | 同输入跑两遍，命令字节流逐位相同 |
 | no_std | `--target thumbv7em-none-eabihf` 编过 |
 
