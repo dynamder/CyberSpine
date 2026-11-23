@@ -1,5 +1,7 @@
 //! Repository tasks that a single cargo invocation cannot express.
 
+mod docs;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -10,11 +12,16 @@ const FIXTURES: [&str; 4] = [
     "cyberspine-demo-maze-dylib",
 ];
 
-const STEPS: [(&str, &[&str]); 8] = [
-    ("fmt", &["fmt", "--all", "--check"]),
+enum Step {
+    Cargo(&'static [&'static str]),
+    Docs,
+}
+
+const STEPS: [(&str, Step); 9] = [
+    ("fmt", Step::Cargo(&["fmt", "--all", "--check"])),
     (
         "clippy",
-        &[
+        Step::Cargo(&[
             "clippy",
             "--workspace",
             "--all-targets",
@@ -22,11 +29,11 @@ const STEPS: [(&str, &[&str]); 8] = [
             "--",
             "-D",
             "warnings",
-        ],
+        ]),
     ),
     (
         "nostd",
-        &[
+        Step::Cargo(&[
             "check",
             "-p",
             "cyberspine-isa",
@@ -40,11 +47,11 @@ const STEPS: [(&str, &[&str]); 8] = [
             "cyberspine-core",
             "--target",
             "thumbv7em-none-eabihf",
-        ],
+        ]),
     ),
     (
         "runtime-no-default",
-        &[
+        Step::Cargo(&[
             "clippy",
             "-p",
             "cyberspine-runtime",
@@ -54,62 +61,71 @@ const STEPS: [(&str, &[&str]); 8] = [
             "--",
             "-D",
             "warnings",
-        ],
+        ]),
     ),
     (
         "runtime-dylib",
-        &[
+        Step::Cargo(&[
             "check",
             "-p",
             "cyberspine-runtime",
             "--no-default-features",
             "--features",
             "dylib",
-        ],
+        ]),
     ),
     (
         "runtime-rpc",
-        &[
+        Step::Cargo(&[
             "check",
             "-p",
             "cyberspine-runtime",
             "--no-default-features",
             "--features",
             "rpc",
-        ],
+        ]),
     ),
     (
         "backend-export",
-        &[
+        Step::Cargo(&[
             "check",
             "-p",
             "cyberspine-backend",
             "--no-default-features",
             "--features",
             "export",
-        ],
+        ]),
     ),
     (
         "arbiter-export",
-        &[
+        Step::Cargo(&[
             "check",
             "-p",
             "cyberspine-arbiter",
             "--no-default-features",
             "--features",
             "export",
-        ],
+        ]),
     ),
+    ("docs", Step::Docs),
 ];
 
-const USAGE: &str = "\
-usage: cargo xtask <command>
+const SUBCOMMANDS: [(&str, &str); 6] = [
+    ("doctor", "check the build environment and worktree hygiene"),
+    ("docs", "check the documents against the tree"),
+    ("fixtures", "build the shared libraries the tests load"),
+    ("test", "build the fixtures, then run the workspace tests"),
+    ("check", "run the lint, no_std, feature and document checks"),
+    ("ci", "run check, then the workspace tests"),
+];
 
-  doctor     check the build environment and worktree hygiene
-  fixtures   build the shared libraries the tests load
-  test       build the fixtures, then run the workspace tests
-  check      run the lint, no_std and feature checks
-  ci         run check, then the workspace tests";
+fn usage() -> String {
+    let mut text = String::from("usage: cargo xtask <command>\n\n");
+    for (name, what) in SUBCOMMANDS {
+        text.push_str(&format!("  {name:<10} {what}\n"));
+    }
+    text
+}
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
@@ -118,12 +134,13 @@ fn main() -> ExitCode {
 
     let outcome = match command.as_deref() {
         Some("doctor") => doctor(),
+        Some("docs") => documents(),
         Some("fixtures") => fixtures(&rest),
         Some("test") => tests(&rest),
         Some("check") => check(),
         Some("ci") => ci(),
         _ => {
-            eprintln!("{USAGE}");
+            eprint!("{}", usage());
             return ExitCode::from(2);
         }
     };
@@ -339,9 +356,12 @@ fn cargo_step(args: &[&str]) -> Command {
 
 fn steps() -> Vec<&'static str> {
     let mut failed = Vec::new();
-    for (name, args) in STEPS {
-        let command = cargo_step(args);
-        match run(command, name) {
+    for (name, step) in STEPS {
+        let outcome = match step {
+            Step::Cargo(args) => run(cargo_step(args), name),
+            Step::Docs => documents(),
+        };
+        match outcome {
             Ok(()) => println!("PASS {name}"),
             Err(error) => {
                 eprintln!("FAIL {name}: {error}");
@@ -350,6 +370,20 @@ fn steps() -> Vec<&'static str> {
         }
     }
     failed
+}
+
+fn documents() -> Result<(), String> {
+    let root = root();
+    let prefix = format!("{}{}", root.display(), std::path::MAIN_SEPARATOR);
+    let problems = docs::check(&root);
+    for problem in &problems {
+        eprintln!("{}", problem.replace(&prefix, ""));
+    }
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("{} problem(s)", problems.len()))
+    }
 }
 
 fn check() -> Result<(), String> {
