@@ -34,3 +34,19 @@ cargo +nightly fuzz run assemble_unwind fuzz/corpus/assemble -- \
     -max_len=4096 \
     -dict="$PWD/fuzz/assemble.dict"
 ```
+
+## Replay
+
+The corpus is a regression suite of its own: every entry is a source the
+assembler accepted, and the strict target fails if this tree no longer produces
+a legal, canonical image from it. `-runs=0` executes the seed corpus once and
+stops before mutating anything.
+
+```bash
+cargo +nightly fuzz run assemble -- -runs=0
+cargo +nightly fuzz run assemble_unwind fuzz/corpus/assemble -- -runs=0
+```
+
+The nightly workflow runs exactly these two commands
+(`.github/workflows/nightly.yml`); pull requests do not. A crash the fuzzer finds
+belongs in `corpus/assemble/`, where every later replay has to survive it.

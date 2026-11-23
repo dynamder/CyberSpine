@@ -3,6 +3,7 @@
 This is a bytecode VM project, intending to give a unify interface to drive real or virtual robots, actuators, etc.
 
 ## Primary rule
+You are not allowed to modify the AGENTS.md under any circumstances.
 
 You should almost never write code comments. Try use clear naming and module structure, plus leveraging the rust type system to make the code self-explanary. You should always try to make illegal things impossible to express, like using type-state pattern to eliminate illegal state transition. Only for those extremely tricky things you should write a concise comment to notice others. Doc comments are recommended, but they should be targeted on how to use the api and the common pitfalls when using them, and the doc comments should be concise.
 
@@ -61,3 +62,10 @@ cargo xtask doctor  # build environment and worktree hygiene
 
 Tests load the fixture libraries from the profile directory; they do not build
 them. `cargo xtask test` takes care of that.
+
+Some checks are too slow to gate a pull request and run nightly instead
+(`.github/workflows/nightly.yml`): the same tests with `PROPTEST_CASES=4096` on
+three hosts, `cargo mutants --in-diff` over the day's commits (settings in
+`.cargo/mutants.toml`), and a replay of the fuzz corpus. `cargo xtask fixtures`
+builds the shared libraries on its own, which is what the mutation run needs
+because it does not go through `cargo xtask test`.

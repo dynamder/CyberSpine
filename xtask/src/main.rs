@@ -3,9 +3,10 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-const FIXTURES: [&str; 3] = [
+const FIXTURES: [&str; 4] = [
     "cyberspine-backend-fixture",
     "cyberspine-arbiter-fixture",
+    "cyberspine-panic-fixture",
     "cyberspine-demo-maze-dylib",
 ];
 
