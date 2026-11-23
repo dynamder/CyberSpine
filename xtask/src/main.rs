@@ -2,8 +2,13 @@
 
 mod docs;
 
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, ExitCode};
+use std::process::{Command, ExitCode, Stdio};
+use std::time::Instant;
+
+/// A step's log is truncated here; the terminal still sees every line.
+const LOG_LIMIT: usize = 10 * 1024 * 1024;
 
 const FIXTURES: [&str; 4] = [
     "cyberspine-backend-fixture",
@@ -12,16 +17,16 @@ const FIXTURES: [&str; 4] = [
     "cyberspine-demo-maze-dylib",
 ];
 
-enum Step {
+enum Plan {
     Cargo(&'static [&'static str]),
     Docs,
 }
 
-const STEPS: [(&str, Step); 9] = [
-    ("fmt", Step::Cargo(&["fmt", "--all", "--check"])),
+const STEPS: [(&str, Plan); 9] = [
+    ("fmt", Plan::Cargo(&["fmt", "--all", "--check"])),
     (
         "clippy",
-        Step::Cargo(&[
+        Plan::Cargo(&[
             "clippy",
             "--workspace",
             "--all-targets",
@@ -33,7 +38,7 @@ const STEPS: [(&str, Step); 9] = [
     ),
     (
         "nostd",
-        Step::Cargo(&[
+        Plan::Cargo(&[
             "check",
             "-p",
             "cyberspine-isa",
@@ -51,7 +56,7 @@ const STEPS: [(&str, Step); 9] = [
     ),
     (
         "runtime-no-default",
-        Step::Cargo(&[
+        Plan::Cargo(&[
             "clippy",
             "-p",
             "cyberspine-runtime",
@@ -65,7 +70,7 @@ const STEPS: [(&str, Step); 9] = [
     ),
     (
         "runtime-dylib",
-        Step::Cargo(&[
+        Plan::Cargo(&[
             "check",
             "-p",
             "cyberspine-runtime",
@@ -76,7 +81,7 @@ const STEPS: [(&str, Step); 9] = [
     ),
     (
         "runtime-rpc",
-        Step::Cargo(&[
+        Plan::Cargo(&[
             "check",
             "-p",
             "cyberspine-runtime",
@@ -87,7 +92,7 @@ const STEPS: [(&str, Step); 9] = [
     ),
     (
         "backend-export",
-        Step::Cargo(&[
+        Plan::Cargo(&[
             "check",
             "-p",
             "cyberspine-backend",
@@ -98,7 +103,7 @@ const STEPS: [(&str, Step); 9] = [
     ),
     (
         "arbiter-export",
-        Step::Cargo(&[
+        Plan::Cargo(&[
             "check",
             "-p",
             "cyberspine-arbiter",
@@ -107,7 +112,7 @@ const STEPS: [(&str, Step); 9] = [
             "export",
         ]),
     ),
-    ("docs", Step::Docs),
+    ("docs", Plan::Docs),
 ];
 
 const SUBCOMMANDS: [(&str, &str); 6] = [
@@ -124,6 +129,7 @@ fn usage() -> String {
     for (name, what) in SUBCOMMANDS {
         text.push_str(&format!("  {name:<10} {what}\n"));
     }
+    text.push_str("\n  --json     print the step report as one JSON object\n");
     text
 }
 
@@ -132,13 +138,19 @@ fn main() -> ExitCode {
     let command = args.next();
     let rest: Vec<String> = args.collect();
 
+    let json = rest.iter().any(|argument| argument == "--json");
+    let rest = rest
+        .into_iter()
+        .filter(|argument| argument != "--json")
+        .collect::<Vec<_>>();
+
     let outcome = match command.as_deref() {
         Some("doctor") => doctor(),
-        Some("docs") => documents(),
+        Some("docs") => docs_only(),
         Some("fixtures") => fixtures(&rest),
-        Some("test") => tests(&rest),
-        Some("check") => check(),
-        Some("ci") => ci(),
+        Some("test") => test(&rest, json),
+        Some("check") => check(json),
+        Some("ci") => ci(json),
         _ => {
             eprint!("{}", usage());
             return ExitCode::from(2);
@@ -309,7 +321,7 @@ fn fixtures(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn tests(args: &[String]) -> Result<(), String> {
+fn tests(args: &[String], report: &mut Report) {
     // The test build compiles every workspace member that a test depends on,
     // and the backend and arbiter fixtures are dev-dependencies, so their
     // shared libraries come out of it. The demo's library is a `cdylib` only
@@ -317,31 +329,31 @@ fn tests(args: &[String]) -> Result<(), String> {
     // not invalidate the test build.
     let mut library = cargo();
     library.args(["build", "--locked", "-p", "cyberspine-demo-maze-dylib"]);
-    run(library, "building the demo library")?;
+    if !run_logged("fixtures", library, report) {
+        return;
+    }
 
     let has_nextest = cargo()
         .args(["nextest", "--version"])
         .output()
         .is_ok_and(|output| output.status.success());
 
+    let mut runner = cargo();
     if has_nextest {
-        println!("tests: nextest");
-        let mut nextest = cargo();
-        nextest.args(["nextest", "run", "--locked", "--workspace", "--all-targets"]);
-        nextest.args(args);
-        run(nextest, "workspace tests")?;
+        runner.args(["nextest", "run", "--locked", "--workspace", "--all-targets"]);
     } else {
-        println!("tests: cargo test (install cargo-nextest for parallel binaries)");
-        let mut test = cargo();
-        test.args(["test", "--locked", "--workspace", "--all-targets"]);
-        test.args(args);
-        run(test, "workspace tests")?;
+        eprintln!("tests: cargo test (install cargo-nextest for parallel binaries)");
+        runner.args(["test", "--locked", "--workspace", "--all-targets"]);
+    }
+    runner.args(args);
+    if !run_logged("tests", runner, report) {
+        return;
     }
 
     // nextest runs test binaries only; a doc example is still a test.
     let mut doctests = cargo();
     doctests.args(["test", "--locked", "--workspace", "--doc"]);
-    run(doctests, "doctests")
+    run_logged("doctests", doctests, report);
 }
 
 fn cargo_step(args: &[&str]) -> Command {
@@ -354,58 +366,318 @@ fn cargo_step(args: &[&str]) -> Command {
     command
 }
 
-fn steps() -> Vec<&'static str> {
-    let mut failed = Vec::new();
-    for (name, step) in STEPS {
-        let outcome = match step {
-            Step::Cargo(args) => run(cargo_step(args), name),
-            Step::Docs => documents(),
+/// One step's outcome: enough of it for a person to read and for a machine to
+/// check afterwards.
+struct Step {
+    name: &'static str,
+    ok: bool,
+    code: Option<i32>,
+    millis: u128,
+    log: Option<PathBuf>,
+}
+
+struct Report {
+    steps: Vec<Step>,
+    /// With `--json`, stdout carries the report and nothing else.
+    json: bool,
+}
+
+impl Report {
+    fn new(json: bool) -> Self {
+        Self {
+            steps: Vec::new(),
+            json,
+        }
+    }
+
+    fn ok(&self) -> bool {
+        self.steps.iter().all(|step| step.ok)
+    }
+
+    fn failed(&self) -> Vec<&'static str> {
+        self.steps
+            .iter()
+            .filter(|step| !step.ok)
+            .map(|step| step.name)
+            .collect()
+    }
+
+    fn record(&mut self, step: Step) {
+        let line = |text: String| {
+            if self.json {
+                eprintln!("{text}");
+            } else {
+                println!("{text}");
+            }
         };
-        match outcome {
-            Ok(()) => println!("PASS {name}"),
-            Err(error) => {
-                eprintln!("FAIL {name}: {error}");
-                failed.push(name);
+        if step.ok {
+            line(format!(
+                "PASS {} {:.1}s",
+                step.name,
+                step.millis as f64 / 1000.0
+            ));
+        } else {
+            let log = step
+                .log
+                .as_ref()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default();
+            eprintln!(
+                "FAIL {} {:.1}s ({log})",
+                step.name,
+                step.millis as f64 / 1000.0
+            );
+        }
+        self.steps.push(step);
+    }
+
+    /// The report as one JSON object (`docs/diagnostics.md` uses the same
+    /// `schema` field, so a reader of either stream knows how to parse it).
+    fn json(&self, root: &Path) -> String {
+        let commit = git(root, &["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".to_owned());
+        let dirty = git(root, &["status", "--porcelain"]).is_none_or(|text| !text.is_empty());
+
+        let mut text = format!(
+            "{{\"schema\":1,\"commit\":{},\"dirty\":{dirty},\"ok\":{},\"steps\":[",
+            quote(&commit),
+            self.ok()
+        );
+        for (index, step) in self.steps.iter().enumerate() {
+            if index > 0 {
+                text.push(',');
+            }
+            let log = match &step.log {
+                Some(path) => quote(&relative(root, path)),
+                None => "null".to_owned(),
+            };
+            text.push_str(&format!(
+                "{{\"name\":{},\"status\":\"{}\",\"exit_code\":{},\"millis\":{},\"log\":{log}}}",
+                quote(step.name),
+                if step.ok { "pass" } else { "fail" },
+                step.code.map_or("null".to_owned(), |code| code.to_string()),
+                step.millis,
+            ));
+        }
+        text.push_str("]}");
+        text
+    }
+
+    fn write(&self, root: &Path) -> Result<(), String> {
+        let path = logs_dir().join("report.json");
+        std::fs::write(&path, self.json(root))
+            .map_err(|error| format!("{}: {error}", path.display()))
+    }
+}
+
+fn quote(text: &str) -> String {
+    let mut quoted = String::from("\"");
+    for character in text.chars() {
+        match character {
+            '"' => quoted.push_str("\\\""),
+            '\\' => quoted.push_str("\\\\"),
+            '\n' => quoted.push_str("\\n"),
+            '\r' => quoted.push_str("\\r"),
+            '\t' => quoted.push_str("\\t"),
+            other => quoted.push(other),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
+fn git(root: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+fn relative(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
+}
+
+fn logs_dir() -> PathBuf {
+    target_dir().join("verify")
+}
+
+fn write_log(name: &str, text: &str) -> Result<PathBuf, String> {
+    let directory = logs_dir();
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("{}: {error}", directory.display()))?;
+    let path = directory.join(format!("{name}.log"));
+    std::fs::write(&path, text).map_err(|error| format!("{}: {error}", path.display()))?;
+    Ok(path)
+}
+
+/// Run one command, forwarding its output while keeping a copy for the report.
+///
+/// The copy is capped: a step that prints without end must not fill the disk,
+/// and the terminal still sees every line.
+fn run_logged(name: &'static str, mut command: Command, report: &mut Report) -> bool {
+    let started = Instant::now();
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            report.record(Step {
+                name,
+                ok: false,
+                code: None,
+                millis: 0,
+                log: None,
+            });
+            eprintln!("xtask: {name}: cannot run: {error}");
+            return false;
+        }
+    };
+
+    // Under `--json` stdout carries the report and nothing else, so a step's
+    // own stdout has to go to stderr with the rest of the running commentary.
+    let force = report.json;
+    let out = child.stdout.take().expect("stdout is piped");
+    let err = child.stderr.take().expect("stderr is piped");
+    let out_reader = std::thread::spawn(move || relay(out, false, force));
+    let err_reader = std::thread::spawn(move || relay(err, true, force));
+
+    let status = child.wait();
+    let mut captured = out_reader.join().unwrap_or_default();
+    captured.extend_from_slice(&err_reader.join().unwrap_or_default());
+    let millis = started.elapsed().as_millis();
+
+    let mut text = String::from_utf8_lossy(&captured).into_owned();
+    if text.len() > LOG_LIMIT {
+        let cut = (0..=LOG_LIMIT)
+            .rev()
+            .find(|index| text.is_char_boundary(*index))
+            .unwrap_or(0);
+        text.truncate(cut);
+        text.push_str("\n[truncated]\n");
+    }
+
+    let code = status.as_ref().ok().and_then(|status| status.code());
+    let ok = status.is_ok_and(|status| status.success());
+    report.record(Step {
+        name,
+        ok,
+        code,
+        millis,
+        log: write_log(name, &text).ok(),
+    });
+    ok
+}
+
+fn relay(mut reader: impl Read, to_stderr: bool, force: bool) -> Vec<u8> {
+    let mut captured = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => {
+                let bytes = &chunk[..read];
+                if to_stderr || force {
+                    let mut stream = std::io::stderr().lock();
+                    let _ = stream.write_all(bytes);
+                    let _ = stream.flush();
+                } else {
+                    let mut stream = std::io::stdout().lock();
+                    let _ = stream.write_all(bytes);
+                    let _ = stream.flush();
+                }
+                if captured.len() < LOG_LIMIT {
+                    captured.extend_from_slice(bytes);
+                }
             }
         }
     }
-    failed
+    captured
 }
 
-fn documents() -> Result<(), String> {
+fn run_docs(name: &'static str, report: &mut Report) {
+    let started = Instant::now();
     let root = root();
     let prefix = format!("{}{}", root.display(), std::path::MAIN_SEPARATOR);
     let problems = docs::check(&root);
+    let millis = started.elapsed().as_millis();
+
+    let mut text = String::new();
     for problem in &problems {
-        eprintln!("{}", problem.replace(&prefix, ""));
+        let line = problem.replace(&prefix, "");
+        eprintln!("{line}");
+        text.push_str(&line);
+        text.push('\n');
     }
-    if problems.is_empty() {
-        Ok(())
-    } else {
-        Err(format!("{} problem(s)", problems.len()))
-    }
+
+    report.record(Step {
+        name,
+        ok: problems.is_empty(),
+        code: None,
+        millis,
+        log: write_log(name, &text).ok(),
+    });
 }
 
-fn check() -> Result<(), String> {
-    finish(steps())
-}
-
-fn ci() -> Result<(), String> {
-    let mut failed = steps();
-    match tests(&[]) {
-        Ok(()) => println!("PASS tests"),
-        Err(error) => {
-            eprintln!("FAIL tests: {error}");
-            failed.push("tests");
+fn lint(report: &mut Report) {
+    for (name, plan) in STEPS {
+        match plan {
+            Plan::Cargo(args) => {
+                run_logged(name, cargo_step(args), report);
+            }
+            Plan::Docs => run_docs(name, report),
         }
     }
-    finish(failed)
 }
 
-fn finish(failed: Vec<&'static str>) -> Result<(), String> {
+fn conclude(report: &Report, json: bool) -> Result<(), String> {
+    report.write(&root())?;
+    if json {
+        println!("{}", report.json(&root()));
+    }
+    let failed = report.failed();
     if failed.is_empty() {
         Ok(())
     } else {
         Err(failed.join(", "))
+    }
+}
+
+fn check(json: bool) -> Result<(), String> {
+    let mut report = Report::new(json);
+    lint(&mut report);
+    conclude(&report, json)
+}
+
+fn ci(json: bool) -> Result<(), String> {
+    let mut report = Report::new(json);
+    lint(&mut report);
+    tests(&[], &mut report);
+    conclude(&report, json)
+}
+
+fn test(args: &[String], json: bool) -> Result<(), String> {
+    let mut report = Report::new(json);
+    tests(args, &mut report);
+    conclude(&report, json)
+}
+
+fn docs_only() -> Result<(), String> {
+    let mut report = Report::new(false);
+    run_docs("docs", &mut report);
+    if report.ok() {
+        Ok(())
+    } else {
+        Err(format!("{} step(s) failed", report.failed().len()))
     }
 }
