@@ -7,15 +7,16 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
 
 jobs:
-  test:
-    name: test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+  # Everything that does not depend on the host OS: formatting, lints, the
+  # no_std cross-builds and the feature combinations. `cargo xtask check` is the
+  # same list a developer runs locally, so the two cannot drift.
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -26,57 +27,46 @@ jobs:
           components: rustfmt, clippy
           targets: thumbv7em-none-eabihf
 
-      - name: rustfmt
-        run: cargo fmt --all --check
+      - uses: Swatinem/rust-cache@v2
 
-      - name: clippy
-        run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
+      - run: cargo xtask check
 
-      # The reason the split exists: the portable crates must be usable on a
-      # microcontroller. `cargo test` compiles them for the host, where a stray
-      # `std` call would still build, so this is the only check that notices.
-      - name: no_std (cyberspine-isa, thumbv7em)
-        run: cargo check -p cyberspine-isa --target thumbv7em-none-eabihf
+  # The only job that needs three hosts: a compiled binary and a real socket.
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: no_std (cyberspine-rig, thumbv7em)
-        run: cargo check -p cyberspine-rig --target thumbv7em-none-eabihf
+      - uses: dtolnay/rust-toolchain@1.99.1
 
-      - name: no_std (cyberspine-binfmt, thumbv7em)
-        run: cargo check -p cyberspine-binfmt --target thumbv7em-none-eabihf
+      - uses: Swatinem/rust-cache@v2
 
-      - name: no_std (cyberspine-exec, thumbv7em)
-        run: cargo check -p cyberspine-exec --target thumbv7em-none-eabihf
+      # Builds the cdylib fixtures once, then runs the workspace tests.
+      - run: cargo xtask test
 
-      - name: no_std (cyberspine-core, thumbv7em)
-        run: cargo check -p cyberspine-core --target thumbv7em-none-eabihf
+  # The two tools the project ships: assemble a real source, then run the image
+  # against the built-in linked dummy body. The debug profile is enough; a
+  # release build here would only pay for optimisation nobody reads.
+  tools:
+    name: tools (assemble + run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
 
-      # `fuzz/` is its own workspace and is not covered by `--workspace`.
-      - name: test (all platforms)
-        run: cargo test --workspace --all-targets
+      - uses: dtolnay/rust-toolchain@1.99.1
 
-      # The runtime's external backends are features. This build has neither,
-      # so the tests that pin the "not compiled" message run here.
-      - name: test (runtime without external backends)
-        run: cargo test -p cyberspine-runtime --no-default-features
+      - uses: Swatinem/rust-cache@v2
 
-      - name: clippy (runtime without external backends)
-        run: cargo clippy -p cyberspine-runtime --no-default-features --all-targets --no-deps -- -D warnings
-
-      # `cyberspine-backend`'s transports are feature-gated, so the workspace run
-      # above compiles only the wire and remote layers. This one loads a real
-      # shared library and opens a real socket.
-      - name: test (backend integrations)
-        run: cargo test -p cyberspine-backend --all-features
-
-      - name: clippy (backend integrations)
-        run: cargo clippy -p cyberspine-backend --all-features --all-targets --no-deps -- -D warnings
-
-      # The two tools the project ships: assemble a real source, then run the
-      # image against the built-in linked dummy body.
-      - name: tools (assemble + run)
-        run: |
-          cargo run --release -p cyberspine-asm -- -a demos/maze/maze.csa -o target/maze.csp
-          cargo run --release -p cyberspine-runtime -- -i target/maze.csp --ticks 5 --unpaced
+      - run: |
+          cargo run --locked -p cyberspine-asm -- -a demos/maze/maze.csa -o target/maze.csp
+          cargo run --locked -p cyberspine-runtime -- -i target/maze.csp --ticks 5 --unpaced
 
   # The `rust-version` every manifest declares, checked against a real compiler
   # instead of trusted. The `+` overrides `rust-toolchain.toml`, which pins the
@@ -84,12 +74,15 @@ jobs:
   msrv:
     name: msrv (1.89)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@1.89.0
         with:
           targets: thumbv7em-none-eabihf
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: workspace
         run: cargo +1.89.0 check --workspace --all-targets --locked
@@ -102,6 +95,7 @@ jobs:
   qemu:
     name: qemu (cortex-m4)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -110,6 +104,8 @@ jobs:
         with:
           targets: thumbv7em-none-eabihf
 
+      - uses: Swatinem/rust-cache@v2
+
       - name: qemu-system-arm
         run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
 
@@ -117,13 +113,13 @@ jobs:
       # target and the linker script, so the build runs from inside it.
       - name: build (firmware)
         working-directory: firmware
-        run: cargo build --release
+        run: cargo build --release --locked
 
       # The assertion, not just the compile: a failing check panics and exits 1.
       - name: run under QEMU
         working-directory: firmware
         run: |
-          qemu-system-arm -M mps2-an386 -cpu cortex-m4 \
+          timeout 60 qemu-system-arm -M mps2-an386 -cpu cortex-m4 \
             -semihosting-config enable=on,target=native \
             -nographic \
             -kernel target/thumbv7em-none-eabihf/release/cyberspine-firmware

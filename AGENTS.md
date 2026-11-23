@@ -46,3 +46,16 @@ cargo build --release
 
 `target/release/cyinea` assembles a `.csa`; `target/release/cyinevm` runs a `.csp`.
 Omit `--backend` to run against the built-in dummy body.
+
+The checks are one command, and it is the same list CI runs:
+
+```bash
+cargo xtask check   # fmt, clippy, no_std, every feature combination
+cargo xtask test    # build the cdylib fixtures, then the workspace tests
+cargo xtask ci      # both
+cargo xtask doctor  # build environment and worktree hygiene
+```
+
+Tests load the fixture libraries from the profile directory; they do not build
+them. `cargo xtask test` takes care of that, and a bare `cargo test` works once
+a build or a workspace test run has produced them.
