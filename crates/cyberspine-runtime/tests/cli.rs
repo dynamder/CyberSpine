@@ -4,7 +4,11 @@
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::process::Stdio;
 use std::process::{Command, Output};
+#[cfg(unix)]
+use std::time::Duration;
 
 use cyberspine_asm::assembler::{generate_image, generate_image_debug, parse};
 use cyberspine_core::binfmt::load::VerifiedImage;
@@ -16,7 +20,9 @@ use cyberspine_testkit::scratch_dir;
 const REJECTED: i32 = 3;
 /// An instance faulted.
 const FAULTED: i32 = 4;
-/// The environment failed: a file, a body or an arbiter.
+/// The environment failed: a file, a body or an arbiter. Only the tests that
+/// build without a backend feature use it.
+#[cfg(any(not(feature = "dylib"), not(feature = "rpc")))]
 const ENVIRONMENT: i32 = 5;
 
 const MANIFEST: &str = r#"{
@@ -62,6 +68,20 @@ const LOOP: &str = "\
 .layer 10
 .clock hz = 1000
 .fuel 8
+.max_wait 600.0
+
+.text
+forever:
+    JMP     forever
+";
+
+/// A loop that never halts on its own, paced slowly enough for a test to
+/// interrupt it: 50 ticks is one second.
+#[cfg(unix)]
+const SPIN: &str = "\
+.layer 10
+.clock hz = 50
+.fuel 4096
 .max_wait 600.0
 
 .text
@@ -207,6 +227,36 @@ fn a_fault_is_reported_and_fails_the_run() {
         stderr(&output).contains("fuel exhausted"),
         "stderr: {}",
         stderr(&output)
+    );
+}
+
+/// `docs/runtime.md` §1: `--trace` writes one line per tick, and the tick that
+/// faulted is the one a reader most needs to see.
+#[test]
+fn the_faulting_tick_is_in_the_trace() {
+    let dir = scratch("trace-fault");
+    let image = write_image(&dir, "loop.csp", LOOP, MANIFEST);
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("3"),
+        OsStr::new("--unpaced"),
+        OsStr::new("--trace"),
+        OsStr::new("-q"),
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(FAULTED),
+        "stderr: {}",
+        stderr(&output)
+    );
+    let trace = stdout(&output);
+    assert!(
+        trace.lines().skip(1).any(|line| line.starts_with("0\t")),
+        "the faulted tick is missing from the trace:\n{trace}"
     );
 }
 
@@ -809,6 +859,64 @@ fn a_faulted_run_reports_its_outcome_and_exits_four() {
     let line = stdout(&output);
     let value: serde_json::Value = serde_json::from_str(line.trim()).expect("the report is json");
     assert_eq!(value["outcome"], "faulted");
+}
+
+/// `docs/diagnostics.md` §5 has an outcome for Ctrl-C and §8 says a truncated
+/// run is not "rounds were never applied" noise. A `--ticks` run interrupted
+/// half way is neither a budget nor a divergence.
+#[cfg(unix)]
+#[test]
+fn ctrl_c_reports_stopped_and_says_nothing_about_the_replay() {
+    let dir = scratch("ctrl-c");
+    let image = write_image(&dir, "spin.csp", SPIN, MANIFEST);
+    let replay = dir.join("run.jsonl");
+    fs::write(
+        &replay,
+        "{\"event\":9,\"tick\":0,\"actions\":[],\"completion\":{\"finished\":\"stop\"}}\n",
+    )
+    .expect("the recording is written");
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_cyinevm"))
+        .args([
+            OsStr::new("-i"),
+            image.as_os_str(),
+            OsStr::new("--ticks"),
+            OsStr::new("50"),
+            OsStr::new("--replay"),
+            replay.as_os_str(),
+            OsStr::new("--report"),
+            OsStr::new("json"),
+            OsStr::new("-q"),
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the cyinevm binary should spawn");
+
+    std::thread::sleep(Duration::from_millis(500));
+    let signal = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("kill runs");
+    assert!(signal.success(), "the test could not signal the run");
+
+    let output = child.wait_with_output().expect("the run is collected");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "Ctrl-C is not a failure: stderr: {}",
+        stderr(&output)
+    );
+    assert!(
+        stdout(&output).contains("\"outcome\":\"stopped\""),
+        "the run reported: {}",
+        stdout(&output)
+    );
+    assert!(
+        !stderr(&output).contains("rt.replay-unused"),
+        "a truncated run is not a divergence: {}",
+        stderr(&output)
+    );
 }
 
 /// `--json` changes the diagnostic format, never the stream.

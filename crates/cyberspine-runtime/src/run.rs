@@ -454,13 +454,12 @@ fn run_session<B: Backend, P: RigPolicy>(
     let result = run_loop(&mut session, &mut context, options, sink, on_event);
 
     let outcome = match &result {
-        Ok(()) => match options.mode {
-            RunMode::RealTime(Stop::Ticks(_)) | RunMode::UnpacedTicks(_) => Outcome::Budget,
-            RunMode::RealTime(Stop::UntilHalt) => Outcome::Halted,
-            RunMode::RealTime(Stop::Never) => Outcome::Stopped,
+        Ok(ending) => match ending {
+            Ending::Budget => Outcome::Budget,
+            Ending::Halted => Outcome::Halted,
+            Ending::Stopped => Outcome::Stopped,
         },
-        Err(Error::Faulted(_)) => Outcome::Faulted,
-        Err(_) => Outcome::Environment,
+        Err(error) => error.outcome(),
     };
 
     let report = RunReport {
@@ -488,7 +487,7 @@ fn run_loop<B: Backend, P: RigPolicy>(
     options: &Options,
     sink: &mut Diagnostics,
     on_event: &mut dyn FnMut(&Report),
-) -> Result<(), Error> {
+) -> Result<Ending, Error> {
     if !options.quiet {
         let shape = session.shape();
         eprintln!(
@@ -516,7 +515,7 @@ fn run_loop<B: Backend, P: RigPolicy>(
         session.set_tracing(true);
     }
     if trace.as_ref().is_some_and(Trace::is_broken) {
-        return Ok(());
+        return Ok(Ending::Stopped);
     }
     // `--ticks 0` means "load and validate, do not tick", so it must still open
     // the arbiter, the action directory and the decision log: a bad path is a
@@ -541,12 +540,9 @@ fn run_loop<B: Backend, P: RigPolicy>(
         on_event,
     );
 
-    // A replay that was cut short did not diverge — it just did not finish.
-    // Ctrl-C (`Stop::Never` is only exit-able by Ctrl-C) and a failed run are
-    // both situations where "rounds were never applied" is expected noise.
-    let completed = !matches!(options.mode, RunMode::RealTime(Stop::Never));
-    if result.is_ok()
-        && completed
+    // "Rounds were never applied" is only noise when the run did not end on its
+    // own terms: a replay cut short by Ctrl-C or by a fault did not diverge.
+    if matches!(result, Ok(Ending::Budget | Ending::Halted))
         && let Some(source) = notices.as_mut()
     {
         for notice in source.take_notices() {
@@ -557,6 +553,18 @@ fn run_loop<B: Backend, P: RigPolicy>(
     result
 }
 
+/// Why the loop stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ending {
+    /// The tick budget ran out.
+    Budget,
+    /// Every instance halted, so `--until-halt` was satisfied.
+    Halted,
+    /// Ctrl-C, or the trace's reader closed the pipe: the configured end was
+    /// not reached, and nothing about the run is wrong.
+    Stopped,
+}
+
 fn drive<B: Backend, P: RigPolicy>(
     session: &mut Session<B, P>,
     context: &mut Registry,
@@ -564,7 +572,7 @@ fn drive<B: Backend, P: RigPolicy>(
     interrupts: &mut Interrupts<Box<dyn Arbiter>>,
     trace: &mut Option<Trace>,
     on_event: &mut dyn FnMut(&Report),
-) -> Result<(), Error> {
+) -> Result<Ending, Error> {
     let stop = Arc::new(AtomicBool::new(false));
     ctrlc::set_handler({
         let stop = Arc::clone(&stop);
@@ -575,51 +583,51 @@ fn drive<B: Backend, P: RigPolicy>(
         RunMode::UnpacedTicks(ticks) => {
             for _ in 0..ticks {
                 if interrupted(&stop) {
-                    break;
+                    return Ok(Ending::Stopped);
                 }
                 session.tick()?;
                 if !observe(session, context, trace.as_mut(), interrupts, on_event)? {
-                    return Ok(());
+                    return Ok(Ending::Stopped);
                 }
             }
+            Ok(Ending::Budget)
         }
         RunMode::RealTime(Stop::Ticks(ticks)) => {
             let frame = Duration::from_secs_f32(session.dt());
             let mut deadline = Instant::now();
             for _ in 0..ticks {
                 if interrupted(&stop) {
-                    break;
+                    return Ok(Ending::Stopped);
                 }
                 deadline += frame;
                 sleep_until(deadline);
                 session.tick()?;
                 if !observe(session, context, trace.as_mut(), interrupts, on_event)? {
-                    return Ok(());
+                    return Ok(Ending::Stopped);
                 }
             }
+            Ok(Ending::Budget)
         }
         RunMode::RealTime(mode) => {
             let frame = Duration::from_secs_f32(session.dt());
             let mut last = Instant::now();
             loop {
                 if interrupted(&stop) {
-                    break;
+                    return Ok(Ending::Stopped);
                 }
                 thread::sleep(frame);
                 let elapsed = last.elapsed().as_secs_f64();
                 last = Instant::now();
                 session.advance(elapsed)?;
                 if !observe(session, context, trace.as_mut(), interrupts, on_event)? {
-                    return Ok(());
+                    return Ok(Ending::Stopped);
                 }
                 if mode == Stop::UntilHalt && session.is_idle() {
-                    break;
+                    return Ok(Ending::Halted);
                 }
             }
         }
     }
-
-    Ok(())
 }
 
 fn interrupted(stop: &AtomicBool) -> bool {
@@ -696,17 +704,19 @@ fn observe<B: Backend, P: RigPolicy, A: Arbiter>(
     interrupts: &mut Interrupts<A>,
     on_event: &mut dyn FnMut(&Report),
 ) -> Result<bool, Error> {
-    report_faults(session, context)?;
-    for report in interrupts.pump(session, context)? {
-        if !report.is_silent() {
-            on_event(&report);
-        }
-    }
-
+    // The trace goes out first: the tick that faulted is the one a reader most
+    // wants, and `report_faults` returns early on purpose.
     if let Some(trace) = trace {
         trace.drain(session)?;
         if trace.is_broken() {
             return Ok(false);
+        }
+    }
+
+    report_faults(session, context)?;
+    for report in interrupts.pump(session, context)? {
+        if !report.is_silent() {
+            on_event(&report);
         }
     }
 
