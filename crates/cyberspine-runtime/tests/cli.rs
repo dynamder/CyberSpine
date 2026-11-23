@@ -4,14 +4,19 @@
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
+use std::time::Duration;
 
 use cyberspine_asm::assembler::{generate_image, generate_image_debug, parse};
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::rig::Rig;
 use cyberspine_testkit::scratch_dir;
 
+/// A run that needs longer than this is a hang, not a slow test.
+const RUN_LIMIT: Duration = Duration::from_secs(30);
+
 /// The input was understood and rejected (`docs/diagnostics.md` §6).
+#[cfg(feature = "rpc")]
 const REJECTED: i32 = 3;
 /// An instance faulted.
 const FAULTED: i32 = 4;
@@ -108,10 +113,7 @@ fn write_debug_image(dir: &Path, name: &str, source: &str, manifest: &str) -> Pa
 }
 
 fn run(args: Vec<&OsStr>) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_cyinevm"))
-        .args(args)
-        .output()
-        .expect("the cyinevm binary should run")
+    cyberspine_testkit::run_within(OsStr::new(env!("CARGO_BIN_EXE_cyinevm")), &args, RUN_LIMIT)
 }
 
 fn stderr(output: &Output) -> String {
@@ -588,52 +590,8 @@ fn a_decision_log_replays_the_same_run() {
 }
 
 #[cfg(feature = "dylib")]
-fn arbiter_fixture() -> &'static PathBuf {
-    use std::sync::OnceLock;
-
-    static PATH: OnceLock<PathBuf> = OnceLock::new();
-    PATH.get_or_init(|| {
-        let output = Command::new(env!("CARGO"))
-            .args([
-                "build",
-                "-p",
-                "cyberspine-arbiter-fixture",
-                "--message-format=json",
-                "--offline",
-            ])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .output()
-            .expect("cargo runs");
-        assert!(
-            output.status.success(),
-            "cargo could not build the fixture:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
-            let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
-                continue;
-            };
-            if record["reason"] != "compiler-artifact" {
-                continue;
-            }
-            if !record["package_id"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("cyberspine-arbiter-fixture")
-            {
-                continue;
-            }
-            for file in record["filenames"].as_array().into_iter().flatten() {
-                let path = PathBuf::from(file.as_str().unwrap_or_default());
-                if path.extension().and_then(|ext| ext.to_str())
-                    == Some(std::env::consts::DLL_EXTENSION)
-                {
-                    return path;
-                }
-            }
-        }
-        panic!("cargo did not report a shared library for the fixture");
-    })
+fn arbiter_fixture() -> PathBuf {
+    cyberspine_testkit::fixture_library("cyberspine-arbiter-fixture")
 }
 
 #[cfg(feature = "dylib")]

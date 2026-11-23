@@ -1,9 +1,7 @@
 //! One body, three packagings: the same image must produce the same tick
 //! stream and the same picture whichever way the body is reached.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::OnceLock;
+use std::path::PathBuf;
 
 use cyberspine_backend::{BackendSpec, dylib, rpc};
 use cyberspine_core::rig::BoundFingerprint;
@@ -13,8 +11,6 @@ use cyberspine_demo_maze::{
 };
 use cyberspine_demo_maze_world::{MazeBackend, rig};
 use cyberspine_vm::{Backend, LoadError};
-
-use serde_json::Value;
 
 const STYLE: Style = Style {
     charset: Charset::Ascii,
@@ -116,15 +112,14 @@ fn an_image_for_another_rig_never_reaches_a_remote_tick() {
 #[test]
 fn a_library_walks_and_draws_the_same_maze() {
     let linked = Session::embedded().expect("the linked body loads");
-    let loaded =
-        Session::external(&BackendSpec::Dylib(library().to_path_buf())).expect("the library loads");
+    let loaded = Session::external(&BackendSpec::Dylib(library())).expect("the library loads");
 
     same_walk(linked, loaded);
 }
 
 #[test]
 fn the_dynamic_library_is_its_own_artifact() {
-    let body = dylib::open(library()).expect("the shared library loads");
+    let body = dylib::open(&library()).expect("the shared library loads");
 
     assert_eq!(body.build_id(), "cyberspine-demo-maze-dylib/0.1.0");
     assert_eq!(
@@ -134,57 +129,7 @@ fn the_dynamic_library_is_its_own_artifact() {
     );
 }
 
-/// The body's shared library, built on demand: `cargo test` builds the harness,
-/// not the cdylib. The artifact path comes from `--message-format=json`, which
-/// keeps the test independent of the target directory, the profile and the
-/// platform's library suffix.
-fn library() -> &'static Path {
-    static PATH: OnceLock<PathBuf> = OnceLock::new();
-
-    PATH.get_or_init(|| {
-        let output = Command::new(env!("CARGO"))
-            .args([
-                "build",
-                "-p",
-                "cyberspine-demo-maze-dylib",
-                "--lib",
-                "--message-format=json",
-                "--offline",
-            ])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .output()
-            .expect("cargo runs");
-
-        assert!(
-            output.status.success(),
-            "cargo could not build the demo library:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
-            let Ok(record) = serde_json::from_str::<Value>(line) else {
-                continue;
-            };
-            if record["reason"] != "compiler-artifact" {
-                continue;
-            }
-            if !record["package_id"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("cyberspine-demo-maze-dylib")
-            {
-                continue;
-            }
-            for file in record["filenames"].as_array().into_iter().flatten() {
-                let path = PathBuf::from(file.as_str().unwrap_or_default());
-                if path.extension().and_then(|ext| ext.to_str())
-                    == Some(std::env::consts::DLL_EXTENSION)
-                {
-                    return path;
-                }
-            }
-        }
-
-        panic!("cargo did not report a shared library for the demo");
-    })
+/// The body's shared library, built by any build of the workspace.
+fn library() -> PathBuf {
+    cyberspine_testkit::fixture_library("cyberspine-demo-maze-dylib")
 }

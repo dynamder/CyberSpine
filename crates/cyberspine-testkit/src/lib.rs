@@ -221,6 +221,100 @@ pub fn verified(image: Image) -> VerifiedImage {
     VerifiedImage::verify(image).expect("the fixture is a legal image")
 }
 
+/// The shared library a workspace member builds as a `cdylib`.
+///
+/// A test binary lives in `<profile>/deps`, so the profile directory is two
+/// levels up: the lookup does not depend on `CARGO_TARGET_DIR`, the profile or
+/// the platform's library suffix.
+pub fn fixture_library(package: &str) -> PathBuf {
+    let stem = package.replace('-', "_");
+    let file = format!(
+        "{}{stem}.{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_EXTENSION
+    );
+    let exe = std::env::current_exe().expect("the test binary has a path");
+    let profile = exe
+        .parent()
+        .and_then(|deps| deps.parent())
+        .expect("the test binary lives in a profile directory");
+    let path = profile.join(file);
+    assert!(
+        path.exists(),
+        "{} is missing; build it with `cargo build -p {package}`, or run `cargo xtask test`",
+        path.display()
+    );
+    path
+}
+
+/// Run a binary to completion, killing it if it outlives `limit`.
+///
+/// A hung child would otherwise hang the whole test binary: `Command::output`
+/// has no deadline of its own.
+pub fn run_within(
+    program: &std::ffi::OsStr,
+    args: &[&std::ffi::OsStr],
+    limit: std::time::Duration,
+) -> std::process::Output {
+    run_in(None, program, args, limit)
+}
+
+/// [`run_within`], with the child's working directory.
+pub fn run_in(
+    cwd: Option<&std::path::Path>,
+    program: &std::ffi::OsStr,
+    args: &[&std::ffi::OsStr],
+    limit: std::time::Duration,
+) -> std::process::Output {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(dir) = cwd {
+        command.current_dir(dir);
+    }
+    let mut child = command
+        .spawn()
+        .unwrap_or_else(|error| panic!("{program:?} should spawn: {error}"));
+
+    let mut out = child.stdout.take().expect("stdout is piped");
+    let mut err = child.stderr.take().expect("stderr is piped");
+    let read_out = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = out.read_to_end(&mut bytes);
+        bytes
+    });
+    let read_err = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = err.read_to_end(&mut bytes);
+        bytes
+    });
+
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        if child.try_wait().expect("the child is waitable").is_some() {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("{program:?} did not exit within {limit:?}: {args:?}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    std::process::Output {
+        status: child.wait().expect("the child is waitable"),
+        stdout: read_out.join().expect("the stdout reader finishes"),
+        stderr: read_err.join().expect("the stderr reader finishes"),
+    }
+}
+
 /// A fresh directory under the test target, emptied if it already exists.
 pub fn scratch_dir(name: &str) -> PathBuf {
     // Set by Cargo for the test process; a library cannot read it at compile

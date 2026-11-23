@@ -7,8 +7,9 @@
 
 use std::ffi::OsStr;
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Output;
+use std::sync::OnceLock;
+use std::time::Duration;
 
 use cyberspine_asm::assembler::{generate_image, parse};
 use cyberspine_core::binfmt::load::VerifiedImage;
@@ -43,48 +44,46 @@ fn scratch(name: &str) -> PathBuf {
     scratch_dir(&format!("runtime/matrix/{name}"))
 }
 
+/// The one image every case runs, built once: `scratch_dir` empties the
+/// directory it returns, so two tests building it at the same time would delete
+/// each other's file.
 fn image() -> PathBuf {
-    let dir = scratch("image");
-    let rig = cyberspine_manifest::from_json(MANIFEST).expect("the manifest is valid");
-    let asm = parse(SOURCE).expect("the source parses");
-    let image = generate_image(&asm, &rig).expect("the source generates");
-    let bytes = VerifiedImage::verify(image)
-        .expect("the image is valid")
-        .to_bytes();
-    let path = dir.join("halt.csp");
-    std::fs::write(&path, bytes).expect("the image is written");
-    path
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let dir = scratch("image");
+        let rig = cyberspine_manifest::from_json(MANIFEST).expect("the manifest is valid");
+        let asm = parse(SOURCE).expect("the source parses");
+        let image = generate_image(&asm, &rig).expect("the source generates");
+        let bytes = VerifiedImage::verify(image)
+            .expect("the image is valid")
+            .to_bytes();
+        let path = dir.join("halt.csp");
+        std::fs::write(&path, bytes).expect("the image is written");
+        path
+    })
+    .clone()
 }
 
 fn garbage() -> PathBuf {
-    let dir = scratch("garbage");
-    let path = dir.join("not-an-image.csp");
-    std::fs::write(&path, b"GARBAGE").expect("the file is written");
-    path
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let dir = scratch("garbage");
+        let path = dir.join("not-an-image.csp");
+        std::fs::write(&path, b"GARBAGE").expect("the file is written");
+        path
+    })
+    .clone()
 }
 
 /// Run the binary, but never let the test hang on it.
 fn run(args: &[&OsStr], case: &str) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_cyinevm"))
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("the cyinevm binary should spawn");
-
-    let deadline = Instant::now() + LIMIT;
-    loop {
-        if child.try_wait().expect("the child is waitable").is_some() {
-            return child.wait_with_output().expect("the output is collected");
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("`{case}` did not exit within {LIMIT:?}");
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    let output =
+        cyberspine_testkit::run_within(OsStr::new(env!("CARGO_BIN_EXE_cyinevm")), args, LIMIT);
+    assert!(
+        output.status.code().is_some(),
+        "`{case}` was killed by a signal"
+    );
+    output
 }
 
 fn code(output: &Output) -> i32 {
