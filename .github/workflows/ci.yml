@@ -10,13 +10,14 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
-  # Everything that does not depend on the host OS: formatting, lints, the
-  # no_std cross-builds and the feature combinations. `cargo xtask check` is the
-  # same list a developer runs locally, so the two cannot drift.
-  check:
-    name: check
+  # The whole suite on one host, reported as data. `cargo xtask ci` builds the
+  # fixtures, runs the steps and the tests, and writes `target/verify/`; the
+  # step list below is an independent copy of `STEPS`, so deleting a gate from
+  # the tool shows up here instead of passing quietly.
+  verify:
+    name: verify
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -29,9 +30,61 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - run: cargo xtask check
+      - uses: taiki-e/install-action@nextest
 
-  # The only job that needs three hosts: a compiled binary and a real socket.
+      - name: the gate
+        run: |
+          mkdir -p target
+          cargo xtask ci --json > target/verify.json
+
+      - name: the gate list
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+
+          expected = """fmt clippy nostd runtime-no-default runtime-dylib runtime-rpc
+          backend-export arbiter-export docs fixtures tests doctests""".split()
+
+          try:
+              report = json.load(open("target/verify/report.json"))
+          except FileNotFoundError:
+              sys.exit("the run wrote no report")
+
+          steps = report["steps"]
+          seen = [step["name"] for step in steps]
+          lines = ["| step | status | s |", "|---|---|---|"]
+          for step in steps:
+              lines.append(f"| {step['name']} | {step['status']} | {step['millis'] / 1000:.1f} |")
+          summary = "\n".join(lines)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary_file:
+              summary_file.write(summary + "\n")
+
+          problems = []
+          if missing := [name for name in expected if name not in seen]:
+              problems.append(f"steps in the gate but not in the report: {missing}")
+          if extra := [name for name in seen if name not in expected]:
+              problems.append(f"steps in the report but not in the gate: {extra}")
+          if report["dirty"]:
+              problems.append("the tree is dirty: this report is not of a commit")
+          if not report["ok"]:
+              problems.append("a step failed")
+          if problems:
+              sys.exit("\n".join(problems))
+          print(f"{len(steps)} steps passed at {report['commit'][:12]}")
+          PY
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify
+          path: |
+            target/verify/
+            target/verify.json
+          if-no-files-found: ignore
+
+  # The same suite on the two hosts `verify` does not cover. A failure here is
+  # "this broke on Windows" or "this broke on macOS", not "the rules changed".
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -39,7 +92,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -125,3 +178,24 @@ jobs:
             -semihosting-config enable=on,target=native \
             -nographic \
             -kernel target/thumbv7em-none-eabihf/release/cyberspine-firmware
+
+  # One check to require in branch protection: the jobs can be added to or split
+  # without the required context changing, and a skipped matrix leg cannot leave
+  # a branch protection rule waiting for a context nobody will ever create.
+  gate:
+    name: gate
+    needs: [verify, test, tools, msrv, qemu]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: every job passed
+        run: |
+          echo "verify=${{ needs.verify.result }} test=${{ needs.test.result }} \
+          tools=${{ needs.tools.result }} msrv=${{ needs.msrv.result }} \
+          qemu=${{ needs.qemu.result }}"
+          for result in "${{ needs.verify.result }}" "${{ needs.test.result }}" \
+                        "${{ needs.tools.result }}" "${{ needs.msrv.result }}" \
+                        "${{ needs.qemu.result }}"; do
+            [ "$result" = "success" ] || exit 1
+          done
