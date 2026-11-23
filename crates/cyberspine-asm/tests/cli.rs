@@ -187,6 +187,52 @@ fn a_non_ascii_reason_is_assembled_and_reloads() {
     assert_eq!(loaded.reason(0), "héllo {f1}");
 }
 
+/// `docs/asm.md` §4.4: the source form names its variables. An index is what the
+/// image stores, so writing one is a user error rather than an assembler bug —
+/// and the index the assembler stores is the one it resolved, not one the source
+/// picked.
+#[test]
+fn a_stored_variable_index_in_a_source_is_rejected() {
+    let dir = scratch("source-index");
+    write_file(&dir, "greet.rig.json", MANIFEST);
+    let source = write_file(
+        &dir,
+        "index.csa",
+        "\
+.layer 10
+.clock hz = 60
+.fuel 4096
+.max_wait 600.0
+.rig \"greet.rig.json\"
+.var_f phase = 0.0
+.text
+    INTR \"{vf:0}\"
+    HALT
+",
+    );
+    let target = dir.join("index.csp");
+
+    let output = run(vec![
+        OsStr::new("-a"),
+        source.as_os_str(),
+        OsStr::new("-o"),
+        target.as_os_str(),
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(REJECTED),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("asm.bad-reason"),
+        "the index must be a user error, not asm.internal: {}",
+        stderr(&output)
+    );
+    assert!(!target.exists(), "a rejected source writes no image");
+}
+
 #[test]
 fn strip_produces_the_release_build() {
     let dir = scratch("strip");

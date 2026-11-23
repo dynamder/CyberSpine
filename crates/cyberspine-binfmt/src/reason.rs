@@ -1,8 +1,13 @@
 //! Reason templates: the text an `INTR` hands to the host (`docs/isa.md` §4.8).
 //!
 //! A template is UTF-8 text with placeholders that name a register or an
-//! instance variable. The assembler stores the canonical form — variables by
-//! index, not by name — and the host renders it against a frozen instance.
+//! instance variable. It comes in two forms and the form is the type parameter:
+//! a [`SourceTemplate`] names its variables (`{vf:phase}`) and is what a source
+//! file writes, a [`StoredTemplate`] indexes them (`{vf:3}`) and is what an
+//! image stores. Neither can be built in the other's shape — a stored template
+//! cannot hold a name, and a source template refuses an index at parse time —
+//! so the assembler cannot leak a name into an image and the loader cannot
+//! render a template it has not range-checked.
 //!
 //! The grammar is deliberately tiny: a placeholder is a *value*, never an
 //! expression. Arithmetic belongs in the program, before the `INTR`.
@@ -22,34 +27,33 @@ use alloc::vec::Vec;
 /// caps a frame at 1 MiB).
 pub const MAX_REASON_LEN: usize = 4096;
 
-/// How a placeholder names a variable: by index in the stored form, by name in
-/// the source form (`docs/asm.md` §4.4).
+/// A template in the form a source file writes: variables by name.
+pub type SourceTemplate = Template<String>;
+
+/// A template in the form an image stores: variables by index.
+pub type StoredTemplate = Template<u32>;
+
+/// A parsed reason template; `Var` is how it refers to an instance variable.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum VarRef {
-    Index(u32),
-    Name(String),
+pub struct Template<Var> {
+    segments: Vec<Segment<Var>>,
 }
 
-/// The value a placeholder reads.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Value {
+enum Segment<Var> {
+    Text(String),
+    Value {
+        value: Value<Var>,
+        precision: Option<u8>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Value<Var> {
     F(u8),
     I(u8),
-    Vf(VarRef),
-    Vi(VarRef),
-}
-
-/// One piece of a template: literal text or a value to interpolate.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Segment {
-    Text(String),
-    Value { value: Value, precision: Option<u8> },
-}
-
-/// A parsed reason template.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Template {
-    segments: Vec<Segment>,
+    Vf(Var),
+    Vi(Var),
 }
 
 /// Everything a template can get wrong.
@@ -77,6 +81,8 @@ pub enum TemplateError {
     PrecisionOnInteger,
     #[error("a stored template names variables by index, not `{name}`")]
     NameInStored { name: String },
+    #[error("a source template names variables, not index `{text}`")]
+    IndexInSource { text: String },
     #[error("stored variable index {index} is out of range (count {count})")]
     StoredVarIndexOutOfRange { index: u32, count: u32 },
     #[error("variable `{name}` is not declared")]
@@ -95,118 +101,63 @@ pub trait ReasonView {
     fn vi(&self, var: u32) -> Option<i32>;
 }
 
-impl Template {
-    /// Parse a source or stored template.
+impl Template<String> {
+    /// Parse the form a source file writes.
     ///
-    /// The two forms differ only in how a variable is named; the grammar around
-    /// them is identical, so one parser covers both and the caller decides
-    /// whether names are acceptable ([`Template::check_stored`] says no).
+    /// A variable is named here; an index is [`TemplateError::IndexInSource`],
+    /// because only [`Template::resolve_vars`] may decide what an index means.
     pub fn parse(text: &str) -> Result<Self, TemplateError> {
-        if text.is_empty() {
-            return Err(TemplateError::Empty);
-        }
-        if text.len() > MAX_REASON_LEN {
-            return Err(TemplateError::TooLong { len: text.len() });
-        }
-
-        let mut segments = Vec::new();
-        let mut run_start = 0usize;
-        let mut index = 0usize;
-
-        while index < text.len() {
-            let rest = &text[index..];
-            if rest.starts_with("{{") {
-                push_text(&mut segments, &text[run_start..index]);
-                segments.push(Segment::Text("{".to_string()));
-                index += 2;
-                run_start = index;
-            } else if rest.starts_with("}}") {
-                push_text(&mut segments, &text[run_start..index]);
-                segments.push(Segment::Text("}".to_string()));
-                index += 2;
-                run_start = index;
-            } else if let Some(after_brace) = rest.strip_prefix('{') {
-                push_text(&mut segments, &text[run_start..index]);
-                let offset = after_brace
-                    .find('}')
-                    .ok_or(TemplateError::UnclosedBrace { at: index })?;
-                let close = index + 1 + offset;
-                segments.push(parse_placeholder(&text[index + 1..close])?);
-                index = close + 1;
-                run_start = index;
-            } else if rest.starts_with('}') {
-                return Err(TemplateError::UnmatchedBrace { at: index });
-            } else {
-                let character = rest.chars().next().expect("index < text.len()");
-                index += character.len_utf8();
-            }
-        }
-        push_text(&mut segments, &text[run_start..]);
-
-        Ok(Self { segments })
+        Ok(Self {
+            segments: parse_segments(text, parse_source_var)?,
+        })
     }
 
-    pub fn segments(&self) -> &[Segment] {
-        &self.segments
-    }
-
-    /// Resolve every variable name through the two tables.
+    /// Rewrite every variable name through the two tables, producing the form
+    /// the image stores.
     ///
     /// The assembler calls this once per `INTR`; the stored image therefore
     /// never carries a name.
     pub fn resolve_vars(
-        &mut self,
+        self,
         var_f: impl Fn(&str) -> Option<u32>,
         var_i: impl Fn(&str) -> Option<u32>,
-    ) -> Result<(), TemplateError> {
-        for segment in &mut self.segments {
-            let Segment::Value { value, .. } = segment else {
-                continue;
-            };
-            match value {
-                Value::Vf(VarRef::Name(name)) => {
-                    let index = var_f(name)
-                        .ok_or_else(|| TemplateError::UnknownVar { name: name.clone() })?;
-                    *value = Value::Vf(VarRef::Index(index));
-                }
-                Value::Vi(VarRef::Name(name)) => {
-                    let index = var_i(name)
-                        .ok_or_else(|| TemplateError::UnknownVar { name: name.clone() })?;
-                    *value = Value::Vi(VarRef::Index(index));
-                }
-                _ => {}
-            }
+    ) -> Result<StoredTemplate, TemplateError> {
+        let mut segments = Vec::with_capacity(self.segments.len());
+        for segment in self.segments {
+            segments.push(match segment {
+                Segment::Text(text) => Segment::Text(text),
+                Segment::Value { value, precision } => Segment::Value {
+                    value: match value {
+                        Value::F(reg) => Value::F(reg),
+                        Value::I(reg) => Value::I(reg),
+                        Value::Vf(name) => {
+                            Value::Vf(var_f(&name).ok_or(TemplateError::UnknownVar { name })?)
+                        }
+                        Value::Vi(name) => {
+                            Value::Vi(var_i(&name).ok_or(TemplateError::UnknownVar { name })?)
+                        }
+                    },
+                    precision,
+                },
+            });
         }
-        Ok(())
+        Ok(Template { segments })
     }
+}
 
-    /// The checks the loader applies to a stored template: no names, and every
-    /// index inside the table it addresses.
-    pub fn check_stored(&self, var_f: u32, var_i: u32) -> Result<(), TemplateError> {
-        for segment in &self.segments {
-            let Segment::Value { value, .. } = segment else {
-                continue;
-            };
-            match value {
-                Value::Vf(VarRef::Name(name)) | Value::Vi(VarRef::Name(name)) => {
-                    return Err(TemplateError::NameInStored { name: name.clone() });
-                }
-                Value::Vf(VarRef::Index(index)) if *index >= var_f => {
-                    return Err(TemplateError::StoredVarIndexOutOfRange {
-                        index: *index,
-                        count: var_f,
-                    });
-                }
-                Value::Vi(VarRef::Index(index)) if *index >= var_i => {
-                    return Err(TemplateError::StoredVarIndexOutOfRange {
-                        index: *index,
-                        count: var_i,
-                    });
-                }
-                _ => {}
-            }
-        }
-        Ok(())
+impl Template<u32> {
+    /// Parse the form an image stores and check every index against its table.
+    ///
+    /// Both checks a reader cares about happen here: a name is
+    /// [`TemplateError::NameInStored`], an index past its table is
+    /// [`TemplateError::StoredVarIndexOutOfRange`]. The result is therefore a
+    /// template the renderer cannot find out of range.
+    pub fn parse(text: &str, var_f: u32, var_i: u32) -> Result<Self, TemplateError> {
+        let template = Self {
+            segments: parse_segments(text, parse_stored_var)?,
+        };
+        template.check_indices(var_f, var_i)?;
+        Ok(template)
     }
 
     /// The canonical stored form: variables by index, braces escaped.
@@ -228,16 +179,8 @@ impl Template {
                     match value {
                         Value::F(reg) => out.push_str(&format!("f{reg}")),
                         Value::I(reg) => out.push_str(&format!("i{reg}")),
-                        Value::Vf(VarRef::Index(var)) => out.push_str(&format!("vf:{var}")),
-                        Value::Vi(VarRef::Index(var)) => out.push_str(&format!("vi:{var}")),
-                        Value::Vf(VarRef::Name(name)) => {
-                            out.push_str("vf:");
-                            out.push_str(name);
-                        }
-                        Value::Vi(VarRef::Name(name)) => {
-                            out.push_str("vi:");
-                            out.push_str(name);
-                        }
+                        Value::Vf(var) => out.push_str(&format!("vf:{var}")),
+                        Value::Vi(var) => out.push_str(&format!("vi:{var}")),
                     }
                     if let Some(precision) = precision {
                         out.push_str(&format!(":.{precision}"));
@@ -262,33 +205,103 @@ impl Template {
                 Segment::Value { value, precision } => match value {
                     Value::F(reg) => push_float(&mut out, view.f(*reg), *precision),
                     Value::I(reg) => out.push_str(&format!("{}", view.i(*reg))),
-                    Value::Vf(VarRef::Index(var)) => match view.vf(*var) {
+                    Value::Vf(var) => match view.vf(*var) {
                         Some(value) => push_float(&mut out, value, *precision),
                         None => out.push_str("<missing>"),
                     },
-                    Value::Vi(VarRef::Index(var)) => match view.vi(*var) {
+                    Value::Vi(var) => match view.vi(*var) {
                         Some(value) => out.push_str(&format!("{value}")),
                         None => out.push_str("<missing>"),
                     },
-                    Value::Vf(VarRef::Name(name)) | Value::Vi(VarRef::Name(name)) => {
-                        out.push_str("<unresolved:");
-                        out.push_str(name);
-                        out.push('>');
-                    }
                 },
             }
         }
         out
     }
+
+    fn check_indices(&self, var_f: u32, var_i: u32) -> Result<(), TemplateError> {
+        for segment in &self.segments {
+            let Segment::Value { value, .. } = segment else {
+                continue;
+            };
+            match value {
+                Value::Vf(var) if *var >= var_f => {
+                    return Err(TemplateError::StoredVarIndexOutOfRange {
+                        index: *var,
+                        count: var_f,
+                    });
+                }
+                Value::Vi(var) if *var >= var_i => {
+                    return Err(TemplateError::StoredVarIndexOutOfRange {
+                        index: *var,
+                        count: var_i,
+                    });
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
 }
 
-fn push_text(segments: &mut Vec<Segment>, text: &str) {
+fn push_text<Var>(segments: &mut Vec<Segment<Var>>, text: &str) {
     if !text.is_empty() {
         segments.push(Segment::Text(text.to_string()));
     }
 }
 
-fn parse_placeholder(inner: &str) -> Result<Segment, TemplateError> {
+fn parse_segments<Var>(
+    text: &str,
+    parse_var: fn(&str) -> Result<Var, TemplateError>,
+) -> Result<Vec<Segment<Var>>, TemplateError> {
+    if text.is_empty() {
+        return Err(TemplateError::Empty);
+    }
+    if text.len() > MAX_REASON_LEN {
+        return Err(TemplateError::TooLong { len: text.len() });
+    }
+
+    let mut segments = Vec::new();
+    let mut run_start = 0usize;
+    let mut index = 0usize;
+
+    while index < text.len() {
+        let rest = &text[index..];
+        if rest.starts_with("{{") {
+            push_text(&mut segments, &text[run_start..index]);
+            segments.push(Segment::Text("{".to_string()));
+            index += 2;
+            run_start = index;
+        } else if rest.starts_with("}}") {
+            push_text(&mut segments, &text[run_start..index]);
+            segments.push(Segment::Text("}".to_string()));
+            index += 2;
+            run_start = index;
+        } else if let Some(after_brace) = rest.strip_prefix('{') {
+            push_text(&mut segments, &text[run_start..index]);
+            let offset = after_brace
+                .find('}')
+                .ok_or(TemplateError::UnclosedBrace { at: index })?;
+            let close = index + 1 + offset;
+            segments.push(parse_placeholder(&text[index + 1..close], parse_var)?);
+            index = close + 1;
+            run_start = index;
+        } else if rest.starts_with('}') {
+            return Err(TemplateError::UnmatchedBrace { at: index });
+        } else {
+            let character = rest.chars().next().expect("index < text.len()");
+            index += character.len_utf8();
+        }
+    }
+    push_text(&mut segments, &text[run_start..]);
+
+    Ok(segments)
+}
+
+fn parse_placeholder<Var>(
+    inner: &str,
+    parse_var: fn(&str) -> Result<Var, TemplateError>,
+) -> Result<Segment<Var>, TemplateError> {
     if inner.is_empty() {
         return Err(TemplateError::UnknownPlaceholder {
             text: String::new(),
@@ -348,17 +361,16 @@ fn parse_reg(text: &str) -> Result<u8, TemplateError> {
         })
 }
 
-fn parse_var(text: &str) -> Result<VarRef, TemplateError> {
+/// A variable in a source template: an identifier, never a number.
+fn parse_source_var(text: &str) -> Result<String, TemplateError> {
     if text.is_empty() {
         return Err(TemplateError::VarNameInvalid {
-            text: text.to_string(),
+            text: String::new(),
         });
     }
     if text.bytes().all(|byte| byte.is_ascii_digit()) {
-        return text.parse::<u32>().map(VarRef::Index).map_err(|_| {
-            TemplateError::VarIndexTooLarge {
-                text: text.to_string(),
-            }
+        return Err(TemplateError::IndexInSource {
+            text: text.to_string(),
         });
     }
     let mut bytes = text.bytes();
@@ -370,7 +382,25 @@ fn parse_var(text: &str) -> Result<VarRef, TemplateError> {
             text: text.to_string(),
         });
     }
-    Ok(VarRef::Name(text.to_string()))
+    Ok(text.to_string())
+}
+
+/// A variable in a stored template: an index into the table it addresses.
+fn parse_stored_var(text: &str) -> Result<u32, TemplateError> {
+    if text.is_empty() {
+        return Err(TemplateError::VarNameInvalid {
+            text: text.to_string(),
+        });
+    }
+    if !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(TemplateError::NameInStored {
+            name: text.to_string(),
+        });
+    }
+    text.parse::<u32>()
+        .map_err(|_| TemplateError::VarIndexTooLarge {
+            text: text.to_string(),
+        })
 }
 
 fn push_float(out: &mut String, value: f32, precision: Option<u8>) {

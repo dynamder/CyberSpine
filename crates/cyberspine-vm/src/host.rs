@@ -29,7 +29,7 @@ use core::marker::PhantomData;
 
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::binfmt::plan::{SensorFSource, SensorISource};
-use cyberspine_core::binfmt::reason::{ReasonView, Template};
+use cyberspine_core::binfmt::reason::{ReasonView, StoredTemplate};
 use cyberspine_core::exec::{Fault, Instance, InterruptError, Program, Sensors, Status, Step};
 use cyberspine_core::isa::clock::Hz;
 use cyberspine_core::isa::register::RegId;
@@ -862,9 +862,12 @@ impl<B: Backend, P: RigPolicy> Session<B, P> {
 /// hand-forged image; the raw text is the honest fallback and the host never
 /// panics inside `tick`.
 fn render_reason(image: &VerifiedImage, instance: &Instance, reason: u32) -> Box<str> {
-    match Template::parse(image.reason(reason as usize)) {
+    let text = image.reason(reason as usize);
+    let vars_f = image.vars_f().len() as u32;
+    let vars_i = image.vars_i().len() as u32;
+    match StoredTemplate::parse(text, vars_f, vars_i) {
         Ok(template) => template.render(&InstanceView { instance }).into_boxed_str(),
-        Err(_) => image.reason(reason as usize).into(),
+        Err(_) => text.into(),
     }
 }
 

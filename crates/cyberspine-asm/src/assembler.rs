@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use cyberspine_core::binfmt::image::{
     FORMAT_VERSION, FixedHeader as ImageFixedHeader, ISA_VERSION, Image, SensorSource,
 };
-use cyberspine_core::binfmt::reason::{MAX_REASON_LEN, Template, TemplateError};
+use cyberspine_core::binfmt::reason::{MAX_REASON_LEN, SourceTemplate, TemplateError};
 use cyberspine_core::binfmt::{DebugInfo, DebugLabel, DebugLine};
 use cyberspine_core::isa::clock::{Hz, Seconds};
 use cyberspine_core::isa::jump::{jump_offset, jump_target};
@@ -414,16 +414,14 @@ impl ReasonTable {
                 _ => return Err(ImageGenError::MissingReason { location }),
             };
 
-            let mut template = Template::parse(source)
-                .map_err(|source| ImageGenError::InvalidReason { location, source })?;
-            template
+            let canonical = SourceTemplate::parse(source)
+                .map_err(|source| ImageGenError::InvalidReason { location, source })?
                 .resolve_vars(
                     |name| symbols.vars_f.get(name).copied(),
                     |name| symbols.vars_i.get(name).copied(),
                 )
-                .map_err(|source| ImageGenError::InvalidReason { location, source })?;
-
-            let canonical = template.canonical();
+                .map_err(|source| ImageGenError::InvalidReason { location, source })?
+                .canonical();
             if canonical.len() > MAX_REASON_LEN {
                 return Err(ImageGenError::ReasonTooLong {
                     len: canonical.len(),

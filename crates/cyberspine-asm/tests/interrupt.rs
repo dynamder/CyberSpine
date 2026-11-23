@@ -98,6 +98,38 @@ fn a_broken_template_is_a_generation_error() {
 }
 
 #[test]
+fn a_source_index_is_a_generation_error() {
+    let error = generate(&source(
+        ".var_f phase = 0.0",
+        "    INTR \"{vf:0}\"\n    HALT\n",
+    ))
+    .expect_err("a source template names its variables");
+    assert!(
+        matches!(
+            error,
+            ImageGenError::InvalidReason {
+                source: TemplateError::IndexInSource { .. },
+                ..
+            }
+        ),
+        "the index was not refused: {error:?}"
+    );
+
+    let error = generate(&source(
+        ".var_f a = 0.0\n.var_f b = 0.0\n.var_f c = 0.0",
+        "    INTR \"{vi:2}\"\n    HALT\n",
+    ))
+    .expect_err("an index is not a name, in range or not");
+    assert!(matches!(
+        error,
+        ImageGenError::InvalidReason {
+            source: TemplateError::IndexInSource { .. },
+            ..
+        }
+    ));
+}
+
+#[test]
 fn an_intr_after_an_unflushed_excite_is_refused() {
     let error = generate(&source(
         "",
