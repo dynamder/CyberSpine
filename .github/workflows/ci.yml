@@ -44,7 +44,8 @@ jobs:
           import json, os, sys
 
           expected = """fmt clippy nostd runtime-no-default runtime-dylib runtime-rpc
-          backend-export arbiter-export docs fixtures tests doctests""".split()
+          backend-export arbiter-export docs firmware-lock fuzz-lock fixtures tests
+          doctests""".split()
 
           try:
               report = json.load(open("target/verify/report.json"))

@@ -13,9 +13,12 @@ use crate::workspace::{cargo, root};
 pub enum Plan {
     Cargo(&'static [&'static str]),
     Docs,
+    /// A nested workspace: its own manifest, its own lockfile, and nothing in
+    /// the root workspace's checks ever looks at either.
+    Lock(&'static str),
 }
 
-pub const STEPS: [(&str, Plan); 9] = [
+pub const STEPS: [(&str, Plan); 11] = [
     ("fmt", Plan::Cargo(&["fmt", "--all", "--check"])),
     (
         "clippy",
@@ -106,6 +109,8 @@ pub const STEPS: [(&str, Plan); 9] = [
         ]),
     ),
     ("docs", Plan::Docs),
+    ("firmware-lock", Plan::Lock("firmware")),
+    ("fuzz-lock", Plan::Lock("fuzz")),
 ];
 
 pub fn check(json: bool, no_log: bool) -> Result<(), String> {
@@ -144,6 +149,7 @@ fn lint(report: &mut Report) {
                 run_logged(name, cargo_step(args), report);
             }
             Plan::Docs => run_docs(name, report),
+            Plan::Lock(directory) => run_lock(name, directory, report),
         }
     }
 }
@@ -212,6 +218,37 @@ fn run_docs(name: &'static str, report: &mut Report) {
         name,
         ok: problems.is_empty(),
         code: None,
+        millis,
+        log: write_log(name, &text).ok(),
+    });
+}
+
+/// A nested workspace is consistent when `cargo metadata --locked` accepts its
+/// lockfile: a member's dependency can change without that file following, and
+/// every `--locked` command in that workspace then fails.
+fn run_lock(name: &'static str, directory: &str, report: &mut Report) {
+    let started = Instant::now();
+    let output = cargo()
+        .args(["metadata", "--locked", "--format-version", "1"])
+        .current_dir(root().join(directory))
+        .output();
+    let millis = started.elapsed().as_millis();
+
+    let (ok, code, text) = match output {
+        Ok(output) => {
+            let text = String::from_utf8_lossy(&output.stderr).into_owned();
+            (output.status.success(), output.status.code(), text)
+        }
+        Err(error) => (false, None, format!("cargo metadata: {error}\n")),
+    };
+    if !ok {
+        eprint!("{text}");
+    }
+
+    report.record(Step {
+        name,
+        ok,
+        code,
         millis,
         log: write_log(name, &text).ok(),
     });
