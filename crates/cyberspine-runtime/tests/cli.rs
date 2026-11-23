@@ -649,6 +649,7 @@ const INTERRUPT: &str = "\
 ";
 
 /// The same shape, with the reason the arbiter fixture treats as "fail".
+#[cfg(feature = "dylib")]
 const INTERRUPT_WITH_FAILURE: &str = "\
 .layer 10
 .clock hz = 1000
@@ -992,7 +993,7 @@ fn ctrl_c_reports_stopped_and_says_nothing_about_the_replay() {
     )
     .expect("the recording is written");
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_cyinevm"))
+    let child = Command::new(env!("CARGO_BIN_EXE_cyinevm"))
         .args([
             OsStr::new("-i"),
             image.as_os_str(),
