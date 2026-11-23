@@ -283,6 +283,90 @@ fn a_missing_image_is_a_rejected_input_with_a_report() {
     );
 }
 
+/// `docs/runtime.md` §1: an output path that is also an input is refused before
+/// anything is opened, the way `cyinea` refuses to write over its source.
+#[test]
+fn a_decision_log_over_an_input_is_refused() {
+    let dir = scratch("decisions-over-input");
+    let image = write_image(&dir, "victim.csp", HALT, MANIFEST);
+    let before = fs::read(&image).expect("the image is readable");
+    let replay = dir.join("run.jsonl");
+    fs::write(&replay, "").expect("an empty log is a valid recording");
+
+    for input in [&image, &replay] {
+        let mut args = vec![
+            OsStr::new("-i"),
+            image.as_os_str(),
+            OsStr::new("--ticks"),
+            OsStr::new("2"),
+            OsStr::new("--unpaced"),
+            OsStr::new("--decisions"),
+            input.as_os_str(),
+        ];
+        if *input == replay {
+            args.extend([OsStr::new("--replay"), replay.as_os_str()]);
+        }
+
+        let output = run(args);
+
+        assert_eq!(
+            output.status.code(),
+            Some(REJECTED),
+            "stderr: {}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains("rt.output-overwrite"),
+            "stderr: {}",
+            stderr(&output)
+        );
+        assert_eq!(
+            fs::read(&image).expect("the image is still readable"),
+            before,
+            "a refused run leaves the image untouched"
+        );
+    }
+}
+
+/// `docs/runtime.md` §1: `--ticks 0` loads and validates every input, so a path
+/// that would fail later still fails now.
+#[test]
+fn zero_ticks_still_validates_every_input() {
+    let dir = scratch("zero-ticks");
+    let image = write_image(&dir, "halt.csp", HALT, MANIFEST);
+    let missing = dir.join("absent.jsonl");
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("0"),
+        OsStr::new("--replay"),
+        missing.as_os_str(),
+    ]);
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "a missing recording is not a successful run: stderr: {}",
+        stderr(&output)
+    );
+
+    let log = dir.join("decisions.jsonl");
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("0"),
+        OsStr::new("--decisions"),
+        log.as_os_str(),
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        log.exists(),
+        "the decision log is created even when nothing ticks"
+    );
+}
+
 #[test]
 fn the_dummy_spec_is_rejected() {
     let dir = scratch("dummy-spec");

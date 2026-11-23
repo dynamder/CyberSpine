@@ -125,6 +125,8 @@ pub enum Error {
     Actions(#[from] ActionError),
     #[error(transparent)]
     Decisions(#[from] LogError),
+    #[error("{output} is also an input: writing it would truncate what this run reads")]
+    OutputOverwrite { output: PathBuf, input: PathBuf },
 }
 
 // Exit classes: the input was rejected (3), the run ended abnormally (4), or the
@@ -142,6 +144,7 @@ const RT_TRACE: Code = Code::new("rt.trace-write");
 const RT_SIGNAL: Code = Code::new("rt.signal");
 const RT_ACTIONS: Code = Code::new("rt.actions");
 const RT_DECISIONS: Code = Code::new("rt.decisions");
+const RT_OUTPUT_OVERWRITE: Code = Code::new("rt.output-overwrite");
 
 impl Error {
     /// How the CLI should exit for this failure.
@@ -152,7 +155,10 @@ impl Error {
     /// doing its job at all are environment failures.
     pub fn class(&self) -> u8 {
         match self {
-            Self::NoImage | Self::Image { .. } | Self::Load { .. } => EXIT_REJECTED,
+            Self::NoImage
+            | Self::Image { .. }
+            | Self::Load { .. }
+            | Self::OutputOverwrite { .. } => EXIT_REJECTED,
             Self::Faulted(_) => EXIT_FAULTED,
             _ => EXIT_ENVIRONMENT,
         }
@@ -200,6 +206,17 @@ impl Error {
             Self::Arbiter(error) => vec![Diagnostic::from(error.cause().clone())],
             Self::Actions(error) => vec![Diagnostic::error(RT_ACTIONS, error.to_string())],
             Self::Decisions(error) => vec![Diagnostic::error(RT_DECISIONS, error.to_string())],
+            Self::OutputOverwrite { output, input } => vec![
+                Diagnostic::error(
+                    RT_OUTPUT_OVERWRITE,
+                    format!("`{}` would be truncated", output.display()),
+                )
+                .at(Anchor::whole(output.display().to_string()))
+                .with_help(format!(
+                    "`{}` is read by this run; choose another output path",
+                    input.display()
+                )),
+            ],
         }
     }
 }
@@ -219,6 +236,7 @@ pub fn run_linked<L: LinkedBody>(
     }
 
     let opened: Result<_, Error> = (|| {
+        guard_outputs(paths, options)?;
         let (first, rest) = paths.split_first().ok_or(Error::NoImage)?;
         let image = read_image(first).map_err(|source| Error::Image {
             path: first.clone(),
@@ -260,6 +278,7 @@ pub fn run_external(
     on_event: &mut dyn FnMut(&Report),
 ) -> (RunReport, Option<Error>) {
     let opened: Result<_, Error> = (|| {
+        guard_outputs(paths, options)?;
         let body = open_external(spec)?;
         let host = Host::new(body);
 
@@ -296,6 +315,72 @@ pub fn run_external(
 /// A run whose session never existed: the report still describes the outcome.
 fn failed(error: Error) -> (RunReport, Option<Error>) {
     (RunReport::empty(error.outcome()), Some(error))
+}
+
+/// Refuse an output path that is also an input.
+///
+/// `--decisions` truncates the file it opens, so `--decisions <image>` turns the
+/// image this run just loaded into an empty file and exits 0. The check runs
+/// before anything is opened, for the same reason `cyinea` refuses to write an
+/// image over its source (`asm.source-overwrite`).
+fn guard_outputs(paths: &[PathBuf], options: &Options) -> Result<(), Error> {
+    let Some(output) = options.decisions.as_deref() else {
+        return Ok(());
+    };
+    let inputs = paths
+        .iter()
+        .map(PathBuf::as_path)
+        .chain(options.replay.as_deref());
+    for input in inputs {
+        if same_file(output, input) {
+            return Err(Error::OutputOverwrite {
+                output: output.to_path_buf(),
+                input: input.to_path_buf(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Whether two paths name the same file, whether or not either exists yet.
+///
+/// An output file usually does not exist, so the comparison falls back to the
+/// canonical parent directory plus the file name. Hard links have no textual
+/// commonality at all, hence the inode check on Unix.
+fn same_file(left: &std::path::Path, right: &std::path::Path) -> bool {
+    if let (Some(left), Some(right)) = (path_identity(left), path_identity(right))
+        && (left == right
+            || cfg!(windows)
+                && left
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(&right.to_string_lossy()))
+    {
+        return true;
+    }
+    same_inode(left, right)
+}
+
+fn path_identity(path: &std::path::Path) -> Option<PathBuf> {
+    let absolute = std::path::absolute(path).ok()?;
+    if let Ok(canonical) = std::fs::canonicalize(&absolute) {
+        return Some(canonical);
+    }
+    let parent = std::fs::canonicalize(absolute.parent()?).ok()?;
+    Some(parent.join(absolute.file_name()?))
+}
+
+#[cfg(unix)]
+fn same_inode(left: &std::path::Path, right: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(left), std::fs::metadata(right)) {
+        (Ok(left), Ok(right)) => left.dev() == right.dev() && left.ino() == right.ino(),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn same_inode(_: &std::path::Path, _: &std::path::Path) -> bool {
+    false
 }
 
 /// Load every image after the first one into the session.
@@ -433,13 +518,9 @@ fn run_loop<B: Backend, P: RigPolicy>(
     if trace.as_ref().is_some_and(Trace::is_broken) {
         return Ok(());
     }
-    if matches!(
-        options.mode,
-        RunMode::RealTime(Stop::Ticks(0)) | RunMode::UnpacedTicks(0)
-    ) {
-        return Ok(());
-    }
-
+    // `--ticks 0` means "load and validate, do not tick", so it must still open
+    // the arbiter, the action directory and the decision log: a bad path is a
+    // failure even when nothing is going to run.
     let Installed {
         arbiter,
         mut notices,

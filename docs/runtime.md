@@ -34,7 +34,7 @@ cyinevm -i <IMAGE> [-i <IMAGE> ...] [-b <SPEC>] [--on-interrupt stop|continue]
 | `-i, --image <IMAGE>` | 要运行的 `.csp`；重复给出即按顺序装载到同一个 session，必填 |
 | `-b, --backend <SPEC>` | `dylib:<path>` 或 `rpc:<host>:<port>`；省略时使用官方 linked dummy |
 | `--on-interrupt <STOP\|CONTINUE>` | 内置中断策略：`stop`（默认，卸载该实例）或 `continue`（下一 tick 继续） |
-| `--ticks <N>` | 恰好运行 N 个 tick 后退出；`0` 表示只加载不运行；与 `--until-halt` 互斥 |
+| `--ticks <N>` | 恰好运行 N 个 tick 后退出；`0` 表示只加载不运行，但仍然校验并打开全部输入；与 `--until-halt` 互斥 |
 | `--until-halt` | 所有实例结束后退出；与 `--ticks` 互斥 |
 | `--unpaced` | 不按真实时间睡眠；必须与 `--ticks` 一起使用 |
 | `--trace` | 每个 tick 向 stdout 写一行命令向量 |
@@ -43,8 +43,11 @@ cyinevm -i <IMAGE> [-i <IMAGE> ...] [-b <SPEC>] [--on-interrupt stop|continue]
 | `-q, --quiet` | 不打印启动摘要；dummy warning、fault 与中断报告仍然打印 |
 
 多个 `-i` 共享同一个时钟与同一个 body：每个镜像必须与第一个镜像的 `hz` 和 shape 一致，
-装载顺序就是恢复顺序与合并顺序（`isa.md` §8.4）。`--ticks 0` 会装载全部镜像再退出，
-适合一次性校验。
+装载顺序就是恢复顺序与合并顺序（`isa.md` §8.4）。`--ticks 0` 会装载全部镜像、打开并校验
+`--replay`/`--actions`/`--decisions` 指向的东西，然后退出，适合一次性校验。
+
+输出路径不能是输入：`--decisions` 会截断它打开的文件，所以与任一 `-i` 镜像或 `--replay`
+相同的路径在打开之前就被拒绝（`rt.output-overwrite`，退出 3），镜像字节不变。
 
 退出码：
 
@@ -52,7 +55,7 @@ cyinevm -i <IMAGE> [-i <IMAGE> ...] [-b <SPEC>] [--on-interrupt stop|continue]
 |---|---|
 | `0` | `--ticks`/`--until-halt` 正常结束、Ctrl-C、trace 管道关闭；中断本身不是错误 |
 | `2` | 命令行用法错误（clap 的约定） |
-| `3` | 输入被拒绝：镜像读不出、格式或 rig/shape/hz 与本次运行不符 |
+| `3` | 输入被拒绝：镜像读不出、格式或 rig/shape/hz 与本次运行不符、输出路径与输入相同 |
 | `4` | 运行异常结束：实例 fault |
 | `5` | 环境失败：后端、仲裁器、trace/裁决日志、信号处理器 |
 
