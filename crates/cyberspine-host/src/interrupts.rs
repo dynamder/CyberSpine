@@ -325,6 +325,7 @@ fn forget(settled: bool, verdict: ArbiterVerdict, registry: &mut Registry, id: I
 mod tests {
     use super::*;
     use crate::actions::ActionDirectory;
+    use cyberspine_arbiter::ArbiterError;
     use cyberspine_arbiter::Ruling as ArbiterRuling;
     use cyberspine_testkit::{action, halt, intr, jump, rig, verified, yield_};
     use cyberspine_vm::{DummyBackend, Host, Strict};
@@ -523,5 +524,58 @@ mod tests {
         assert_eq!(context.loaded().len(), 1, "and the host tracked it");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An arbiter that answers once with a failure instead of a ruling.
+    struct Failing {
+        error: Option<ArbiterError>,
+        delivered: bool,
+    }
+
+    impl Arbiter for Failing {
+        fn deliver(&mut self, _event: InterruptEvent) {
+            self.delivered = true;
+        }
+
+        fn take(&mut self, _now: u64) -> Batch {
+            if !self.delivered {
+                return Batch::default();
+            }
+            self.delivered = false;
+            Batch {
+                decisions: Vec::new(),
+                failure: self.error.take(),
+            }
+        }
+    }
+
+    #[test]
+    fn an_arbiter_failure_settles_with_the_default_verdict_and_reports() {
+        let (mut session, id, mut context) = parked_session();
+        let mut interrupts = Interrupts::new(
+            Failing {
+                error: Some(ArbiterError::new("the arbiter died")),
+                delivered: false,
+            },
+            None,
+            None,
+            ArbiterVerdict::Stop,
+        );
+
+        let reports = interrupts
+            .pump(&mut session, &mut context)
+            .expect("the pump runs");
+
+        assert!(
+            session.instance(id).is_none(),
+            "the configured default was Stop"
+        );
+        assert!(session.parked().is_empty(), "the ticket was settled");
+        assert!(
+            reports
+                .iter()
+                .any(|report| matches!(report, Report::Failed { cause } if cause.message == "the arbiter died")),
+            "{reports:?}"
+        );
     }
 }

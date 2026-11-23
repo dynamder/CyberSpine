@@ -12,14 +12,14 @@ use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::exec::{Fault, Status};
 use cyberspine_core::isa::OpCode;
 use cyberspine_core::isa::clock::Hz;
-use cyberspine_core::rig::{Fingerprint, Rig};
+use cyberspine_core::rig::{BoundFingerprint, Fingerprint, Rig};
 use cyberspine_testkit::{
     action, binary, excite, flush, fmovi, halt, imovi, intr, isense, jump, name as n, nop, reg,
     rig, sense, var_set, verified, wait, yield_,
 };
 use cyberspine_vm::{
-    Backend, Call, DecideError, DummyBackend, FaultRecord, Host, LoadError, Resolution, Ruling,
-    Snapshot, Verdict,
+    Backend, BackendError, Call, DecideError, DummyBackend, FaultRecord, Host, LoadError,
+    Resolution, Ruling, Shape, Snapshot, Verdict,
 };
 
 /// `FEXCITE` once, `FLUSH` once, then yield forever without touching b2 again.
@@ -1067,4 +1067,98 @@ fn silence_does_not_release_a_parked_instance() {
             .expect("the instance is parked"),
         Resolution::Settled
     );
+}
+
+/// A body whose chosen call fails, so the host's "a failed tick is terminal"
+/// rule has something to trip over.
+struct Failing {
+    inner: DummyBackend,
+    fail_at: Call,
+}
+
+impl Failing {
+    fn new(rig: &Rig, fail_at: Call) -> Self {
+        Self {
+            inner: DummyBackend::new(rig.clone()),
+            fail_at,
+        }
+    }
+
+    fn calls(&self) -> &[Call] {
+        self.inner.calls()
+    }
+
+    fn after(&self, call: Call) -> Result<(), BackendError> {
+        if call == self.fail_at {
+            Err(BackendError::message(format!("{call:?} failed")))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Backend for Failing {
+    fn fingerprint(&self) -> BoundFingerprint {
+        self.inner.fingerprint()
+    }
+
+    fn shape(&self) -> Shape {
+        self.inner.shape()
+    }
+
+    fn sample(&mut self, out: &mut Snapshot<'_>) -> Result<(), BackendError> {
+        self.inner.sample(out)?;
+        self.after(Call::Sample)
+    }
+
+    fn commit(&mut self, commands: &[Option<f32>], dt: f32) -> Result<(), BackendError> {
+        self.inner.commit(commands, dt)?;
+        self.after(Call::Commit)
+    }
+
+    fn step(&mut self, dt: f32) -> Result<(), BackendError> {
+        self.inner.step(dt)?;
+        self.after(Call::Step)
+    }
+}
+
+#[test]
+fn a_failed_call_ends_the_tick_where_it_failed() {
+    // `docs/isa.md` §8.4: an `Err` ends the tick on the spot. Instances already
+    // resumed keep their state; nothing reaches the body and the clock stops.
+    let cases = [
+        (Call::Sample, vec![Call::Sample], 0),
+        (Call::Commit, vec![Call::Sample, Call::Commit], 7),
+        (Call::Step, vec![Call::Sample, Call::Commit, Call::Step], 7),
+    ];
+
+    for (fail_at, expected, register) in cases {
+        let rig = rig(1);
+        let image = action(vec![imovi(1, 7), yield_(), jump(-2)], &rig);
+        let (mut host, id) = Host::new(Failing::new(&rig, fail_at))
+            .load(verified(image))
+            .expect("assembled for this rig");
+
+        let error = host.tick().expect_err("the backend failed");
+        assert!(error.to_string().contains("failed"), "{error}");
+
+        assert_eq!(
+            host.now(),
+            0,
+            "a {fail_at:?} failure ends the tick before the clock moves"
+        );
+        assert_eq!(
+            host.backend().calls(),
+            expected.as_slice(),
+            "the tick stops at the call that failed"
+        );
+        assert_eq!(
+            host.instance(id)
+                .expect("the instance is still loaded")
+                .registers()
+                .get_i(reg(1)),
+            register,
+            "{fail_at:?}: the register after the failed tick",
+        );
+    }
 }
