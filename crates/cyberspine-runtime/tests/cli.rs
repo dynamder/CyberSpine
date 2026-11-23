@@ -13,7 +13,6 @@ use cyberspine_core::rig::Rig;
 use cyberspine_testkit::scratch_dir;
 
 /// The input was understood and rejected (`docs/diagnostics.md` §6).
-#[cfg(feature = "rpc")]
 const REJECTED: i32 = 3;
 /// An instance faulted.
 const FAULTED: i32 = 4;
