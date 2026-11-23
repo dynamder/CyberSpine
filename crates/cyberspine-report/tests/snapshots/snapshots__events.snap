@@ -1,3 +1,7 @@
+---
+source: crates/cyberspine-report/tests/snapshots.rs
+expression: event_json(&reports)
+---
 {"schema":1,"kind":"event","what":"unknown","event":7}
 {"schema":1,"kind":"event","what":"action","event":7,"message":"loaded `next.csp`"}
 {"schema":1,"kind":"event","what":"carry","event":7,"message":"the ticket was stale"}

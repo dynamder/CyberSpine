@@ -1,3 +1,7 @@
+---
+source: crates/cyberspine-runtime/tests/cli.rs
+expression: help
+---
 Run .csp images against a body
 
 Usage: cyinevm [OPTIONS] --image <IMAGE>

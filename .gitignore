@@ -2,3 +2,5 @@
 /.cargo-target
 /.cargo-check
 /.acl-diagnosis
+*.snap.new
+*.pending-snap

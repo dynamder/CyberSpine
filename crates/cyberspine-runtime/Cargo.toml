@@ -26,6 +26,7 @@ thiserror = "2.0.21"
 cyberspine-asm = { path = "../cyberspine-asm" }
 cyberspine-manifest = { path = "../cyberspine-manifest" }
 cyberspine-testkit = { path = "../cyberspine-testkit" }
+insta = "1.49.0"
 serde_json = "1"
 
 [[bin]]

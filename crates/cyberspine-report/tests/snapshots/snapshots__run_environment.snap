@@ -1,1 +1,5 @@
+---
+source: crates/cyberspine-report/tests/snapshots.rs
+expression: run_json(&report)
+---
 {"schema":1,"kind":"run","outcome":"environment","ticks":0,"dt":0.5,"overruns":0,"instances":[]}

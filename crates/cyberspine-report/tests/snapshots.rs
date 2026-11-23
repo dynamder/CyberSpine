@@ -9,7 +9,6 @@ use cyberspine_arbiter::EventId;
 use cyberspine_diag::{Anchor, Cause, Code, Diagnostic};
 use cyberspine_host::Report;
 use cyberspine_report::{Format, InstanceReport, Outcome, Renderer, RunReport};
-use cyberspine_testkit::assert_snapshot;
 
 fn run_json(report: &RunReport) -> String {
     let mut out = Vec::new();
@@ -53,7 +52,7 @@ fn a_budget_run_reports_every_field() {
         instances: instance_report(),
     };
 
-    assert_snapshot!("run_budget", run_json(&report));
+    insta::assert_snapshot!("run_budget", run_json(&report));
 }
 
 #[test]
@@ -66,7 +65,7 @@ fn a_faulted_run_reports_the_same_shape() {
         instances: instance_report(),
     };
 
-    assert_snapshot!("run_faulted", run_json(&report));
+    insta::assert_snapshot!("run_faulted", run_json(&report));
 }
 
 #[test]
@@ -79,7 +78,7 @@ fn an_environment_failure_reports_the_same_shape() {
         instances: Vec::new(),
     };
 
-    assert_snapshot!("run_environment", run_json(&report));
+    insta::assert_snapshot!("run_environment", run_json(&report));
 }
 
 #[test]
@@ -104,7 +103,7 @@ fn the_event_stream_is_one_object_per_line() {
         },
     ];
 
-    assert_snapshot!("events", event_json(&reports));
+    insta::assert_snapshot!("events", event_json(&reports));
 
     let lines = event_json(&reports);
     for line in lines.lines() {
@@ -138,7 +137,7 @@ fn the_human_diagnostic_renders_the_same_artifact() {
         .diagnostic(&diagnostic, &mut out)
         .expect("human renders");
 
-    assert_snapshot!(
+    insta::assert_snapshot!(
         "diagnostic_human",
         String::from_utf8(out).expect("the renderer writes UTF-8")
     );

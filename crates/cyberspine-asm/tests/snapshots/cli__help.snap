@@ -1,3 +1,7 @@
+---
+source: crates/cyberspine-asm/tests/cli.rs
+expression: help
+---
 Assemble a .csa source into a .csp image
 
 Usage: cyinea [OPTIONS] --asm-file <ASM_FILE>

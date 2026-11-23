@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [dev-dependencies]
-cyberspine-testkit = { path = "../cyberspine-testkit" }
+insta = "1.49.0"
 
 [dependencies]
 cyberspine-arbiter = { path = "../cyberspine-arbiter" }

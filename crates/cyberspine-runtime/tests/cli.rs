@@ -819,5 +819,5 @@ fn the_help_text_is_the_cli_contract() {
     // The usage line carries the file name the platform produced; the contract
     // is the command name.
     let help = stdout(&output).replace("cyinevm.exe", "cyinevm");
-    cyberspine_testkit::assert_snapshot!("help", help);
+    insta::assert_snapshot!("help", help);
 }

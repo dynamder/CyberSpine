@@ -29,9 +29,9 @@ If you are writing a new feature, you should always search relevant code and try
 Git commit in small step, conventional commit, but don't prose about the commit message. The commit message should only be a few sentences.
 
 A test that pins bytes (the snapshots under `tests/snapshots/`) is a contract.
-`UPDATE_SNAPSHOTS=1 cargo test` writes one, and CI never sets it. A change that
-touches both `src/` and a `.snap` file is a contract change: the snapshot diff is
-what to review, and the PR says why each changed line is expected.
+`cargo insta test --accept` writes one; CI never does. A change that touches both
+`src/` and a `.snap` file is a contract change: the snapshot diff is what to
+review, and the PR says why each changed line is expected.
 
 When you finish a new feature, there should always be a human-runnable and human-distinguishable executable for users to run, see and check.
 

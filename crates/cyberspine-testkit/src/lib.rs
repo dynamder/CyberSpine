@@ -8,7 +8,7 @@
 //!
 //! This crate is a dev-dependency only: nothing in a shipped binary may use it.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use cyberspine_core::binfmt::image::{Image, SensorSource};
 use cyberspine_core::binfmt::load::VerifiedImage;
@@ -340,64 +340,4 @@ pub fn scratch_dir(name: &str) -> PathBuf {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create the scratch directory");
     dir
-}
-
-/// Compare `actual` with `tests/snapshots/<name>.snap` under `manifest_dir`,
-/// writing that file when `UPDATE_SNAPSHOTS` is set.
-///
-/// A snapshot is a contract rendered as bytes: the diff of the `.snap` file is
-/// what a reviewer reads. Nothing here normalises the output, so a snapshot of
-/// something with a timestamp in it would never settle.
-pub fn snapshot(manifest_dir: &str, name: &str, actual: &str) {
-    let path = Path::new(manifest_dir)
-        .join("tests/snapshots")
-        .join(format!("{name}.snap"));
-
-    if std::env::var_os("UPDATE_SNAPSHOTS").is_some() {
-        std::fs::create_dir_all(path.parent().expect("the snapshot has a directory"))
-            .expect("create the snapshot directory");
-        std::fs::write(&path, actual).expect("write the snapshot");
-        return;
-    }
-
-    let expected = std::fs::read_to_string(&path).unwrap_or_else(|error| {
-        panic!(
-            "{}: {error}\nrun the test with UPDATE_SNAPSHOTS=1 to create it",
-            path.display()
-        )
-    });
-
-    assert_eq!(
-        first_difference(&expected, actual),
-        None,
-        "{} does not match; run the test with UPDATE_SNAPSHOTS=1 to accept the change, then review the diff",
-        path.display()
-    );
-}
-
-fn first_difference(expected: &str, actual: &str) -> Option<String> {
-    for (index, (left, right)) in expected.lines().zip(actual.lines()).enumerate() {
-        if left != right {
-            return Some(format!(
-                "line {}:\n  snapshot: {left:?}\n  actual:   {right:?}",
-                index + 1
-            ));
-        }
-    }
-    if expected.lines().count() == actual.lines().count() {
-        return None;
-    }
-    Some(format!(
-        "the snapshot has {} lines, the output has {}",
-        expected.lines().count(),
-        actual.lines().count()
-    ))
-}
-
-/// `snapshot` with the calling crate's manifest directory.
-#[macro_export]
-macro_rules! assert_snapshot {
-    ($name:expr, $actual:expr) => {
-        $crate::snapshot(env!("CARGO_MANIFEST_DIR"), $name, &$actual)
-    };
 }
