@@ -292,7 +292,14 @@ fn fixtures(args: &[String]) -> Result<(), String> {
 }
 
 fn tests(args: &[String]) -> Result<(), String> {
-    fixtures(&[])?;
+    // The test build compiles every workspace member that a test depends on,
+    // and the backend and arbiter fixtures are dev-dependencies, so their
+    // shared libraries come out of it. The demo's library is a `cdylib` only
+    // and nothing depends on it; it has to be built here, and building it does
+    // not invalidate the test build.
+    let mut library = cargo();
+    library.args(["build", "--locked", "-p", "cyberspine-demo-maze-dylib"]);
+    run(library, "building the demo library")?;
 
     let has_nextest = cargo()
         .args(["nextest", "--version"])

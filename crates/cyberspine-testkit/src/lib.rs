@@ -238,13 +238,20 @@ pub fn fixture_library(package: &str) -> PathBuf {
         .parent()
         .and_then(|deps| deps.parent())
         .expect("the test binary lives in a profile directory");
-    let path = profile.join(file);
-    assert!(
-        path.exists(),
+
+    // `cargo build` lifts the library next to the binaries; `cargo test` builds
+    // it only into `deps`, so both are searched.
+    for dir in [profile.to_path_buf(), profile.join("deps")] {
+        let path = dir.join(&file);
+        if path.exists() {
+            return path;
+        }
+    }
+
+    panic!(
         "{} is missing; build it with `cargo build -p {package}`, or run `cargo xtask test`",
-        path.display()
+        profile.join(&file).display()
     );
-    path
 }
 
 /// Run a binary to completion, killing it if it outlives `limit`.
