@@ -63,10 +63,20 @@ fn same_walk(mut linked: Session, mut other: Session) {
     );
 }
 
-fn commands(session: &Session) -> Vec<(u64, Vec<Option<f32>>)> {
+/// The command vector as bits: `Option<f32>` equality would call `-0.0` equal
+/// to `0.0`, and `docs/backend.md` promises a bit-identical trace.
+fn commands(session: &Session) -> Vec<(u64, Vec<Option<u32>>)> {
     session
         .trace()
-        .map(|tick| (tick.now, tick.commands.to_vec()))
+        .map(|tick| {
+            (
+                tick.now,
+                tick.commands
+                    .iter()
+                    .map(|command| (*command).map(f32::to_bits))
+                    .collect(),
+            )
+        })
         .collect()
 }
 

@@ -16,7 +16,6 @@ use cyberspine_testkit::scratch_dir;
 const RUN_LIMIT: Duration = Duration::from_secs(30);
 
 /// The input was understood and rejected (`docs/diagnostics.md` §6).
-#[cfg(feature = "rpc")]
 const REJECTED: i32 = 3;
 /// An instance faulted.
 const FAULTED: i32 = 4;
@@ -266,6 +265,31 @@ fn a_missing_image_is_reported() {
     assert!(
         stderr(&output).contains("could not read"),
         "stderr: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_corrupt_image_is_rejected_not_an_environment_failure() {
+    let dir = scratch("corrupt-image");
+    let path = dir.join("corrupt.csp");
+    fs::write(&path, b"not an image").expect("the file is written");
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        path.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("0"),
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(REJECTED),
+        "docs/runtime.md §1: a file that reads but is not an image is rejected",
+    );
+    assert!(
+        stderr(&output).contains("binfmt."),
+        "the loader names the rule: {}",
         stderr(&output)
     );
 }
