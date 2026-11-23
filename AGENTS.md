@@ -62,10 +62,3 @@ cargo xtask doctor  # build environment and worktree hygiene
 
 Tests load the fixture libraries from the profile directory; they do not build
 them. `cargo xtask test` takes care of that.
-
-Some checks are too slow to gate a pull request and run nightly instead
-(`.github/workflows/nightly.yml`): the same tests with `PROPTEST_CASES=4096` on
-three hosts, `cargo mutants --in-diff` over the day's commits (settings in
-`.cargo/mutants.toml`), and a replay of the fuzz corpus. `cargo xtask fixtures`
-builds the shared libraries on its own, which is what the mutation run needs
-because it does not go through `cargo xtask test`.
