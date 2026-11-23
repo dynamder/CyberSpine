@@ -83,6 +83,7 @@ const SPIN: &str = "\
 
 .text
 forever:
+    YIELD
     JMP     forever
 ";
 
@@ -998,7 +999,7 @@ fn ctrl_c_reports_stopped_and_says_nothing_about_the_replay() {
             OsStr::new("-i"),
             image.as_os_str(),
             OsStr::new("--ticks"),
-            OsStr::new("50"),
+            OsStr::new("200"),
             OsStr::new("--replay"),
             replay.as_os_str(),
             OsStr::new("--report"),
@@ -1010,7 +1011,9 @@ fn ctrl_c_reports_stopped_and_says_nothing_about_the_replay() {
         .spawn()
         .expect("the cyinevm binary should spawn");
 
-    std::thread::sleep(Duration::from_millis(500));
+    // Long enough that the handler is installed on a cold, slow runner: the run
+    // is 200 ticks at 50 Hz, so it is still going.
+    std::thread::sleep(Duration::from_millis(1000));
     let signal = Command::new("kill")
         .args(["-INT", &child.id().to_string()])
         .status()
