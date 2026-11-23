@@ -1,0 +1,6 @@
+{
+  "rig": { "name": "panic", "version": 1 },
+  "muscles": ["m0"],
+  "sensors_f": [],
+  "sensors_i": []
+}

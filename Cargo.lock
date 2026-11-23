@@ -465,6 +465,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cyberspine-panic-fixture"
+version = "0.1.0"
+dependencies = [
+ "cyberspine-backend",
+ "cyberspine-rig",
+ "cyberspine-vm",
+]
+
+[[package]]
 name = "cyberspine-report"
 version = "0.1.0"
 dependencies = [
@@ -498,6 +507,7 @@ dependencies = [
  "cyberspine-diag",
  "cyberspine-host",
  "cyberspine-manifest",
+ "cyberspine-panic-fixture",
  "cyberspine-report",
  "cyberspine-testkit",
  "cyberspine-vm",

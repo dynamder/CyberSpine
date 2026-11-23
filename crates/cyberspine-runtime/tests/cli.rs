@@ -644,6 +644,51 @@ fn a_dylib_arbiter_rules_in_two_rounds() {
     );
 }
 
+/// A body that panics is the environment failing, not the program faulting: the
+/// exit class says "this run could not be carried out" (`docs/runtime.md` §1),
+/// and the panic guard turns the failure into a message instead of an abort.
+#[cfg(feature = "dylib")]
+#[test]
+fn a_panicking_body_fails_the_run_as_the_environment() {
+    let dir = scratch("dylib-panic");
+    let image = write_image(&dir, "halt.csp", HALT, cyberspine_panic_fixture::RIG_JSON);
+    let spec = format!(
+        "dylib:{}",
+        cyberspine_testkit::fixture_library("cyberspine-panic-fixture").display()
+    );
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("-b"),
+        OsStr::new(&spec),
+        OsStr::new("--ticks"),
+        OsStr::new("1"),
+        OsStr::new("--unpaced"),
+        OsStr::new("--report"),
+        OsStr::new("json"),
+    ]);
+
+    let message = stderr(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(ENVIRONMENT),
+        "a panicking body is not an instance fault: {message}"
+    );
+    assert!(
+        message.contains("the body panicked (4)"),
+        "the ABI status is PANIC: {message}"
+    );
+    assert!(
+        message.contains(cyberspine_panic_fixture::PANIC_REASON),
+        "the body's own message reaches the user: {message}"
+    );
+
+    let report: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("the report is json");
+    assert_eq!(report["outcome"], "environment");
+}
+
 /// The run report is the machine answer to "did it finish, and why".
 #[test]
 fn a_halted_run_reports_its_outcome() {

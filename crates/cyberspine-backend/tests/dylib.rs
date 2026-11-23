@@ -8,6 +8,11 @@
 #[path = "../../cyberspine-backend-fixture/src/body.rs"]
 mod body;
 
+// The fixture crate depends on this one, so its source is included rather than
+// linked: a dev-dependency would be a package cycle.
+#[path = "../../cyberspine-panic-fixture/src/body.rs"]
+mod panic_body;
+
 use std::path::PathBuf;
 
 use cyberspine_backend::dylib;
@@ -94,5 +99,47 @@ fn a_missing_library_names_the_path_it_could_not_load() {
     assert!(
         error.to_string().contains("cyberspine-absent-body"),
         "{error}"
+    );
+}
+
+fn panic_fixture() -> PathBuf {
+    testkit::fixture_library("cyberspine-panic-fixture")
+}
+
+#[test]
+fn the_panic_fixture_is_the_body_its_manifest_describes() {
+    let declared =
+        cyberspine_manifest::from_json(panic_body::RIG_JSON).expect("the manifest parses");
+
+    assert_eq!(declared, panic_body::rig());
+    assert_eq!(
+        panic_body::Panicky::new().fingerprint(),
+        BoundFingerprint::of(&declared)
+    );
+}
+
+/// A body that panics is an ABI failure (`4`), not an unwind into the host: the
+/// `catch_unwind` in `export!` is the difference between this test running and
+/// the whole process aborting (`docs/backend.md` §5).
+#[test]
+fn a_panicking_body_returns_a_status_instead_of_unwinding_into_the_host() {
+    let loaded = dylib::open(&panic_fixture()).expect("the fixture introduces itself");
+    let image = testkit::verified(testkit::action(Vec::new(), &panic_body::rig()));
+    let (mut session, _) = Host::new(loaded)
+        .load(image)
+        .expect("the image fits the body");
+
+    let error = session
+        .tick()
+        .expect_err("the body panics on the first sample");
+    let message = error.to_string();
+
+    assert!(
+        message.contains("the body panicked (4)"),
+        "the status has to be PANIC: {message}"
+    );
+    assert!(
+        message.contains(panic_body::PANIC_REASON),
+        "the panic message crosses the boundary through last_error: {message}"
     );
 }
