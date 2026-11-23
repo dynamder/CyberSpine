@@ -26,5 +26,6 @@ pub use cyberspine_core::exec::Fault;
 pub use dummy::{Call, DummyBackend};
 pub use host::{
     DEFAULT_TRACE_CAPACITY, DecideError, FaultRecord, Host, InstanceId, Interrupt, LoadError,
-    Permissive, Resolution, RigPolicy, Ruling, Session, Strict, TickRef, TraceIter, Verdict,
+    Permissive, Resolution, RigPolicy, Ruling, Session, ShapeOnly, Strict, TickRef, TraceIter,
+    Verdict,
 };

@@ -567,6 +567,22 @@ fn an_unbound_image_is_refused_unless_allowed() {
 }
 
 #[test]
+fn a_permissive_host_still_checks_a_bound_image() {
+    let mine = rig(1);
+    let other = rig(2);
+    let host = Host::new(backend(&mine)).permissive();
+
+    let (_, error) = host
+        .load(verified(action(vec![yield_(), jump(-2)], &other)))
+        .expect_err("`permissive` waives the missing fingerprint, not a wrong one");
+
+    assert!(
+        matches!(error, LoadError::RigMismatch { .. }),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn an_unbound_image_still_has_to_fit_the_hosts_shape() {
     let host = Host::new(backend(&rig(1))).permissive();
 

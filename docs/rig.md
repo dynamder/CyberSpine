@@ -89,7 +89,10 @@ le32(count) || (le32(len) || sensor_i_name)*
   构造处有一条 `debug_assert` 记着这件事。
 - 未绑定镜像（头段指纹全 0，即装配时没有 rig）**默认拒绝**；放行是**宿主类型的属性**，
   不是后端字段：`Host<B, Strict>` 拒，`Host<B, Permissive>` 收（`Host::new(b).permissive()`，
-  单向，没有反向方法）。只有测试、固件这类不经过宿主的路径需要它。
+  单向，没有反向方法）。`Permissive` 只放行"没有指纹"：**已绑定**的镜像照旧走 `Strict` 比对，
+  所以它不会让一个为别的 body 装配的镜像跑起来。只有测试、固件这类不经过宿主的路径需要它。
+- `ShapeOnly` 是第三种，只给**没有身份可报**的 body（官方 dummy）：它不比对指纹，shape 仍然比对。
+  真实 body 不得使用它。
 
 ## 5. 信任模型
 
