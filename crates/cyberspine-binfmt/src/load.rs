@@ -306,42 +306,42 @@ impl VerifiedImage {
         // allocation.
         let tables_span = body_end - HEADER_LEN - INSN_LEN * raw.code_len as usize;
         let mut names = Names::with_capacity(tables_span);
-        // One handle vector, reused by every table: M2 sorts handles, and reusing
-        // the buffer keeps the load's allocation count independent of the number
-        // of tables and entries the file declares.
-        let mut handles: Vec<(usize, NameRef)> = Vec::new();
+        // One index vector, reused by every table: M2 sorts row indices, and
+        // reusing the buffer keeps the load's allocation count independent of
+        // the number of entries the file declares.
+        let mut order: Vec<u32> = Vec::new();
         let muscles = read_table::<Muscle>(
             &mut cursor,
             &mut names,
-            &mut handles,
+            &mut order,
             Table::Muscles,
             raw.muscle_count,
         )?;
         let sensors_f = read_table::<Sensor>(
             &mut cursor,
             &mut names,
-            &mut handles,
+            &mut order,
             Table::SensorsF,
             raw.sensor_f_count,
         )?;
         let sensors_i = read_table::<Sensor>(
             &mut cursor,
             &mut names,
-            &mut handles,
+            &mut order,
             Table::SensorsI,
             raw.sensor_i_count,
         )?;
         let vars_f = read_table::<VarF>(
             &mut cursor,
             &mut names,
-            &mut handles,
+            &mut order,
             Table::VarsF,
             raw.var_f_count,
         )?;
         let vars_i = read_table::<VarI>(
             &mut cursor,
             &mut names,
-            &mut handles,
+            &mut order,
             Table::VarsI,
             raw.var_i_count,
         )?;
@@ -1168,12 +1168,14 @@ impl Entry for VarI {
 
 /// Read `count` entries, enforcing M1 on each name and M2 across the table.
 ///
-/// `handles` is scratch space the caller owns: the table itself keeps the file's
-/// order, so the duplicate check sorts a second view of it instead of the table.
+/// `order` is scratch space the caller owns: the table itself keeps the file's
+/// order, so the duplicate check sorts row indices instead. An index is four
+/// bytes where a `(usize, NameRef)` pair is sixteen, and C5 lets a legal 4 MiB
+/// image declare enough rows for that difference to be the load's peak.
 fn read_table<T: Entry>(
     cursor: &mut Cursor<'_>,
     names: &mut Names,
-    handles: &mut Vec<(usize, NameRef)>,
+    order: &mut Vec<u32>,
     table: Table,
     count: u32,
 ) -> Result<Vec<T>, LoadError> {
@@ -1185,24 +1187,24 @@ fn read_table<T: Entry>(
         out.push(T::read(cursor, names, table, index)?);
     }
 
-    // M2 — no two rows may share a name. Sorting the handles and comparing
+    // M2 — no two rows may share a name. Sorting the indices and comparing
     // neighbours is O(n log n); the comparison has to be text, not handles,
     // because two equal names can occupy two separate regions of the arena.
-    handles.clear();
-    handles.extend(
-        out.iter()
-            .enumerate()
-            .map(|(index, entry)| (index, entry.name())),
-    );
-    handles.sort_unstable_by(|(_, left), (_, right)| names.get(*left).cmp(names.get(*right)));
-    for pair in handles.windows(2) {
-        let (first, left) = pair[0];
-        let (second, right) = pair[1];
-        if names.get(left) == names.get(right) {
+    order.clear();
+    order.extend(0..count);
+    order.sort_unstable_by(|&left, &right| {
+        names
+            .get(out[left as usize].name())
+            .cmp(names.get(out[right as usize].name()))
+    });
+    for pair in order.windows(2) {
+        let (first, second) = (pair[0], pair[1]);
+        let name = |index: u32| names.get(out[index as usize].name());
+        if name(first) == name(second) {
             return Err(LoadError::DuplicateName {
                 table,
-                index: first.max(second),
-                name: names.get(right).to_string(),
+                index: first.max(second) as usize,
+                name: name(second).to_string(),
             });
         }
     }
