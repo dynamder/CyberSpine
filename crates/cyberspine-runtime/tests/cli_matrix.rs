@@ -43,8 +43,10 @@ fn scratch(name: &str) -> PathBuf {
     scratch_dir(&format!("runtime/matrix/{name}"))
 }
 
-fn image() -> PathBuf {
-    let dir = scratch("image");
+/// `tag` keeps the tests independent: `scratch_dir` wipes the directory it
+/// returns, so two tests sharing a name delete each other's fixtures.
+fn image(tag: &str) -> PathBuf {
+    let dir = scratch(&format!("image/{tag}"));
     let rig = cyberspine_manifest::from_json(MANIFEST).expect("the manifest is valid");
     let asm = parse(SOURCE).expect("the source parses");
     let image = generate_image(&asm, &rig).expect("the source generates");
@@ -56,8 +58,8 @@ fn image() -> PathBuf {
     path
 }
 
-fn garbage() -> PathBuf {
-    let dir = scratch("garbage");
+fn garbage(tag: &str) -> PathBuf {
+    let dir = scratch(&format!("garbage/{tag}"));
     let path = dir.join("not-an-image.csp");
     std::fs::write(&path, b"GARBAGE").expect("the file is written");
     path
@@ -114,9 +116,9 @@ fn assert_no_panic(output: &Output, case: &str) {
 
 #[test]
 fn bad_flag_combinations_are_usage_errors() {
-    let image_path = image();
+    let image_path = image("flags");
     let image = image_path.as_os_str();
-    let garbage_path = garbage();
+    let garbage_path = garbage("flags");
     let garbage = garbage_path.as_os_str();
     let bogus = OsStr::new("target/definitely-not-here.csp");
 
@@ -215,7 +217,7 @@ fn bad_flag_combinations_are_usage_errors() {
 
 #[test]
 fn the_matrix_keeps_the_documented_codes() {
-    let image_path = image();
+    let image_path = image("matrix");
     let image = image_path.as_os_str();
 
     assert_eq!(
@@ -251,7 +253,7 @@ fn no_two_flag_prefix_panics() {
     // table is an instance of — no short argument vector reaches a panic. Every
     // invocation ends with `--ticks 0`, so a valid combination terminates
     // instead of waiting for Ctrl-C.
-    let image_path = image();
+    let image_path = image("prefix");
     let flags: &[&OsStr] = &[
         OsStr::new("--unpaced"),
         OsStr::new("--until-halt"),
