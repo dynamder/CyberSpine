@@ -108,27 +108,27 @@ pub const STEPS: [(&str, Plan); 9] = [
     ("docs", Plan::Docs),
 ];
 
-pub fn check(json: bool) -> Result<(), String> {
-    let mut report = Report::new(json);
+pub fn check(json: bool, no_log: bool) -> Result<(), String> {
+    let mut report = Report::new(json, no_log);
     lint(&mut report);
     conclude(&report, json)
 }
 
-pub fn ci(json: bool) -> Result<(), String> {
-    let mut report = Report::new(json);
+pub fn ci(json: bool, no_log: bool) -> Result<(), String> {
+    let mut report = Report::new(json, no_log);
     lint(&mut report);
     tests(&[], &mut report);
     conclude(&report, json)
 }
 
-pub fn test(args: &[String], json: bool) -> Result<(), String> {
-    let mut report = Report::new(json);
+pub fn test(args: &[String], json: bool, no_log: bool) -> Result<(), String> {
+    let mut report = Report::new(json, no_log);
     tests(args, &mut report);
     conclude(&report, json)
 }
 
 pub fn docs_only() -> Result<(), String> {
-    let mut report = Report::new(false);
+    let mut report = Report::new(false, false);
     run_docs("docs", &mut report);
     if report.ok() {
         Ok(())

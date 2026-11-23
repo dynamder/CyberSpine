@@ -27,13 +27,17 @@ pub struct Report {
     steps: Vec<Step>,
     /// With `--json`, stdout carries the report and nothing else.
     json: bool,
+    /// With `--no-log`, a step keeps the terminal it was given: a copy would
+    /// need a pipe, and a pipe is what turns color and progress off.
+    no_log: bool,
 }
 
 impl Report {
-    pub fn new(json: bool) -> Self {
+    pub fn new(json: bool, no_log: bool) -> Self {
         Self {
             steps: Vec::new(),
             json,
+            no_log,
         }
     }
 
@@ -122,6 +126,22 @@ impl Report {
 /// stdout has to go to stderr with the rest of the running commentary.
 pub fn run_logged(name: &'static str, mut command: Command, report: &mut Report) -> bool {
     let started = Instant::now();
+
+    if report.no_log {
+        let status = command.status();
+        let millis = started.elapsed().as_millis();
+        let code = status.as_ref().ok().and_then(|status| status.code());
+        let ok = status.is_ok_and(|status| status.success());
+        report.record(Step {
+            name,
+            ok,
+            code,
+            millis,
+            log: None,
+        });
+        return ok;
+    }
+
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

@@ -32,7 +32,10 @@ fn usage() -> String {
     for (name, what) in SUBCOMMANDS {
         text.push_str(&format!("  {name:<10} {what}\n"));
     }
-    text.push_str("\n  --json     print the step report as one JSON object\n");
+    text.push_str(
+        "\n  --json     print the step report as one JSON object\n  \
+         --no-log   leave the output to the terminal instead of copying it\n",
+    );
     text
 }
 
@@ -42,18 +45,23 @@ fn main() -> ExitCode {
     let rest: Vec<String> = args.collect();
 
     let json = rest.iter().any(|argument| argument == "--json");
+    let no_log = rest.iter().any(|argument| argument == "--no-log");
+    if json && no_log {
+        eprintln!("xtask: `--json` needs the piped output; drop `--no-log`");
+        return ExitCode::from(2);
+    }
     let rest = rest
         .into_iter()
-        .filter(|argument| argument != "--json")
+        .filter(|argument| argument != "--json" && argument != "--no-log")
         .collect::<Vec<_>>();
 
     let outcome = match command.as_deref() {
         Some("doctor") => doctor(),
         Some("docs") => docs_only(),
         Some("fixtures") => fixtures(&rest),
-        Some("test") => test(&rest, json),
-        Some("check") => check(json),
-        Some("ci") => ci(json),
+        Some("test") => test(&rest, json, no_log),
+        Some("check") => check(json, no_log),
+        Some("ci") => ci(json, no_log),
         _ => {
             eprint!("{}", usage());
             return ExitCode::from(2);
