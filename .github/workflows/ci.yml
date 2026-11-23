@@ -10,6 +10,27 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  # The nested workspaces keep their own lockfiles. A member's dependency can
+  # change without one of them following, and nothing in the root workspace
+  # notices: every `--locked` command inside that directory then fails, which is
+  # how the msrv and qemu jobs broke. Asking here costs seconds; asking in those
+  # jobs costs the whole build. `cargo xtask check` runs the same two as
+  # `firmware-lock` and `fuzz-lock`.
+  locks:
+    name: locks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.99.1
+
+      - name: firmware
+        run: cargo metadata --locked --format-version 1 --manifest-path firmware/Cargo.toml > /dev/null
+
+      - name: fuzz
+        run: cargo metadata --locked --format-version 1 --manifest-path fuzz/Cargo.toml > /dev/null
+
   # The whole suite on one host, reported as data. `cargo xtask ci` builds the
   # fixtures, runs the steps and the tests, and writes `target/verify/`; the
   # step list below is an independent copy of `STEPS`, so deleting a gate from
@@ -185,18 +206,18 @@ jobs:
   # a branch protection rule waiting for a context nobody will ever create.
   gate:
     name: gate
-    needs: [verify, test, tools, msrv, qemu]
+    needs: [locks, verify, test, tools, msrv, qemu]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: every job passed
         run: |
-          echo "verify=${{ needs.verify.result }} test=${{ needs.test.result }} \
-          tools=${{ needs.tools.result }} msrv=${{ needs.msrv.result }} \
-          qemu=${{ needs.qemu.result }}"
-          for result in "${{ needs.verify.result }}" "${{ needs.test.result }}" \
-                        "${{ needs.tools.result }}" "${{ needs.msrv.result }}" \
-                        "${{ needs.qemu.result }}"; do
+          echo "locks=${{ needs.locks.result }} verify=${{ needs.verify.result }} \
+          test=${{ needs.test.result }} tools=${{ needs.tools.result }} \
+          msrv=${{ needs.msrv.result }} qemu=${{ needs.qemu.result }}"
+          for result in "${{ needs.locks.result }}" "${{ needs.verify.result }}" \
+                        "${{ needs.test.result }}" "${{ needs.tools.result }}" \
+                        "${{ needs.msrv.result }}" "${{ needs.qemu.result }}"; do
             [ "$result" = "success" ] || exit 1
           done
