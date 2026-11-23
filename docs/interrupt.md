@@ -342,8 +342,13 @@ pub trait Arbiter {
 一次交换是一帧 `Tick { seq, now, events }` 换一帧 `Rulings { decisions, failure }`（`failure` 是
 `{ code, message, help }`）；握手是
 `Hello` / `Welcome { version, build_id }`。`seq` 让 ABI 难逃的"缓冲不够、重发一次"变成幂等：
-仲裁器缓存上一轮的回复，重发同一个 `seq` 不再投递事件。`source` / `note` / 动作引用各有
-`MAX_TEXT_LEN`（4 KiB）上限，超限的一律按协议错误拒绝。
+服务端缓存上一轮的回复，重发同一个 `seq` 不再投递事件。**去重游标属于连接**——宿主的 `seq`
+每连一次从 0 开始，服务端为每个连接维护自己的游标，所以重连后的第一个 `seq` 是请求，不是
+上一轮的重发。`source` / `note` / 动作引用各有 `MAX_TEXT_LEN`（4 KiB）上限，超限的一律按
+协议错误拒绝。
+
+RPC 服务端每个连接一个任务：静默的连接不占住服务，宿主重连随时进得来；60 s 没有整帧的
+连接被回收，`accept` 失败只记一行日志后继续监听。
 
 ### 7.6 失败策略
 

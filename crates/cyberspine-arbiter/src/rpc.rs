@@ -12,6 +12,7 @@
 
 use std::net::SocketAddr;
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -20,7 +21,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::runtime::{Builder, Handle, Runtime};
 
 use crate::remote::{RemoteArbiter, Transport};
-use crate::server::Server;
+use crate::server::{Connection, Server};
 use crate::wire::{self, HEADER_LEN};
 use crate::{Arbiter, ArbiterError, Batch, Decision, InterruptEvent, Ruling, Verdict};
 
@@ -289,46 +290,88 @@ pub fn serve<A: Arbiter + Send + 'static>(
     }
 }
 
-async fn accept_loop<A: Arbiter>(
+/// How long a connection may say nothing before it is presumed gone.
+///
+/// A host sends a frame every tick, so a minute of silence is a half-open socket
+/// or a client that never intended to speak; either way the task should not
+/// outlive it.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How long to wait after a failed `accept`, so a listener that cannot accept
+/// (no descriptors, say) does not spin.
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
+
+async fn accept_loop<A: Arbiter + Send + 'static>(
     listener: TcpListener,
-    mut server: Server<A>,
+    server: Server<A>,
 ) -> Result<(), ArbiterError> {
+    // The arbiter is shared; the connection state is not. Every host that
+    // connects gets its own task and its own sequence cursor.
+    let server = Arc::new(Mutex::new(server));
     loop {
-        let (stream, peer) = listener.accept().await.map_err(failed)?;
-        if let Err(error) = answer(stream, &mut server).await {
-            eprintln!("csp: the connection from {peer} ended: {error}");
-        }
+        let (stream, peer) = match listener.accept().await {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                // A failed accept — a peer that reset between SYN and accept, a
+                // descriptor limit — is about one connection, not the service.
+                eprintln!("csp: accept failed: {error}");
+                tokio::time::sleep(ACCEPT_BACKOFF).await;
+                continue;
+            }
+        };
+
+        let server = Arc::clone(&server);
+        tokio::spawn(async move {
+            if let Err(error) = answer(stream, server).await {
+                eprintln!("csp: the connection from {peer} ended: {error}");
+            }
+        });
     }
 }
 
 async fn answer<A: Arbiter>(
     mut stream: TcpStream,
-    server: &mut Server<A>,
+    server: Arc<Mutex<Server<A>>>,
 ) -> Result<(), ArbiterError> {
     stream.set_nodelay(true).map_err(failed)?;
+    let mut connection = Connection::default();
     let mut frame = Vec::new();
 
     loop {
         let mut header = [0u8; HEADER_LEN];
-        let read = stream.read(&mut header[..1]).await.map_err(failed)?;
+        let read = tokio::time::timeout(IDLE_TIMEOUT, stream.read(&mut header[..1]))
+            .await
+            .map_err(|_| quiet())?
+            .map_err(failed)?;
         if read == 0 {
             return Ok(());
         }
-        stream.read_exact(&mut header[1..]).await.map_err(failed)?;
+        tokio::time::timeout(IDLE_TIMEOUT, stream.read_exact(&mut header[1..]))
+            .await
+            .map_err(|_| quiet())?
+            .map_err(failed)?;
 
         let head = wire::parse_header(&header).map_err(failed)?;
         frame.clear();
         frame.extend_from_slice(&header);
         frame.resize(HEADER_LEN + head.len, 0);
-        stream
-            .read_exact(&mut frame[HEADER_LEN..])
+        tokio::time::timeout(IDLE_TIMEOUT, stream.read_exact(&mut frame[HEADER_LEN..]))
             .await
+            .map_err(|_| quiet())?
             .map_err(failed)?;
 
-        let reply = server.answer(&frame);
-        stream.write_all(reply).await.map_err(failed)?;
+        let reply = server
+            .lock()
+            .expect("the arbiter lock is not poisoned")
+            .answer(&mut connection, &frame)
+            .to_vec();
+        stream.write_all(&reply).await.map_err(failed)?;
         stream.flush().await.map_err(failed)?;
     }
+}
+
+fn quiet() -> ArbiterError {
+    failed(format!("no frame for {}s", IDLE_TIMEOUT.as_secs()))
 }
 
 fn failed(error: impl core::fmt::Display) -> ArbiterError {
