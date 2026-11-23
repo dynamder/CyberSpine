@@ -159,8 +159,9 @@ if sink.failed() { /* 唯一的停止点 */ }
  "overruns":0,"instances":[{"id":0,"layer":0,"action":"target/hello.csp"}]}
 ```
 
-`outcome` ∈ `budget`（`--ticks` 用完）、`halted`（`--until-halt` 满足）、`stopped`（Ctrl-C）、
-`faulted`、`environment`。**fault 也写报告**：失败是最需要终态的结局。
+`outcome` ∈ `budget`（`--ticks` 用完）、`halted`（`--until-halt` 满足）、`stopped`（Ctrl-C、
+trace 管道关闭）、`faulted`、`rejected`（输入被拒，退出 3）、`environment`。**fault 与
+rejected 也写报告**：失败是最需要终态的结局。
 
 ## 6. 退出码
 

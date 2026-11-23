@@ -37,16 +37,13 @@ fn main() -> ExitCode {
             None => run_linked::<linked::Official>(&args.image, &options, &mut sink, &mut on_event),
         }
     };
-    let (class, report) = match result {
-        Ok((report, None)) => (0, Some(report)),
-        Ok((report, Some(error))) => {
+    let (report, error) = result;
+    let class = match &error {
+        Some(error) => {
             sink.push_all(error.diagnostics());
-            (error.class(), Some(report))
+            error.class()
         }
-        Err(error) => {
-            sink.push_all(error.diagnostics());
-            (error.class(), None)
-        }
+        None => 0,
     };
 
     // Diagnostics always go to stderr: stdout is the product (the trace or the
@@ -56,8 +53,8 @@ fn main() -> ExitCode {
 
     // The run report has its own format flag, independent of `--json`: a caller
     // may want a machine-readable report and human diagnostics, or the reverse.
+    // It is written for every exit code, a failed run most of all.
     if let Some(format) = args.report
-        && let Some(report) = report
         && Renderer::new(format.format())
             .run(&report, &mut std::io::stdout().lock())
             .is_err()

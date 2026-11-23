@@ -145,11 +145,25 @@ const RT_DECISIONS: Code = Code::new("rt.decisions");
 
 impl Error {
     /// How the CLI should exit for this failure.
+    ///
+    /// A missing or malformed image is a rejected input, not a broken
+    /// environment: `docs/runtime.md` §1 puts "the image cannot be read" in the
+    /// same class as a rig mismatch, and only the paths that stop the run from
+    /// doing its job at all are environment failures.
     pub fn class(&self) -> u8 {
         match self {
-            Self::NoImage | Self::Load { .. } => EXIT_REJECTED,
+            Self::NoImage | Self::Image { .. } | Self::Load { .. } => EXIT_REJECTED,
             Self::Faulted(_) => EXIT_FAULTED,
             _ => EXIT_ENVIRONMENT,
+        }
+    }
+
+    /// The terminal outcome of a run that ended with this failure.
+    pub fn outcome(&self) -> Outcome {
+        match self.class() {
+            EXIT_REJECTED => Outcome::Rejected,
+            EXIT_FAULTED => Outcome::Faulted,
+            _ => Outcome::Environment,
         }
     }
 
@@ -191,41 +205,50 @@ impl Error {
 }
 
 /// Run the body linked into this binary.
+///
+/// The report comes back even when the run never started, so `--report` can
+/// keep its promise of a terminal record for every exit code.
 pub fn run_linked<L: LinkedBody>(
     paths: &[PathBuf],
     options: &Options,
     sink: &mut Diagnostics,
     on_event: &mut dyn FnMut(&Report),
-) -> Result<(RunReport, Option<Error>), Error> {
+) -> (RunReport, Option<Error>) {
     if let Notice::Warn(text) = L::NOTICE {
         sink.push(Diagnostic::warning(RT_DUMMY_BODY, text));
     }
 
-    let (first, rest) = paths.split_first().ok_or(Error::NoImage)?;
-    let image = read_image(first).map_err(|source| Error::Image {
-        path: first.clone(),
-        source,
-    })?;
-    let body = L::open(&image)?;
-    let host = L::host(body);
-    let mut context = Registry::new(&image);
-    let layer = image.header().layer;
-    let hash = image.content_hash();
-    let debug = image.debug().cloned();
-    let (mut session, id) = host.load(image).map_err(|(_, source)| Error::Load {
-        path: first.clone(),
-        source,
-    })?;
-    context.push(
-        id,
-        layer,
-        hash,
-        first.display().to_string().into_boxed_str(),
-        debug,
-    );
-    load_rest(&mut session, &mut context, rest)?;
+    let opened: Result<_, Error> = (|| {
+        let (first, rest) = paths.split_first().ok_or(Error::NoImage)?;
+        let image = read_image(first).map_err(|source| Error::Image {
+            path: first.clone(),
+            source,
+        })?;
+        let body = L::open(&image)?;
+        let host = L::host(body);
+        let mut context = Registry::new(&image);
+        let layer = image.header().layer;
+        let hash = image.content_hash();
+        let debug = image.debug().cloned();
+        let (mut session, id) = host.load(image).map_err(|(_, source)| Error::Load {
+            path: first.clone(),
+            source,
+        })?;
+        context.push(
+            id,
+            layer,
+            hash,
+            first.display().to_string().into_boxed_str(),
+            debug,
+        );
+        load_rest(&mut session, &mut context, rest)?;
+        Ok((session, context))
+    })();
 
-    Ok(run_session(session, context, options, sink, on_event))
+    match opened {
+        Ok((session, context)) => run_session(session, context, options, sink, on_event),
+        Err(error) => failed(error),
+    }
 }
 
 /// Run a body named by an external spec.
@@ -235,33 +258,44 @@ pub fn run_external(
     options: &Options,
     sink: &mut Diagnostics,
     on_event: &mut dyn FnMut(&Report),
-) -> Result<(RunReport, Option<Error>), Error> {
-    let body = open_external(spec)?;
-    let host = Host::new(body);
+) -> (RunReport, Option<Error>) {
+    let opened: Result<_, Error> = (|| {
+        let body = open_external(spec)?;
+        let host = Host::new(body);
 
-    let (first, rest) = paths.split_first().ok_or(Error::NoImage)?;
-    let image = read_image(first).map_err(|source| Error::Image {
-        path: first.clone(),
-        source,
-    })?;
-    let mut context = Registry::new(&image);
-    let layer = image.header().layer;
-    let hash = image.content_hash();
-    let debug = image.debug().cloned();
-    let (mut session, id) = host.load(image).map_err(|(_, source)| Error::Load {
-        path: first.clone(),
-        source,
-    })?;
-    context.push(
-        id,
-        layer,
-        hash,
-        first.display().to_string().into_boxed_str(),
-        debug,
-    );
-    load_rest(&mut session, &mut context, rest)?;
+        let (first, rest) = paths.split_first().ok_or(Error::NoImage)?;
+        let image = read_image(first).map_err(|source| Error::Image {
+            path: first.clone(),
+            source,
+        })?;
+        let mut context = Registry::new(&image);
+        let layer = image.header().layer;
+        let hash = image.content_hash();
+        let debug = image.debug().cloned();
+        let (mut session, id) = host.load(image).map_err(|(_, source)| Error::Load {
+            path: first.clone(),
+            source,
+        })?;
+        context.push(
+            id,
+            layer,
+            hash,
+            first.display().to_string().into_boxed_str(),
+            debug,
+        );
+        load_rest(&mut session, &mut context, rest)?;
+        Ok((session, context))
+    })();
 
-    Ok(run_session(session, context, options, sink, on_event))
+    match opened {
+        Ok((session, context)) => run_session(session, context, options, sink, on_event),
+        Err(error) => failed(error),
+    }
+}
+
+/// A run whose session never existed: the report still describes the outcome.
+fn failed(error: Error) -> (RunReport, Option<Error>) {
+    (RunReport::empty(error.outcome()), Some(error))
 }
 
 /// Load every image after the first one into the session.

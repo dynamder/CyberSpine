@@ -249,8 +249,10 @@ fn until_halt_stops_when_the_instance_is_gone() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
 }
 
+/// `docs/runtime.md` §1: an image that cannot be read is a rejected input, and
+/// the report is still written — a terminal record for every exit code.
 #[test]
-fn a_missing_image_is_reported() {
+fn a_missing_image_is_a_rejected_input_with_a_report() {
     let dir = scratch("missing-image");
     let missing = dir.join("absent.csp");
 
@@ -259,13 +261,25 @@ fn a_missing_image_is_reported() {
         missing.as_os_str(),
         OsStr::new("--ticks"),
         OsStr::new("0"),
+        OsStr::new("--report"),
+        OsStr::new("json"),
     ]);
 
-    assert_eq!(output.status.code(), Some(ENVIRONMENT));
+    assert_eq!(
+        output.status.code(),
+        Some(REJECTED),
+        "stderr: {}",
+        stderr(&output)
+    );
     assert!(
         stderr(&output).contains("could not read"),
         "stderr: {}",
         stderr(&output)
+    );
+    assert!(
+        stdout(&output).contains("\"outcome\":\"rejected\""),
+        "the failed run still reports its outcome: {}",
+        stdout(&output)
     );
 }
 
@@ -725,7 +739,7 @@ fn json_diagnostics_stay_on_stderr() {
         OsStr::new("--json"),
     ]);
 
-    assert_eq!(output.status.code(), Some(ENVIRONMENT));
+    assert_eq!(output.status.code(), Some(REJECTED));
     assert!(
         stdout(&output).is_empty(),
         "stdout is for products, got: {}",

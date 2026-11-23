@@ -16,6 +16,9 @@ pub enum Outcome {
     Stopped,
     /// An instance faulted.
     Faulted,
+    /// An input was refused before the run started: a body, an image, an
+    /// output path that aliases an input.
+    Rejected,
     /// A body, arbiter or file failure ended the run.
     Environment,
 }
@@ -27,6 +30,7 @@ impl Outcome {
             Self::Halted => "halted",
             Self::Stopped => "stopped",
             Self::Faulted => "faulted",
+            Self::Rejected => "rejected",
             Self::Environment => "environment",
         }
     }
@@ -50,4 +54,19 @@ pub struct RunReport {
     pub dt: f32,
     pub overruns: u64,
     pub instances: Vec<InstanceReport>,
+}
+
+impl RunReport {
+    /// A report for a run that never started: no session existed, so there is
+    /// nothing to describe but the outcome. A failed run still gets a terminal
+    /// record, which is what `--report` promises.
+    pub fn empty(outcome: Outcome) -> Self {
+        Self {
+            outcome,
+            ticks: 0,
+            dt: 0.0,
+            overruns: 0,
+            instances: Vec::new(),
+        }
+    }
 }
