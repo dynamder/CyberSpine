@@ -1,0 +1,30 @@
+Assemble a .csa source into a .csp image
+
+Usage: cyinea [OPTIONS] --asm-file <ASM_FILE>
+
+Options:
+  -a, --asm-file <ASM_FILE>
+          The `.csa` source file to assemble
+
+  -o, --output <OUTPUT>
+          Where to write the assembled `.csp`. Defaults to the input with a `.csp` extension
+
+  -r, --rig <RIG>
+          The rig manifest to assemble for; overrides the source's `.rig`. A relative path is resolved against the `.csa`'s own directory
+
+      --deny-warnings
+          Treat readability warnings as errors
+
+      --json
+          Emit diagnostics as JSON Lines on stdout instead of a terminal rendering on stderr. One stream, one record per line (`docs/diagnostics.md`)
+
+      --strip
+          Strip the debug segment: produce a release build (`docs/asm.md` §8).
+          
+          Without this flag the image carries a `pc → source position` table and a label table (`docs/binfmt.md` §6.7); execution is identical either way.
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version

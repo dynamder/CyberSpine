@@ -1,0 +1,8 @@
+error[asm.unknown-mnemonic]: unknown mnemonic `FADDD`
+  ╭▸ probe.csa:3:5
+  │
+3 │     FADDD f1, f2, f3
+  ╰╴    ━
+  probe.csa:2:5: the previous instruction used a real mnemonic
+  note: the mnemonic table is generated from `OpCode::ALL`
+  help: did you mean `FADD`?

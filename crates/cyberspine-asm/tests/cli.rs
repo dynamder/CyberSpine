@@ -655,3 +655,15 @@ fn json_diagnostics_are_one_object_per_line() {
         );
     }
 }
+
+#[test]
+fn the_help_text_is_the_cli_contract() {
+    let output = run(vec![OsStr::new("--help")]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    // The usage line carries the file name the platform produced; the contract
+    // is the command name.
+    let help = stdout(&output).replace("cyinea.exe", "cyinea");
+    cyberspine_testkit::assert_snapshot!("help", help);
+}

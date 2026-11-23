@@ -785,3 +785,15 @@ fn a_diverged_replay_is_a_json_warning_too() {
     assert_eq!(value["kind"], "diagnostic");
     assert_eq!(value["level"], "warning");
 }
+
+#[test]
+fn the_help_text_is_the_cli_contract() {
+    let output = run(vec![OsStr::new("--help")]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    // The usage line carries the file name the platform produced; the contract
+    // is the command name.
+    let help = stdout(&output).replace("cyinevm.exe", "cyinevm");
+    cyberspine_testkit::assert_snapshot!("help", help);
+}

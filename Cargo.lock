@@ -406,6 +406,7 @@ dependencies = [
  "cyberspine-arbiter",
  "cyberspine-diag",
  "cyberspine-host",
+ "cyberspine-testkit",
  "serde",
  "serde_json",
 ]

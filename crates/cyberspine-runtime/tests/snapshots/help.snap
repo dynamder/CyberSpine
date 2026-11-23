@@ -1,0 +1,59 @@
+Run .csp images against a body
+
+Usage: cyinevm [OPTIONS] --image <IMAGE>
+
+Options:
+  -i, --image <IMAGE>
+          A `.csp` image to run. Repeat `-i` to load several into one session
+
+  -b, --backend <SPEC>
+          `dylib:<path>` or `rpc:<host>:<port>`; omit for the built-in dummy body
+
+      --interrupt <SPEC>
+          `dylib:<path>` or `rpc:<host>:<port>`; omit for the built-in single-round arbiter
+
+      --actions <DIR>
+          A directory of `.csp` actions an arbiter may load
+
+      --replay <PATH>
+          Replay a decision log instead of consulting an arbiter
+
+      --decisions <PATH>
+          Record every applied ruling as JSON Lines
+
+      --on-interrupt <ON_INTERRUPT>
+          What the arbiter falls back to when it cannot decide (`stop` or `continue`)
+          
+          [default: stop]
+          [possible values: stop, continue]
+
+      --ticks <N>
+          Run exactly N ticks and exit; 0 loads without ticking
+
+      --until-halt
+          Stop when every instance has halted (this stops driving the body)
+
+      --unpaced
+          Tick as fast as possible; requires `--ticks`
+
+      --trace
+          Print one line per tick to stdout
+
+  -q, --quiet
+          Suppress the startup summary; the dummy warning and faults still print
+
+      --json
+          Emit diagnostics as JSON Lines on stderr instead of a terminal rendering
+
+      --report <FORMAT>
+          Print the run's terminal state on stdout (`human` or `json`).
+          
+          The report answers "did it finish, and why": ticks, outcome, instances. It owns stdout, so it cannot be combined with `--trace`.
+          
+          [possible values: human, json]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version

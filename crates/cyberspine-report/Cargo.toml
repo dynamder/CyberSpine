@@ -5,6 +5,9 @@ edition = "2024"
 rust-version.workspace = true
 license.workspace = true
 
+[dev-dependencies]
+cyberspine-testkit = { path = "../cyberspine-testkit" }
+
 [dependencies]
 cyberspine-arbiter = { path = "../cyberspine-arbiter" }
 cyberspine-diag = { path = "../cyberspine-diag" }
