@@ -28,10 +28,8 @@ If you are writing a new feature, you should always search relevant code and try
 
 Git commit in small step, conventional commit, but don't prose about the commit message. The commit message should only be a few sentences.
 
-A test that pins bytes (the snapshots under `tests/snapshots/`) is a contract.
-`cargo insta test --accept` writes one; CI never does. A change that touches both
-`src/` and a `.snap` file is a contract change: the snapshot diff is what to
-review, and the PR says why each changed line is expected.
+A test that pins bytes (the snapshots under `tests/snapshots/`) is a contract. CI never does. A change that touches both
+`src/` and a `.snap` file is a contract change. You should almost rarely change a contract, if you are sure you need to, say in the PR or directly to the user why each changed line is expected.
 
 When you finish a new feature, there should always be a human-runnable and human-distinguishable executable for users to run, see and check.
 
@@ -43,7 +41,7 @@ Keep the issue and pr message you write concise, only cover the necessary messag
 
 ## Tools
 
-The two tools are the workspace default members. Build them with:
+The two tools are the workspace default members(It's also the deployment artifact). Build them with:
 
 ```bash
 cargo build --release
@@ -62,5 +60,4 @@ cargo xtask doctor  # build environment and worktree hygiene
 ```
 
 Tests load the fixture libraries from the profile directory; they do not build
-them. `cargo xtask test` takes care of that, and a bare `cargo test` works once
-a build or a workspace test run has produced them.
+them. `cargo xtask test` takes care of that.
