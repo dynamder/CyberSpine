@@ -348,7 +348,8 @@ pub trait Arbiter {
 ### 7.6 失败策略
 
 - `failure`：宿主为所有在途事件合成一份**配置的默认裁决**（`--on-interrupt`，默认 `Stop`），
-  session 不终止。
+  session 不终止；但整场运行不再可信（之后每个 `INTR` 都被迫走默认裁决），所以
+  `cyinevm` 以 **exit 5** 结束（`runtime.md` §1 的环境失败）。
 - 动作装载失败：报错并跳过该动作，`completion` 照常执行；`Load` + `Stop` 的 `Switch` 因此
   fail-closed 成"没有新动作、旧实例已卸载"。
 - 仲裁器与 backend 同级可信；它只能回 `Ruling`，读改不到实例状态。

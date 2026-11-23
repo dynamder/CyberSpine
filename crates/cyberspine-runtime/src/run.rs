@@ -540,6 +540,14 @@ fn run_loop<B: Backend, P: RigPolicy>(
         on_event,
     );
 
+    // An arbiter that died mid-run leaves every later interrupt on the fallback
+    // verdict, so the run is not the one that was asked for. The rest of the
+    // session still finishes; the exit code says what happened.
+    let result = match (result, interrupts.take_failure()) {
+        (Ok(_), Some(error)) => Err(Error::Arbiter(error)),
+        (result, _) => result,
+    };
+
     // "Rounds were never applied" is only noise when the run did not end on its
     // own terms: a replay cut short by Ctrl-C or by a fault did not diverge.
     if matches!(result, Ok(Ending::Budget | Ending::Halted))

@@ -626,6 +626,18 @@ const INTERRUPT: &str = "\
     HALT
 ";
 
+/// The same shape, with the reason the arbiter fixture treats as "fail".
+const INTERRUPT_WITH_FAILURE: &str = "\
+.layer 10
+.clock hz = 1000
+.fuel 4096
+.max_wait 600.0
+
+.text
+    INTR    \"fail\"
+    HALT
+";
+
 #[test]
 fn an_interrupt_is_reported_and_the_default_policy_stops_it() {
     let dir = scratch("interrupt-stop");
@@ -807,6 +819,41 @@ fn a_dylib_arbiter_rules_in_two_rounds() {
     assert!(
         stderr(&output).contains("fixture: first pass"),
         "the first round crossed the boundary: {}",
+        stderr(&output)
+    );
+}
+
+/// `docs/runtime.md` §1: an arbiter that stops adjudicating is an environment
+/// failure, even though the host keeps the run going on the fallback verdict.
+#[cfg(feature = "dylib")]
+#[test]
+fn an_arbiter_that_fails_mid_run_exits_five() {
+    const ENVIRONMENT_FAILURE: i32 = 5;
+
+    let dir = scratch("arbiter-failure");
+    let image = write_image(&dir, "interrupt.csp", INTERRUPT_WITH_FAILURE, MANIFEST);
+    let spec = format!("dylib:{}", arbiter_fixture().display());
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--interrupt"),
+        OsStr::new(&spec),
+        OsStr::new("--ticks"),
+        OsStr::new("4"),
+        OsStr::new("--unpaced"),
+        OsStr::new("--quiet"),
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(ENVIRONMENT_FAILURE),
+        "the run continued on the fallback but is not a success: stderr: {}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("the fixture was told to fail"),
+        "the failure is reported: {}",
         stderr(&output)
     );
 }
