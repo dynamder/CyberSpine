@@ -316,13 +316,20 @@ pub fn run_in(
 }
 
 /// A fresh directory under the test target, emptied if it already exists.
+///
+/// The process id makes the path unique per test process: a runner that gives
+/// every test its own process (nextest) would otherwise let two tests empty the
+/// same directory under each other.
 pub fn scratch_dir(name: &str) -> PathBuf {
     // Set by Cargo for the test process; a library cannot read it at compile
     // time, so it is read at run time and falls back to the temp directory.
     let base = std::env::var_os("CARGO_TARGET_TMPDIR")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
-    let dir = base.join("testkit").join(name);
+    let dir = base
+        .join("testkit")
+        .join(name)
+        .join(std::process::id().to_string());
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create the scratch directory");
     dir

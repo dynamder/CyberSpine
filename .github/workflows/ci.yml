@@ -47,6 +47,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - uses: taiki-e/install-action@nextest
+
       # Builds the cdylib fixtures once, then runs the workspace tests.
       - run: cargo xtask test
 

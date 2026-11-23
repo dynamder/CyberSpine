@@ -293,20 +293,30 @@ fn fixtures(args: &[String]) -> Result<(), String> {
 
 fn tests(args: &[String]) -> Result<(), String> {
     fixtures(&[])?;
-    if Command::new("cargo")
+
+    let has_nextest = cargo()
         .args(["nextest", "--version"])
         .output()
-        .is_ok_and(|output| output.status.success())
-    {
+        .is_ok_and(|output| output.status.success());
+
+    if has_nextest {
+        println!("tests: nextest");
         let mut nextest = cargo();
         nextest.args(["nextest", "run", "--locked", "--workspace", "--all-targets"]);
         nextest.args(args);
-        return run(nextest, "workspace tests");
+        run(nextest, "workspace tests")?;
+    } else {
+        println!("tests: cargo test (install cargo-nextest for parallel binaries)");
+        let mut test = cargo();
+        test.args(["test", "--locked", "--workspace", "--all-targets"]);
+        test.args(args);
+        run(test, "workspace tests")?;
     }
-    let mut test = cargo();
-    test.args(["test", "--locked", "--workspace", "--all-targets"]);
-    test.args(args);
-    run(test, "workspace tests")
+
+    // nextest runs test binaries only; a doc example is still a test.
+    let mut doctests = cargo();
+    doctests.args(["test", "--locked", "--workspace", "--doc"]);
+    run(doctests, "doctests")
 }
 
 fn cargo_step(args: &[&str]) -> Command {
