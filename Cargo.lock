@@ -220,6 +220,7 @@ dependencies = [
  "cyberspine-arbiter-fixture",
  "cyberspine-diag",
  "cyberspine-frame",
+ "cyberspine-testkit",
  "libloading",
  "rmp-serde",
  "serde",
@@ -315,6 +316,7 @@ dependencies = [
  "cyberspine-demo-maze-world",
  "cyberspine-host",
  "cyberspine-manifest",
+ "cyberspine-testkit",
  "cyberspine-vm",
  "serde_json",
  "thiserror",
@@ -783,6 +785,10 @@ checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 dependencies = [
  "memchr",
 ]
+
+[[package]]
+name = "xtask"
+version = "0.0.0"
 
 [[package]]
 name = "zmij"
