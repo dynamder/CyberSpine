@@ -65,6 +65,17 @@ impl BackendSpec {
             Self::Rpc(address) => rpc(address),
         }
     }
+
+    /// The shared library this spec names, if it names one.
+    ///
+    /// A caller that writes to a path wants to know whether it is about to write
+    /// over a body it is also reading.
+    pub fn dylib_path(&self) -> Option<&Path> {
+        match self {
+            Self::Dylib(path) => Some(path),
+            Self::Rpc(_) => None,
+        }
+    }
 }
 
 #[cfg(feature = "dylib")]

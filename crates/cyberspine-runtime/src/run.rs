@@ -237,7 +237,7 @@ pub fn run_linked<L: LinkedBody>(
     }
 
     let opened: Result<_, Error> = (|| {
-        guard_outputs(paths, options)?;
+        guard_outputs(paths, options, None)?;
         let (first, rest) = paths.split_first().ok_or(Error::NoImage)?;
         let image = read_image(first).map_err(|source| Error::Image {
             path: first.clone(),
@@ -279,7 +279,7 @@ pub fn run_external(
     on_event: &mut dyn FnMut(&Report),
 ) -> (RunReport, Option<Error>) {
     let opened: Result<_, Error> = (|| {
-        guard_outputs(paths, options)?;
+        guard_outputs(paths, options, Some(spec))?;
         let body = open_external(spec)?;
         let host = Host::new(body);
 
@@ -324,14 +324,23 @@ fn failed(error: Error) -> (RunReport, Option<Error>) {
 /// image this run just loaded into an empty file and exits 0. The check runs
 /// before anything is opened, for the same reason `cyinea` refuses to write an
 /// image over its source (`asm.source-overwrite`).
-fn guard_outputs(paths: &[PathBuf], options: &Options) -> Result<(), Error> {
+///
+/// A body or arbiter named `dylib:<path>` is an input too: truncating the shared
+/// library breaks every later run even though this one already mapped it.
+fn guard_outputs(
+    paths: &[PathBuf],
+    options: &Options,
+    body: Option<&BackendSpec>,
+) -> Result<(), Error> {
     let Some(output) = options.decisions.as_deref() else {
         return Ok(());
     };
     let inputs = paths
         .iter()
         .map(PathBuf::as_path)
-        .chain(options.replay.as_deref());
+        .chain(options.replay.as_deref())
+        .chain(body.and_then(BackendSpec::dylib_path))
+        .chain(options.interrupt.as_ref().and_then(ArbiterSpec::dylib_path));
     for input in inputs {
         if same_file(output, input) {
             return Err(Error::OutputOverwrite {

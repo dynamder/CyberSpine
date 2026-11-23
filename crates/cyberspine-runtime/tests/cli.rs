@@ -398,6 +398,42 @@ fn a_decision_log_over_an_input_is_refused() {
     }
 }
 
+/// `docs/runtime.md` §1: a shared library the run names is an input too, even
+/// though this run has already mapped it.
+#[test]
+fn a_decision_log_over_a_named_library_is_refused() {
+    let dir = scratch("decisions-over-library");
+    let image = write_image(&dir, "halt.csp", HALT, MANIFEST);
+    let library = dir.join("body.dll");
+    let body = format!("dylib:{}", library.display());
+    let arbiter = format!("dylib:{}", library.display());
+
+    for (flag, spec) in [("-b", &body), ("--interrupt", &arbiter)] {
+        let output = run(vec![
+            OsStr::new("-i"),
+            image.as_os_str(),
+            OsStr::new(flag),
+            OsStr::new(spec.as_str()),
+            OsStr::new("--ticks"),
+            OsStr::new("0"),
+            OsStr::new("--decisions"),
+            library.as_os_str(),
+        ]);
+
+        assert_eq!(
+            output.status.code(),
+            Some(REJECTED),
+            "{flag} {spec}: stderr: {}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains("rt.output-overwrite"),
+            "{flag} {spec}: stderr: {}",
+            stderr(&output)
+        );
+    }
+}
+
 /// `docs/runtime.md` §1: `--ticks 0` loads and validates every input, so a path
 /// that would fail later still fails now.
 #[test]
