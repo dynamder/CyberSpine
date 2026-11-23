@@ -160,6 +160,7 @@ name = "cyberspine-exec"
 version = "0.1.0"
 dependencies = [
  "cyberspine-binfmt",
+ "cyberspine-diag",
  "cyberspine-isa",
  "thiserror",
 ]
