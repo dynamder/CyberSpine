@@ -46,8 +46,9 @@ cyinevm -i <IMAGE> [-i <IMAGE> ...] [-b <SPEC>] [--on-interrupt stop|continue]
 装载顺序就是恢复顺序与合并顺序（`isa.md` §8.4）。`--ticks 0` 会装载全部镜像、打开并校验
 `--replay`/`--actions`/`--decisions` 指向的东西，然后退出，适合一次性校验。
 
-输出路径不能是输入：`--decisions` 会截断它打开的文件，所以与任一 `-i` 镜像或 `--replay`
-相同的路径在打开之前就被拒绝（`rt.output-overwrite`，退出 3），镜像字节不变。
+输出路径不能是输入：`--decisions` 会截断它打开的文件，所以与任一 `-i` 镜像、`--replay`
+的录制、或 `-b dylib:` / `--interrupt dylib:` 指向的共享库相同的路径，在打开之前就被拒绝
+（`rt.output-overwrite`，退出 3），镜像字节不变。
 
 退出码：
 
@@ -59,7 +60,8 @@ cyinevm -i <IMAGE> [-i <IMAGE> ...] [-b <SPEC>] [--on-interrupt stop|continue]
 | `4` | 运行异常结束：实例 fault |
 | `5` | 环境失败：镜像读不出、后端、仲裁器、trace/裁决日志、信号处理器 |
 
-`--report json` 在每个退出码下都会写出终态（fault 也包括在内），字段见
+`--report json` 在每次实际运行结束后都会写出终态，包括镜像被拒、fault 与环境失败
+（唯一的例外是退出码 2：clap 在运行之前就结束了这次调用），字段见
 [`diagnostics.md`](diagnostics.md) §5。
 
 ---
