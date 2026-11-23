@@ -125,3 +125,82 @@ jobs:
 
       - name: assemble_unwind
         run: cargo +${{ steps.nightly.outputs.name }} fuzz run assemble_unwind fuzz/corpus/assemble -- -runs=0
+
+  # A red nightly nobody reads is the same as no nightly. One rolling issue
+  # carries every failing signal: opened (or commented on) when the run is not
+  # green, closed when it is again. The mutation survivors are the part worth
+  # turning into work, so they go in the body.
+  route:
+    name: route
+    needs: [deep, mutants, fuzz]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RUN: ${{ github.run_id }}
+      SHA: ${{ github.sha }}
+      DEEP: ${{ needs.deep.result }}
+      MUTANTS: ${{ needs.mutants.result }}
+      FUZZ: ${{ needs.fuzz.result }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: mutants
+          path: nightly
+        continue-on-error: true
+
+      - name: one issue for every signal
+        run: |
+          failed=0
+          jobs=""
+          for name in deep mutants fuzz; do
+            case "$name" in
+              deep) result="$DEEP" ;;
+              mutants) result="$MUTANTS" ;;
+              fuzz) result="$FUZZ" ;;
+            esac
+            case "$result" in
+              success|skipped) ;;
+              *) failed=1; jobs="$jobs $name ($result)" ;;
+            esac
+          done
+
+          gh label create nightly --description "opened by the nightly workflow" \
+            --color BFD4F2 --force >/dev/null 2>&1 || true
+          number=$(gh issue list --repo "$REPO" --label nightly --state open \
+            --json number --jq '.[0].number // empty')
+
+          if [ "$failed" = 0 ]; then
+            if [ -n "$number" ]; then
+              gh issue close "$number" --repo "$REPO" \
+                --comment "Green again: https://github.com/$REPO/actions/runs/$RUN"
+            fi
+            exit 0
+          fi
+
+          {
+            echo "The nightly run at \`${SHA:0:12}\` is not green:$jobs"
+            echo
+            echo "Run: https://github.com/$REPO/actions/runs/$RUN"
+            if [ -s nightly/missed.txt ]; then
+              total=$(wc -l < nightly/missed.txt)
+              echo
+              echo "### $total surviving mutant(s)"
+              echo
+              echo '```'
+              head -50 nightly/missed.txt
+              echo '```'
+            fi
+          } > body.md
+
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$REPO" --body-file body.md
+          else
+            gh issue create --repo "$REPO" --title "nightly: the run is not green" \
+              --label nightly --body-file body.md
+          fi
