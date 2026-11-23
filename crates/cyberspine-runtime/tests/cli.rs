@@ -4,11 +4,8 @@
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-#[cfg(unix)]
-use std::process::Stdio;
-use std::process::{Command, Output};
-#[cfg(unix)]
-use std::time::Duration;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use cyberspine_asm::assembler::{generate_image, generate_image_debug, parse};
 use cyberspine_core::binfmt::load::VerifiedImage;
@@ -133,6 +130,31 @@ fn run(args: Vec<&OsStr>) -> Output {
         .args(args)
         .output()
         .expect("the cyinevm binary should run")
+}
+
+/// Run the binary, but never let the test hang on it: the stop condition itself
+/// is what one of these tests is about.
+fn run_within(args: Vec<&OsStr>, limit: Duration) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_cyinevm"))
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the cyinevm binary should spawn");
+
+    let deadline = Instant::now() + limit;
+    loop {
+        if child.try_wait().expect("the child is waitable").is_some() {
+            return child.wait_with_output().expect("the run is collected");
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the run did not stop within {limit:?}");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 fn stderr(output: &Output) -> String {
@@ -638,6 +660,19 @@ const INTERRUPT_WITH_FAILURE: &str = "\
     HALT
 ";
 
+/// Two interrupts, so a recording can cover the first and not the second.
+const TWO_INTERRUPTS: &str = "\
+.layer 10
+.clock hz = 1000
+.fuel 4096
+.max_wait 600.0
+
+.text
+    INTR    \"one\"
+    INTR    \"two\"
+    HALT
+";
+
 #[test]
 fn an_interrupt_is_reported_and_the_default_policy_stops_it() {
     let dir = scratch("interrupt-stop");
@@ -819,6 +854,40 @@ fn a_dylib_arbiter_rules_in_two_rounds() {
     assert!(
         stderr(&output).contains("fixture: first pass"),
         "the first round crossed the boundary: {}",
+        stderr(&output)
+    );
+}
+
+/// `docs/interrupt.md` §7.6: an event the recording never answers is settled
+/// with the fallback verdict, so `--until-halt` against a shorter recording
+/// ends instead of waiting for a round that cannot arrive.
+#[test]
+fn until_halt_ends_when_the_replay_has_no_round() {
+    let dir = scratch("until-halt-orphan");
+    let image = write_image(&dir, "two.csp", TWO_INTERRUPTS, MANIFEST);
+    let replay = dir.join("run.jsonl");
+    fs::write(
+        &replay,
+        "{\"event\":0,\"tick\":0,\"actions\":[],\"completion\":{\"finished\":\"continue\"}}\n",
+    )
+    .expect("the recording is written");
+
+    let output = run_within(
+        vec![
+            OsStr::new("-i"),
+            image.as_os_str(),
+            OsStr::new("--until-halt"),
+            OsStr::new("--replay"),
+            replay.as_os_str(),
+            OsStr::new("-q"),
+        ],
+        Duration::from_secs(10),
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stderr(&output).contains("rt.replay-orphan"),
+        "the round the recording lacks is reported: {}",
         stderr(&output)
     );
 }

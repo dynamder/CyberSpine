@@ -765,7 +765,7 @@ impl Arbiter for BuiltinArbiter {
     fn take(&mut self, _now: u64) -> Batch {
         Batch {
             decisions: core::mem::take(&mut self.queue),
-            failure: None,
+            ..Batch::default()
         }
     }
 }

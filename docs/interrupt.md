@@ -392,7 +392,9 @@ pub trait ActionResolver {
 - 记录的是**每一轮**裁决：`(event, tick, actions, completion)`。`tick` 是该轮被应用的 tick，
   不是中断发生的 tick——同一事件的多轮可以落在不同 tick 上，副作用时序才可复现。
 - 不记录 `source` / `note`：那是观测数据，与 VM 重放无关。
-- 重放按 `tick <= now` 逐轮释放；缺失记录 = 该实例保持挂起，与原运行一致。
+- 重放按 `tick <= now` 逐轮释放；录制里没有的事件（或录制在给出裁决前就用完）由宿主
+  按兜底默认裁决结清，并报 `rt.replay-orphan`：回放持有整份脚本，所以它知道"不会再有下一轮"，
+  宿主不必永远等下去（`--until-halt` 因此能结束）。
 - `--decisions <PATH>` 写 JSON Lines，`--replay <PATH>` 读回。
 - `--trace` 仍只记每 tick 的命令向量；渲染文本属于运行产物，不进入 ISA 契约。
 

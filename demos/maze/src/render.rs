@@ -107,6 +107,7 @@ pub fn describe(report: &Report) -> Option<String> {
         }
         Report::Finished { event, .. } => Some(format!("interrupt {event} finished")),
         Report::Unknown { event } => Some(format!("interrupt {event}: unknown event")),
+        Report::Abandoned { event } => Some(format!("interrupt {event}: never answered")),
         Report::Action { event, message } => Some(format!("interrupt {event}: {message}")),
         Report::Carry { event, message } => {
             Some(format!("interrupt {event} could not be carried: {message}"))

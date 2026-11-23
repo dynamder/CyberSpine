@@ -47,6 +47,11 @@ pub enum Report {
     Unknown {
         event: EventId,
     },
+    /// The arbiter has taken this event and will never answer it; the host
+    /// settled it with the fallback verdict.
+    Abandoned {
+        event: EventId,
+    },
     Action {
         event: EventId,
         message: Box<str>,

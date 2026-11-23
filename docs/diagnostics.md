@@ -148,9 +148,9 @@ if sink.failed() { /* 唯一的停止点 */ }
  "site":{"artifact":"probe.csa","kind":"source","line":8,"column":5}}
 ```
 
-`what` ∈ `interrupt` / `round` / `finished` / `unknown` / `action` / `carry` / `verdict` /
-`failed`。事件不是诊断：中断是正常通信，裁决是宿主对它的回答；它们共用同一个渲染器，
-只是为了让 `--json` 用一个词汇描述整场运行。
+`what` ∈ `interrupt` / `round` / `finished` / `unknown` / `abandoned` / `action` / `carry` /
+`verdict` / `failed`。事件不是诊断：中断是正常通信，裁决是宿主对它的回答；它们共用同一个
+渲染器，只是为了让 `--json` 用一个词汇描述整场运行。
 
 运行终态是另一条记录，由 `--report json` 写出（`crates/cyberspine-report/src/run.rs`）：
 

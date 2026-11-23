@@ -121,7 +121,11 @@ impl<A: Arbiter> Interrupts<A> {
         }
 
         let now = session.now();
-        let Batch { decisions, failure } = self.arbiter.take(now);
+        let Batch {
+            decisions,
+            failure,
+            abandoned,
+        } = self.arbiter.take(now);
         for Decision { event, ruling } in decisions {
             let Some(mut inflight) = self.inflight.remove(&event) else {
                 reports.push(Report::Unknown { event });
@@ -175,6 +179,19 @@ impl<A: Arbiter> Interrupts<A> {
                     forget(settled, verdict, registry, instance);
                 }
             }
+        }
+
+        // An event the arbiter says it will never answer is settled with the
+        // fallback verdict. Otherwise the instance stays parked forever and a
+        // `--until-halt` run waits for a round that cannot arrive.
+        for event in abandoned {
+            let Some(inflight) = self.inflight.remove(&event) else {
+                continue;
+            };
+            reports.push(Report::Abandoned { event });
+            let instance = inflight.ticket.instance;
+            let settled = settle(session, inflight.ticket, self.default, &mut reports);
+            forget(settled, self.default, registry, instance);
         }
 
         if let Some(error) = failure {

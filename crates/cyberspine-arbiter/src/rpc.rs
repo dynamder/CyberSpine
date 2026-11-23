@@ -207,7 +207,11 @@ impl Arbiter for RpcArbiter {
                 self.reported = true;
                 failure = failure.or_else(|| Some(ArbiterError::new("the arbiter stopped")));
             }
-            return Batch { decisions, failure };
+            return Batch {
+                decisions,
+                failure,
+                ..Batch::default()
+            };
         }
 
         if !self.awaiting {
@@ -222,7 +226,11 @@ impl Arbiter for RpcArbiter {
             }
         }
 
-        Batch { decisions, failure }
+        Batch {
+            decisions,
+            failure,
+            ..Batch::default()
+        }
     }
 }
 

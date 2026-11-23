@@ -140,7 +140,7 @@ impl<T: Transport> Arbiter for RemoteArbiter<T> {
         if self.terminal.is_some() {
             return Batch {
                 decisions,
-                failure: None,
+                ..Batch::default()
             };
         }
 
@@ -151,6 +151,7 @@ impl<T: Transport> Arbiter for RemoteArbiter<T> {
                 Batch {
                     decisions,
                     failure: rulings.failure.map(from_wire),
+                    ..Batch::default()
                 }
             }
             Err(error) => {
@@ -158,6 +159,7 @@ impl<T: Transport> Arbiter for RemoteArbiter<T> {
                 Batch {
                     decisions,
                     failure: Some(error),
+                    ..Batch::default()
                 }
             }
         }

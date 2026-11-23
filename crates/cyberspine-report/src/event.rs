@@ -61,6 +61,10 @@ pub fn render(_sources: &mut SourceCache, report: &Report, out: &mut impl Write)
         Report::Unknown { event } => {
             writeln!(out, "warning: the arbiter answered unknown event {event}")
         }
+        Report::Abandoned { event } => writeln!(
+            out,
+            "warning: the arbiter will never answer event {event}; the fallback verdict was applied"
+        ),
         Report::Action { event, message } => writeln!(out, "warning: event {event}: {message}"),
         Report::Carry { event, message } => {
             writeln!(
@@ -128,6 +132,9 @@ enum EventJson<'a> {
         verdict: cyberspine_arbiter::Verdict,
     },
     Unknown {
+        event: u64,
+    },
+    Abandoned {
         event: u64,
     },
     Action {
@@ -208,6 +215,7 @@ impl<'a> EventJson<'a> {
                 verdict: *verdict,
             },
             Report::Unknown { event } => Self::Unknown { event: event.get() },
+            Report::Abandoned { event } => Self::Abandoned { event: event.get() },
             Report::Action { event, message } => Self::Action {
                 event: event.get(),
                 message,

@@ -52,6 +52,7 @@ impl Arbiter for Scripted {
             return Batch {
                 decisions: Vec::new(),
                 failure: Some(ArbiterError::new("the fixture was told to fail")),
+                ..Batch::default()
             };
         }
 

@@ -76,8 +76,9 @@ impl Log {
 ///
 /// A recorded round is released only when the host's clock has reached the tick
 /// it was applied at, so a round that originally landed later lands later again.
-/// An event with no recorded round is never answered: the instance stays parked,
-/// exactly as it did on the original run.
+/// An event the recording never finishes is reported as abandoned: the replay
+/// holds the whole script, so it knows no later round is coming and the host can
+/// settle the ticket instead of waiting for it forever.
 pub struct Replay {
     path: PathBuf,
     script: HashMap<u64, VecDeque<Record>>,
@@ -158,21 +159,24 @@ impl Replay {
 
 impl Arbiter for Replay {
     fn deliver(&mut self, event: InterruptEvent) {
-        if self.script.contains_key(&event.event.get()) {
-            self.live.push(event.event);
-        } else {
+        if !self.script.contains_key(&event.event.get()) {
             self.stats.orphans.set(self.stats.orphans.get() + 1);
         }
+        self.live.push(event.event);
     }
 
     fn take(&mut self, now: u64) -> Batch {
         let mut decisions = Vec::new();
-        let mut finished = Vec::new();
+        let mut abandoned = Vec::new();
+        let mut settled = Vec::new();
 
         for event in &self.live {
             let Some(rounds) = self.script.get_mut(&event.get()) else {
+                abandoned.push(*event);
+                settled.push(*event);
                 continue;
             };
+            let mut finished = false;
             while let Some(record) = rounds.front() {
                 if record.tick > now {
                     break;
@@ -190,14 +194,24 @@ impl Arbiter for Replay {
                     },
                 });
                 if done {
-                    finished.push(*event);
+                    finished = true;
                     break;
                 }
             }
+            if finished {
+                settled.push(*event);
+            } else if rounds.is_empty() {
+                abandoned.push(*event);
+                settled.push(*event);
+            }
         }
 
-        self.live.retain(|event| !finished.contains(event));
-        Batch::from(decisions)
+        self.live.retain(|event| !settled.contains(event));
+        Batch {
+            decisions,
+            abandoned,
+            ..Batch::default()
+        }
     }
 }
 
@@ -361,7 +375,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unrecorded_interrupt_stays_parked() {
+    fn an_unrecorded_interrupt_is_abandoned_rather_than_answered() {
         let root = scratch("orphan");
         let path = root.join("run.jsonl");
         Log::create(&path).expect("the log is created");
@@ -369,8 +383,44 @@ mod tests {
         let mut replay = Replay::load(&path).expect("the log is read");
         replay.deliver(event(7));
 
-        assert!(replay.take(100).decisions.is_empty());
+        let batch = replay.take(100);
+        assert!(
+            batch.decisions.is_empty(),
+            "the replay cannot invent a ruling"
+        );
+        assert_eq!(
+            batch.abandoned,
+            vec![EventId::new(7)],
+            "but it knows no round is coming, so the host can settle the ticket"
+        );
         assert_eq!(replay.orphans(), 1);
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_recording_that_ends_mid_event_abandons_it() {
+        let root = scratch("orphan-unfinished");
+        let path = root.join("run.jsonl");
+        let mut log = Log::create(&path).expect("the log is created");
+        log.write(&Record::new(
+            EventId::new(2),
+            0,
+            &ruling(Completion::Unfinished),
+        ))
+        .expect("the round is written");
+        drop(log);
+
+        let mut replay = Replay::load(&path).expect("the log is read");
+        replay.deliver(event(2));
+
+        let first = replay.take(0);
+        assert_eq!(first.decisions.len(), 1, "the recorded round is released");
+        assert_eq!(
+            first.abandoned,
+            vec![EventId::new(2)],
+            "the script ends without a verdict, so no later round can arrive"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }
