@@ -332,7 +332,7 @@ pub trait Arbiter {
 | 打包 | 机制 | 状态 |
 |---|---|---|
 | linked | 实现 `Arbiter`，直接返回 `Batch` | 已实现 |
-| dylib | `csp_arbiter_v1`，与 backend ABI 同构的 `create/destroy/call/last_error` | 已实现 |
+| dylib | `csp_arbiter_v1`，与 backend 共用 `cyberspine-plugin` 的同一张 `create/destroy/call/last_error` 表 | 已实现 |
 | rpc | 独立于 body 的连接 + 工作线程；`deliver` 投递、`take` 收裁决 | 已实现 |
 
 三类协议共享 [`cyberspine-frame`](../crates/cyberspine-frame/src/lib.rs) 的 12 字节帧头，
@@ -457,7 +457,7 @@ cyinevm -i interrupt.csp --replay run.jsonl --trace
 | 渲染、票据、`resolve` / `unload` / `parked`、静默 | [`crates/cyberspine-vm/src/host.rs`](../crates/cyberspine-vm/src/host.rs) |
 | 裁决流、`InterruptEvent` / `Ruling` / `Action` / `Batch` / `Arbiter` | [`crates/cyberspine-arbiter/src/lib.rs`](../crates/cyberspine-arbiter/src/lib.rs) |
 | 帧头（`CSPB` / `CSPA` 共用） | [`crates/cyberspine-frame/src/lib.rs`](../crates/cyberspine-frame/src/lib.rs) |
-| ABI、dylib、rpc、线上消息 | [`crates/cyberspine-arbiter/src/`](../crates/cyberspine-arbiter/src/) 的 `abi.rs` / `dylib.rs` / `rpc.rs` / `wire.rs` |
+| ABI、dylib、rpc、线上消息 | [`crates/cyberspine-plugin/src/`](../crates/cyberspine-plugin/src/) 的 `abi.rs` / `dylib.rs` / `rpc.rs`、[`server.rs`](../crates/cyberspine-plugin/src/server.rs)；arbiter 的消息在 [`crates/cyberspine-arbiter/src/wire.rs`](../crates/cyberspine-arbiter/src/wire.rs) |
 | 在途票据表、`failure` 兜底、动作应用 | [`crates/cyberspine-host/src/interrupts.rs`](../crates/cyberspine-host/src/interrupts.rs) |
 | 实例表（`InstanceId` ↔ `InstanceRef`） | [`crates/cyberspine-host/src/registry.rs`](../crates/cyberspine-host/src/registry.rs) |
 | 宿主观测流 `Report` | [`crates/cyberspine-host/src/report.rs`](../crates/cyberspine-host/src/report.rs) |
