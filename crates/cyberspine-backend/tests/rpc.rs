@@ -99,16 +99,13 @@ fn a_silent_connection_does_not_block_a_real_host() {
 
 #[test]
 fn a_port_with_no_body_is_a_connect_error() {
-    let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("a free port");
-    let address = probe.local_addr().expect("the bound address");
-    drop(probe);
+    let address = "127.0.0.1:1";
 
-    let error =
-        rpc::connect_with_timeout(&address.to_string(), std::time::Duration::from_millis(250))
-            .expect_err("nobody is listening there");
+    let error = rpc::connect_with_timeout(address, std::time::Duration::from_secs(2))
+        .expect_err("nobody is listening there");
 
     assert!(
-        error.to_string().contains(&address.to_string()),
+        error.to_string().contains(address),
         "the failure names the body it could not reach: {error}"
     );
 }

@@ -12,13 +12,17 @@
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
+use std::time::Duration;
 
 use cyberspine_asm::assembler::{generate_image, generate_image_debug, parse};
 use cyberspine_core::binfmt::image::Image;
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::rig::Rig;
 use cyberspine_testkit::scratch_dir;
+
+/// A run that needs longer than this is a hang, not a slow test.
+const RUN_LIMIT: Duration = Duration::from_secs(30);
 
 /// The input was understood and rejected (`docs/diagnostics.md`).
 const REJECTED: i32 = 3;
@@ -84,10 +88,11 @@ fn write_file(dir: &Path, name: &str, text: &str) -> PathBuf {
 }
 
 fn run(args: Vec<&OsStr>) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_cyinea"))
-        .args(args)
-        .output()
-        .expect("the cyinea binary should run")
+    cyberspine_testkit::run_within(
+        OsStr::new(env!("CARGO_BIN_EXE_cyinea")),
+        &args,
+        std::time::Duration::from_secs(30),
+    )
 }
 
 fn stderr(output: &Output) -> String {
@@ -252,16 +257,17 @@ fn a_bare_output_name_lands_in_the_working_directory() {
 
     // `-o out.csp` has no parent directory at all, which is the one path where
     // the temporary file's parent has to default to `.`.
-    let output = Command::new(env!("CARGO_BIN_EXE_cyinea"))
-        .current_dir(&dir)
-        .args([
+    let output = cyberspine_testkit::run_in(
+        Some(&dir),
+        OsStr::new(env!("CARGO_BIN_EXE_cyinea")),
+        &[
             OsStr::new("-a"),
             source.as_os_str(),
             OsStr::new("-o"),
             OsStr::new("out.csp"),
-        ])
-        .output()
-        .expect("the cyinea binary should run");
+        ],
+        RUN_LIMIT,
+    );
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(dir.join("out.csp").exists());
@@ -283,11 +289,12 @@ fn a_relative_manifest_is_resolved_against_the_source_not_the_cwd() {
     write_file(&dir, "greet.rig.json", MANIFEST);
     let elsewhere = scratch("relative-manifest-cwd");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_cyinea"))
-        .current_dir(&elsewhere)
-        .args([OsStr::new("-a"), source.as_os_str()])
-        .output()
-        .expect("the cyinea binary should run");
+    let output = cyberspine_testkit::run_in(
+        Some(&elsewhere),
+        OsStr::new(env!("CARGO_BIN_EXE_cyinea")),
+        &[OsStr::new("-a"), source.as_os_str()],
+        RUN_LIMIT,
+    );
 
     assert!(output.status.success(), "stderr: {}", stderr(&output));
     assert!(dir.join("greet.csp").exists(), "next to the `.csa`");
@@ -647,4 +654,16 @@ fn json_diagnostics_are_one_object_per_line() {
             source.display().to_string()
         );
     }
+}
+
+#[test]
+fn the_help_text_is_the_cli_contract() {
+    let output = run(vec![OsStr::new("--help")]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    // The usage line carries the file name the platform produced; the contract
+    // is the command name.
+    let help = stdout(&output).replace("cyinea.exe", "cyinea");
+    insta::assert_snapshot!("help", help);
 }

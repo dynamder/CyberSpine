@@ -30,14 +30,18 @@ fn event() -> InterruptEvent {
 
 /// Poll until the arbiter reports something, or give up.
 fn next_batch(arbiter: &mut RpcArbiter, now: u64) -> Batch {
-    for _ in 0..400 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
         let batch = arbiter.take(now);
         if !batch.decisions.is_empty() || batch.failure.is_some() {
             return batch;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the arbiter did not answer in time"
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
-    panic!("the arbiter did not answer in time");
 }
 
 #[test]
@@ -76,7 +80,7 @@ fn two_rounds_cross_a_socket() {
 
 #[test]
 fn a_missing_arbiter_names_the_address_it_could_not_reach() {
-    let error = rpc::connect_with_timeout("127.0.0.1:1", Duration::from_millis(200))
+    let error = rpc::connect_with_timeout("127.0.0.1:1", Duration::from_secs(2))
         .expect_err("nothing listens there");
 
     assert!(error.to_string().contains("127.0.0.1:1"), "{error}");

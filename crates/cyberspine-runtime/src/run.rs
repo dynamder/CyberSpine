@@ -148,6 +148,10 @@ impl Error {
     pub fn class(&self) -> u8 {
         match self {
             Self::NoImage | Self::Load { .. } => EXIT_REJECTED,
+            Self::Image { source, .. } => match source {
+                LoadFileError::Io { .. } => EXIT_ENVIRONMENT,
+                LoadFileError::FileTooLarge { .. } | LoadFileError::Image(_) => EXIT_REJECTED,
+            },
             Self::Faulted(_) => EXIT_FAULTED,
             _ => EXIT_ENVIRONMENT,
         }

@@ -1,0 +1,11 @@
+[alias]
+xtask = "run --package xtask --"
+
+# MSVC's linker writes `lnk{GUID}.tmp` into `%TEMP%` and fails with LNK1104 when
+# that directory is not writable by the build (a sandbox, a locked-down profile,
+# or a cleaner that removes it mid-link). Keeping the temporary files inside the
+# target directory makes a build depend only on the checkout.
+[env]
+TMP = { value = "target", relative = true, force = true }
+TEMP = { value = "target", relative = true, force = true }
+TMPDIR = { value = "target", relative = true, force = true }

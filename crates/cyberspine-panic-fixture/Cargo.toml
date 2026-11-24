@@ -1,0 +1,18 @@
+[package]
+name = "cyberspine-panic-fixture"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# The rlib half names the rig the tests assemble for; the cdylib half is the
+# artifact they load. A panic cannot be a flag on a working body: `export!`
+# fixes the body type, and one crate ships one body.
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+cyberspine-backend = { path = "../cyberspine-backend", default-features = false, features = ["export"] }
+cyberspine-rig = { path = "../cyberspine-rig" }
+cyberspine-vm = { path = "../cyberspine-vm" }

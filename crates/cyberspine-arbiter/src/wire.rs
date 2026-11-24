@@ -197,3 +197,13 @@ mod tests {
         assert_eq!(decoded, rulings);
     }
 }
+
+#[cfg(test)]
+mod limits {
+    use super::MAX_TEXT_LEN;
+
+    #[test]
+    fn the_documented_text_cap_is_four_kibibytes() {
+        assert_eq!(MAX_TEXT_LEN, 4 << 10, "docs/interrupt.md §7");
+    }
+}
