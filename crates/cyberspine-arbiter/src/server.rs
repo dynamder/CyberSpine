@@ -12,7 +12,6 @@ pub struct Server<A: Arbiter> {
     arbiter: A,
     build_id: String,
     reply: Vec<u8>,
-    last_seq: Option<u64>,
 }
 
 impl<A: Arbiter> Server<A> {
@@ -21,7 +20,6 @@ impl<A: Arbiter> Server<A> {
             arbiter,
             build_id,
             reply: Vec::new(),
-            last_seq: None,
         }
     }
 
@@ -38,9 +36,9 @@ impl<A: Arbiter> Server<A> {
     /// The returned slice is the reply frame, borrowed from the server's reusable
     /// buffer: copy it out before the next call. Every refusal comes back as a
     /// `Failure` frame, so a transport never has to invent a message.
-    pub fn answer(&mut self, request: &[u8]) -> &[u8] {
+    pub fn answer(&mut self, connection: &mut Connection, request: &[u8]) -> &[u8] {
         let refusal = match wire::split(request) {
-            Ok((kind, payload)) => self.dispatch(kind, payload),
+            Ok((kind, payload)) => self.dispatch(connection, kind, payload),
             Err(error) => Err(protocol(error.to_string())),
         };
 
@@ -54,7 +52,12 @@ impl<A: Arbiter> Server<A> {
         }
     }
 
-    fn dispatch(&mut self, kind: Kind, payload: &[u8]) -> Result<(), Failure> {
+    fn dispatch(
+        &mut self,
+        connection: &mut Connection,
+        kind: Kind,
+        payload: &[u8],
+    ) -> Result<(), Failure> {
         match kind {
             Kind::Hello => {
                 let hello: Hello = wire::decode(payload).map_err(protocol_error)?;
@@ -74,10 +77,9 @@ impl<A: Arbiter> Server<A> {
 
             Kind::Tick => {
                 let tick: Tick = wire::decode(payload).map_err(protocol_error)?;
-                if Some(tick.seq) == self.last_seq {
+                if connection.is_repeated(tick.seq) {
                     return Ok(());
                 }
-                self.last_seq = Some(tick.seq);
                 for event in tick.events {
                     self.arbiter.deliver(event);
                 }
@@ -101,6 +103,27 @@ impl<A: Arbiter> Server<A> {
 
             Kind::Error => Err(protocol("a Failure is a reply, not a request".to_owned())),
         }
+    }
+}
+
+/// One transport's session with this server.
+///
+/// Deduplication belongs here, not on the [`Server`]: a host's `seq` restarts at
+/// 0 every time it connects, so a cursor kept by the server would hand a fresh
+/// host the reply the previous host was waiting for.
+#[derive(Debug, Default)]
+pub struct Connection {
+    last_seq: Option<u64>,
+}
+
+impl Connection {
+    /// Whether this is the frame the previous reply was built from.
+    fn is_repeated(&mut self, seq: u64) -> bool {
+        if self.last_seq == Some(seq) {
+            return true;
+        }
+        self.last_seq = Some(seq);
+        false
     }
 }
 

@@ -48,12 +48,13 @@ macro_rules! export_arbiter {
             use ::std::ptr;
 
             use $crate::abi::{self, AbiV1, status};
-            use $crate::server::Server;
+            use $crate::server::{Connection, Server};
 
             const BUILD_ID: &str = $build_id;
 
             struct Handle {
                 server: Option<Server<$arbiter>>,
+                connection: Connection,
                 error: Option<CString>,
             }
 
@@ -79,7 +80,11 @@ macro_rules! export_arbiter {
                     Ok(server) => (Some(server), None),
                     Err(payload) => (None, Some(panic_text(payload))),
                 };
-                Box::into_raw(Box::new(Handle { server, error })) as *mut c_void
+                Box::into_raw(Box::new(Handle {
+                    server,
+                    connection: Connection::default(),
+                    error,
+                })) as *mut c_void
             }
 
             unsafe extern "C" fn destroy(arbiter: *mut c_void) {
@@ -119,7 +124,7 @@ macro_rules! export_arbiter {
                 };
 
                 let outcome = catch_unwind(AssertUnwindSafe(|| {
-                    let reply = server.answer(request);
+                    let reply = server.answer(&mut handle.connection, request);
                     if reply.len() > response_cap {
                         return Err(reply.len());
                     }

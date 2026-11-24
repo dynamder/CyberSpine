@@ -32,5 +32,5 @@ pub mod export;
 pub mod rpc;
 
 pub use remote::{RemoteBody, Transport};
-pub use server::Server;
+pub use server::{Connection, Server};
 pub use spec::{BackendSpec, SpecError};

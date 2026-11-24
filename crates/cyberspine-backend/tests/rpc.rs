@@ -72,6 +72,31 @@ fn a_manifest_that_disagrees_with_the_body_never_gets_to_listen() {
     assert!(error.to_string().contains("manifest"), "{error}");
 }
 
+/// A connection that says nothing must not own the body.
+#[test]
+fn a_silent_connection_does_not_block_a_real_host() {
+    let (address, _server) = rpc::spawn(
+        "127.0.0.1:0",
+        body::Fixture::new(),
+        body::RIG_JSON.to_owned(),
+        "test".to_owned(),
+    )
+    .expect("the server binds");
+
+    // A host that connects and never speaks, or a socket that was partitioned.
+    let silent = std::net::TcpStream::connect(address).expect("the raw connection lands");
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let remote = rpc::connect_with_timeout(&address.to_string(), std::time::Duration::from_secs(2))
+        .expect("the body answers while another connection is silent");
+    assert_eq!(
+        trace(Host::new(remote)),
+        trace(Host::new(body::Fixture::new()))
+    );
+
+    drop(silent);
+}
+
 #[test]
 fn a_port_with_no_body_is_a_connect_error() {
     let address = "127.0.0.1:1";

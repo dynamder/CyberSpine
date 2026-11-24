@@ -85,3 +85,53 @@ fn a_missing_arbiter_names_the_address_it_could_not_reach() {
 
     assert!(error.to_string().contains("127.0.0.1:1"), "{error}");
 }
+
+/// A connection that says nothing must not own the service.
+#[test]
+fn a_silent_connection_does_not_block_the_next_host() {
+    let (address, _thread) = rpc::spawn(
+        "127.0.0.1:0",
+        Scripted::new(None),
+        "fixture/over-tcp".to_owned(),
+    )
+    .expect("the listener binds");
+
+    // A host that connects and never speaks, or a socket that was partitioned:
+    // the server must not park on it.
+    let silent = std::net::TcpStream::connect(address).expect("the raw connection lands");
+    std::thread::sleep(Duration::from_millis(50));
+
+    let mut arbiter = rpc::connect_with_timeout(&address.to_string(), Duration::from_secs(2))
+        .expect("a second host is served while the first is silent");
+    arbiter.deliver(event());
+
+    let batch = next_batch(&mut arbiter, 0);
+    assert_eq!(batch.decisions.len(), 1, "the second host was served");
+
+    drop(silent);
+}
+
+/// Two live hosts, served at the same time: the first one's connection stays
+/// open while the second is answered.
+#[test]
+fn a_second_host_is_served_while_the_first_is_connected() {
+    let (address, _thread) = rpc::spawn(
+        "127.0.0.1:0",
+        Scripted::new(None),
+        "fixture/over-tcp".to_owned(),
+    )
+    .expect("the listener binds");
+
+    let mut first = rpc::connect_with_timeout(&address.to_string(), Duration::from_secs(2))
+        .expect("the first host connects");
+    first.deliver(event());
+    assert_eq!(next_batch(&mut first, 0).decisions.len(), 1);
+
+    let mut second = rpc::connect_with_timeout(&address.to_string(), Duration::from_secs(2))
+        .expect("a second host connects while the first is still open");
+    second.deliver(event());
+    assert_eq!(next_batch(&mut second, 0).decisions.len(), 1);
+
+    drop(first);
+    drop(second);
+}

@@ -10,6 +10,7 @@
 //! happens, never what it contains (`docs/isa.md` §9.4).
 
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -19,7 +20,7 @@ use tokio::runtime::{Builder, Handle, Runtime};
 use cyberspine_vm::{Backend, BackendError};
 
 use crate::remote::{RemoteBody, Transport};
-use crate::server::Server;
+use crate::server::{Connection, Server};
 use crate::wire::{self, HEADER_LEN};
 
 /// How long one exchange may take before the body is declared gone.
@@ -160,50 +161,86 @@ pub fn serve<B: Backend + Send + 'static>(
     }
 }
 
-async fn accept_loop<B: Backend>(
+/// How long a connection may say nothing before it is presumed gone.
+///
+/// A host sends a frame every tick, so a minute of silence is a half-open socket
+/// or a client that never intended to speak; either way the task should not
+/// outlive it.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How long to wait after a failed `accept`, so a listener that cannot accept
+/// (no descriptors, say) does not spin.
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
+
+async fn accept_loop<B: Backend + Send + 'static>(
     listener: TcpListener,
-    mut server: Server<B>,
+    server: Server<B>,
 ) -> Result<(), BackendError> {
+    // The body is shared; the connection state is not. Every host that connects
+    // gets its own task and its own sequence cursor.
+    let server = Arc::new(Mutex::new(server));
     loop {
-        let (stream, peer) = listener.accept().await.map_err(BackendError::new)?;
-        if let Err(error) = answer(stream, &mut server).await {
-            eprintln!("csp: the connection from {peer} ended: {error}");
-        }
+        let (stream, peer) = match listener.accept().await {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                // A failed accept — a peer that reset between SYN and accept, a
+                // descriptor limit — is about one connection, not the service.
+                eprintln!("csp: accept failed: {error}");
+                tokio::time::sleep(ACCEPT_BACKOFF).await;
+                continue;
+            }
+        };
+
+        let server = Arc::clone(&server);
+        tokio::spawn(async move {
+            if let Err(error) = answer(stream, server).await {
+                eprintln!("csp: the connection from {peer} ended: {error}");
+            }
+        });
     }
 }
 
 async fn answer<B: Backend>(
     mut stream: TcpStream,
-    server: &mut Server<B>,
+    server: Arc<Mutex<Server<B>>>,
 ) -> Result<(), BackendError> {
     stream.set_nodelay(true).map_err(BackendError::new)?;
+    let mut connection = Connection::default();
     let mut frame = Vec::new();
 
     loop {
         let mut header = [0u8; HEADER_LEN];
-        let read = stream
-            .read(&mut header[..1])
+        let read = tokio::time::timeout(IDLE_TIMEOUT, stream.read(&mut header[..1]))
             .await
+            .map_err(|_| quiet())?
             .map_err(BackendError::new)?;
         if read == 0 {
             return Ok(());
         }
-        stream
-            .read_exact(&mut header[1..])
+        tokio::time::timeout(IDLE_TIMEOUT, stream.read_exact(&mut header[1..]))
             .await
+            .map_err(|_| quiet())?
             .map_err(BackendError::new)?;
 
         let head = wire::parse_header(&header).map_err(BackendError::new)?;
         frame.clear();
         frame.extend_from_slice(&header);
         frame.resize(HEADER_LEN + head.len, 0);
-        stream
-            .read_exact(&mut frame[HEADER_LEN..])
+        tokio::time::timeout(IDLE_TIMEOUT, stream.read_exact(&mut frame[HEADER_LEN..]))
             .await
+            .map_err(|_| quiet())?
             .map_err(BackendError::new)?;
 
-        let reply = server.answer(&frame);
-        stream.write_all(reply).await.map_err(BackendError::new)?;
+        let reply = server
+            .lock()
+            .expect("the body lock is not poisoned")
+            .answer(&mut connection, &frame)
+            .to_vec();
+        stream.write_all(&reply).await.map_err(BackendError::new)?;
         stream.flush().await.map_err(BackendError::new)?;
     }
+}
+
+fn quiet() -> BackendError {
+    BackendError::message(format!("no frame for {}s", IDLE_TIMEOUT.as_secs()))
 }

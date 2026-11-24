@@ -42,7 +42,7 @@ pub mod export;
 pub mod rpc;
 
 pub use remote::{RemoteArbiter, Transport};
-pub use server::Server;
+pub use server::{Connection, Server};
 pub use spec::{ArbiterSpec, SpecError};
 
 #[cfg(feature = "rpc")]

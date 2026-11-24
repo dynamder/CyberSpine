@@ -38,9 +38,6 @@ pub struct Server<B: Backend> {
     muscles: Vec<f32>,
     commands: Vec<Option<f32>>,
     reply: Vec<u8>,
-    /// The request sequence last executed, so a transport buffer retry does not
-    /// run `Commit` / `Step` a second time.
-    last_seq: Option<u32>,
 }
 
 impl<B: Backend> Server<B> {
@@ -73,7 +70,6 @@ impl<B: Backend> Server<B> {
             muscles: vec![0.0; shape.muscles],
             commands: vec![None; shape.muscles],
             reply: Vec::new(),
-            last_seq: None,
             body,
             rig,
             build_id,
@@ -95,9 +91,9 @@ impl<B: Backend> Server<B> {
     /// buffer: copy it out before the next call. Every refusal — a bad frame, a
     /// body error, an unexpected kind — comes back as a `Failure` frame, so a
     /// transport never has to invent a message.
-    pub fn answer(&mut self, request: &[u8]) -> &[u8] {
+    pub fn answer(&mut self, connection: &mut Connection, request: &[u8]) -> &[u8] {
         let refusal = match wire::split(request) {
-            Ok((kind, payload)) => self.dispatch(kind, payload),
+            Ok((kind, payload)) => self.dispatch(connection, kind, payload),
             Err(error) => Err(Failure {
                 seq: 0,
                 code: wire::code::PROTOCOL,
@@ -115,7 +111,12 @@ impl<B: Backend> Server<B> {
         }
     }
 
-    fn dispatch(&mut self, kind: Kind, payload: &[u8]) -> Result<(), Failure> {
+    fn dispatch(
+        &mut self,
+        connection: &mut Connection,
+        kind: Kind,
+        payload: &[u8],
+    ) -> Result<(), Failure> {
         match kind {
             Kind::Hello => {
                 let hello: Hello = wire::decode(payload).map_err(protocol)?;
@@ -140,7 +141,7 @@ impl<B: Backend> Server<B> {
 
             Kind::Sample => {
                 let request: Sample = wire::decode(payload).map_err(protocol)?;
-                if self.seen(request.seq) {
+                if connection.is_repeated(request.seq) {
                     return Ok(());
                 }
                 let mut snapshot = Snapshot {
@@ -163,7 +164,7 @@ impl<B: Backend> Server<B> {
 
             Kind::Commit => {
                 let request: Commit = wire::decode(payload).map_err(protocol)?;
-                if self.seen(request.seq) {
+                if connection.is_repeated(request.seq) {
                     return Ok(());
                 }
                 wire::validate_commit(&request, self.shape.muscles).map_err(protocol)?;
@@ -179,7 +180,7 @@ impl<B: Backend> Server<B> {
 
             Kind::Step => {
                 let request: Step = wire::decode(payload).map_err(protocol)?;
-                if self.seen(request.seq) {
+                if connection.is_repeated(request.seq) {
                     return Ok(());
                 }
                 self.body
@@ -196,14 +197,24 @@ impl<B: Backend> Server<B> {
             }),
         }
     }
+}
 
-    /// Whether this request was already executed.
-    ///
-    /// The ABI reports a too-small reply buffer *after* running the request, so a
-    /// transport that retries would step the body twice. Sequence numbers make
-    /// the retry a lookup instead of a second execution; the reply it wants is
-    /// still in `self.reply`.
-    fn seen(&mut self, seq: u32) -> bool {
+/// One transport's session with this server.
+///
+/// The retry that needs deduplication is a *transport buffer* retry: the ABI
+/// reports a too-small reply buffer after running the request, so the caller
+/// re-sends the same frame. That is a fact about one connection — a TCP client
+/// numbers its requests from 1 again every time it connects — so the cursor
+/// lives here and not on the [`Server`].
+#[derive(Debug, Default)]
+pub struct Connection {
+    last_seq: Option<u32>,
+}
+
+impl Connection {
+    /// Whether this request was already executed. The reply it wants is still in
+    /// the server's buffer.
+    fn is_repeated(&mut self, seq: u32) -> bool {
         if self.last_seq == Some(seq) {
             return true;
         }
