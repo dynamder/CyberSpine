@@ -4,21 +4,22 @@
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Output;
+use std::time::Duration;
 
 use cyberspine_asm::assembler::{generate_image, generate_image_debug, parse};
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::rig::Rig;
 use cyberspine_testkit::scratch_dir;
 
+/// A run that needs longer than this is a hang, not a slow test.
+const RUN_LIMIT: Duration = Duration::from_secs(30);
+
 /// The input was understood and rejected (`docs/diagnostics.md` §6).
 const REJECTED: i32 = 3;
 /// An instance faulted.
 const FAULTED: i32 = 4;
-/// The environment failed: a file, a body or an arbiter. Only the tests that
-/// build without a backend feature use it.
-#[cfg(any(not(feature = "dylib"), not(feature = "rpc")))]
+/// The environment failed: a file, a body or an arbiter.
 const ENVIRONMENT: i32 = 5;
 
 const MANIFEST: &str = r#"{
@@ -126,35 +127,7 @@ fn write_debug_image(dir: &Path, name: &str, source: &str, manifest: &str) -> Pa
 }
 
 fn run(args: Vec<&OsStr>) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_cyinevm"))
-        .args(args)
-        .output()
-        .expect("the cyinevm binary should run")
-}
-
-/// Run the binary, but never let the test hang on it: the stop condition itself
-/// is what one of these tests is about.
-fn run_within(args: Vec<&OsStr>, limit: Duration) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_cyinevm"))
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("the cyinevm binary should spawn");
-
-    let deadline = Instant::now() + limit;
-    loop {
-        if child.try_wait().expect("the child is waitable").is_some() {
-            return child.wait_with_output().expect("the run is collected");
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("the run did not stop within {limit:?}");
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    cyberspine_testkit::run_within(OsStr::new(env!("CARGO_BIN_EXE_cyinevm")), &args, RUN_LIMIT)
 }
 
 fn stderr(output: &Output) -> String {
@@ -321,10 +294,10 @@ fn until_halt_stops_when_the_instance_is_gone() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
 }
 
-/// `docs/runtime.md` §1: an image that cannot be read is a rejected input, and
-/// the report is still written — a terminal record for every exit code.
+/// `docs/runtime.md` §1: a file that cannot be read is an environment failure,
+/// and the report is still written — a terminal record for every exit code.
 #[test]
-fn a_missing_image_is_a_rejected_input_with_a_report() {
+fn a_missing_image_is_an_environment_failure_with_a_report() {
     let dir = scratch("missing-image");
     let missing = dir.join("absent.csp");
 
@@ -339,7 +312,7 @@ fn a_missing_image_is_a_rejected_input_with_a_report() {
 
     assert_eq!(
         output.status.code(),
-        Some(REJECTED),
+        Some(ENVIRONMENT),
         "stderr: {}",
         stderr(&output)
     );
@@ -349,9 +322,34 @@ fn a_missing_image_is_a_rejected_input_with_a_report() {
         stderr(&output)
     );
     assert!(
-        stdout(&output).contains("\"outcome\":\"rejected\""),
+        stdout(&output).contains("\"outcome\":\"environment\""),
         "the failed run still reports its outcome: {}",
         stdout(&output)
+    );
+}
+
+#[test]
+fn a_corrupt_image_is_rejected_not_an_environment_failure() {
+    let dir = scratch("corrupt-image");
+    let path = dir.join("corrupt.csp");
+    fs::write(&path, b"not an image").expect("the file is written");
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        path.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("0"),
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(REJECTED),
+        "docs/runtime.md §1: a file that reads but is not an image is rejected",
+    );
+    assert!(
+        stderr(&output).contains("binfmt."),
+        "the loader names the rule: {}",
+        stderr(&output)
     );
 }
 
@@ -784,53 +782,77 @@ fn a_decision_log_replays_the_same_run() {
     );
 }
 
-#[cfg(feature = "dylib")]
-fn arbiter_fixture() -> &'static PathBuf {
-    use std::sync::OnceLock;
+/// `docs/interrupt.md` §7.6: an event the recording never answers is settled
+/// with the fallback verdict, so `--until-halt` against a shorter recording
+/// ends instead of waiting for a round that cannot arrive.
+#[test]
+fn until_halt_ends_when_the_replay_has_no_round() {
+    let dir = scratch("until-halt-orphan");
+    let image = write_image(&dir, "two.csp", TWO_INTERRUPTS, MANIFEST);
+    let replay = dir.join("run.jsonl");
+    fs::write(
+        &replay,
+        "{\"event\":0,\"tick\":0,\"actions\":[],\"completion\":{\"finished\":\"continue\"}}\n",
+    )
+    .expect("the recording is written");
 
-    static PATH: OnceLock<PathBuf> = OnceLock::new();
-    PATH.get_or_init(|| {
-        let output = Command::new(env!("CARGO"))
-            .args([
-                "build",
-                "-p",
-                "cyberspine-arbiter-fixture",
-                "--message-format=json",
-                "--offline",
-            ])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .output()
-            .expect("cargo runs");
-        assert!(
-            output.status.success(),
-            "cargo could not build the fixture:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
-            let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
-                continue;
-            };
-            if record["reason"] != "compiler-artifact" {
-                continue;
-            }
-            if !record["package_id"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("cyberspine-arbiter-fixture")
-            {
-                continue;
-            }
-            for file in record["filenames"].as_array().into_iter().flatten() {
-                let path = PathBuf::from(file.as_str().unwrap_or_default());
-                if path.extension().and_then(|ext| ext.to_str())
-                    == Some(std::env::consts::DLL_EXTENSION)
-                {
-                    return path;
-                }
-            }
-        }
-        panic!("cargo did not report a shared library for the fixture");
-    })
+    let output = cyberspine_testkit::run_within(
+        OsStr::new(env!("CARGO_BIN_EXE_cyinevm")),
+        &[
+            OsStr::new("-i"),
+            image.as_os_str(),
+            OsStr::new("--until-halt"),
+            OsStr::new("--replay"),
+            replay.as_os_str(),
+            OsStr::new("-q"),
+        ],
+        Duration::from_secs(10),
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stderr(&output).contains("rt.replay-orphan"),
+        "the round the recording lacks is reported: {}",
+        stderr(&output)
+    );
+}
+
+/// `docs/runtime.md` §1: an arbiter that stops adjudicating is an environment
+/// failure, even though the host keeps the run going on the fallback verdict.
+#[cfg(feature = "dylib")]
+#[test]
+fn an_arbiter_that_fails_mid_run_exits_five() {
+    let dir = scratch("arbiter-failure");
+    let image = write_image(&dir, "interrupt.csp", INTERRUPT_WITH_FAILURE, MANIFEST);
+    let spec = format!("dylib:{}", arbiter_fixture().display());
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--interrupt"),
+        OsStr::new(&spec),
+        OsStr::new("--ticks"),
+        OsStr::new("4"),
+        OsStr::new("--unpaced"),
+        OsStr::new("--quiet"),
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(ENVIRONMENT),
+        "the run continued on the fallback but is not a success: stderr: {}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("the fixture was told to fail"),
+        "the failure is reported: {}",
+        stderr(&output)
+    );
+}
+
+#[cfg(feature = "dylib")]
+fn arbiter_fixture() -> PathBuf {
+    cyberspine_testkit::fixture_library("cyberspine-arbiter-fixture")
 }
 
 #[cfg(feature = "dylib")]
@@ -859,73 +881,49 @@ fn a_dylib_arbiter_rules_in_two_rounds() {
     );
 }
 
-/// `docs/interrupt.md` §7.6: an event the recording never answers is settled
-/// with the fallback verdict, so `--until-halt` against a shorter recording
-/// ends instead of waiting for a round that cannot arrive.
-#[test]
-fn until_halt_ends_when_the_replay_has_no_round() {
-    let dir = scratch("until-halt-orphan");
-    let image = write_image(&dir, "two.csp", TWO_INTERRUPTS, MANIFEST);
-    let replay = dir.join("run.jsonl");
-    fs::write(
-        &replay,
-        "{\"event\":0,\"tick\":0,\"actions\":[],\"completion\":{\"finished\":\"continue\"}}\n",
-    )
-    .expect("the recording is written");
-
-    let output = run_within(
-        vec![
-            OsStr::new("-i"),
-            image.as_os_str(),
-            OsStr::new("--until-halt"),
-            OsStr::new("--replay"),
-            replay.as_os_str(),
-            OsStr::new("-q"),
-        ],
-        Duration::from_secs(10),
-    );
-
-    assert!(output.status.success(), "stderr: {}", stderr(&output));
-    assert!(
-        stderr(&output).contains("rt.replay-orphan"),
-        "the round the recording lacks is reported: {}",
-        stderr(&output)
-    );
-}
-
-/// `docs/runtime.md` §1: an arbiter that stops adjudicating is an environment
-/// failure, even though the host keeps the run going on the fallback verdict.
+/// A body that panics is the environment failing, not the program faulting: the
+/// exit class says "this run could not be carried out" (`docs/runtime.md` §1),
+/// and the panic guard turns the failure into a message instead of an abort.
 #[cfg(feature = "dylib")]
 #[test]
-fn an_arbiter_that_fails_mid_run_exits_five() {
-    const ENVIRONMENT_FAILURE: i32 = 5;
-
-    let dir = scratch("arbiter-failure");
-    let image = write_image(&dir, "interrupt.csp", INTERRUPT_WITH_FAILURE, MANIFEST);
-    let spec = format!("dylib:{}", arbiter_fixture().display());
+fn a_panicking_body_fails_the_run_as_the_environment() {
+    let dir = scratch("dylib-panic");
+    let image = write_image(&dir, "halt.csp", HALT, cyberspine_panic_fixture::RIG_JSON);
+    let spec = format!(
+        "dylib:{}",
+        cyberspine_testkit::fixture_library("cyberspine-panic-fixture").display()
+    );
 
     let output = run(vec![
         OsStr::new("-i"),
         image.as_os_str(),
-        OsStr::new("--interrupt"),
+        OsStr::new("-b"),
         OsStr::new(&spec),
         OsStr::new("--ticks"),
-        OsStr::new("4"),
+        OsStr::new("1"),
         OsStr::new("--unpaced"),
-        OsStr::new("--quiet"),
+        OsStr::new("--report"),
+        OsStr::new("json"),
     ]);
 
+    let message = stderr(&output);
     assert_eq!(
         output.status.code(),
-        Some(ENVIRONMENT_FAILURE),
-        "the run continued on the fallback but is not a success: stderr: {}",
-        stderr(&output)
+        Some(ENVIRONMENT),
+        "a panicking body is not an instance fault: {message}"
     );
     assert!(
-        stderr(&output).contains("the fixture was told to fail"),
-        "the failure is reported: {}",
-        stderr(&output)
+        message.contains("the body panicked (4)"),
+        "the ABI status is PANIC: {message}"
     );
+    assert!(
+        message.contains(cyberspine_panic_fixture::PANIC_REASON),
+        "the body's own message reaches the user: {message}"
+    );
+
+    let report: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("the report is json");
+    assert_eq!(report["outcome"], "environment");
 }
 
 /// The run report is the machine answer to "did it finish, and why".
@@ -984,6 +982,8 @@ fn a_faulted_run_reports_its_outcome_and_exits_four() {
 #[cfg(unix)]
 #[test]
 fn ctrl_c_reports_stopped_and_says_nothing_about_the_replay() {
+    use std::process::{Command, Stdio};
+
     let dir = scratch("ctrl-c");
     let image = write_image(&dir, "spin.csp", SPIN, MANIFEST);
     let replay = dir.join("run.jsonl");
@@ -1050,7 +1050,7 @@ fn json_diagnostics_stay_on_stderr() {
         OsStr::new("--json"),
     ]);
 
-    assert_eq!(output.status.code(), Some(REJECTED));
+    assert_eq!(output.status.code(), Some(ENVIRONMENT));
     assert!(
         stdout(&output).is_empty(),
         "stdout is for products, got: {}",
@@ -1152,4 +1152,16 @@ fn a_diverged_replay_is_a_json_warning_too() {
     let value = json_record_with_code(&text, "rt.replay-unused");
     assert_eq!(value["kind"], "diagnostic");
     assert_eq!(value["level"], "warning");
+}
+
+#[test]
+fn the_help_text_is_the_cli_contract() {
+    let output = run(vec![OsStr::new("--help")]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    // The usage line carries the file name the platform produced; the contract
+    // is the command name.
+    let help = stdout(&output).replace("cyinevm.exe", "cyinevm");
+    insta::assert_snapshot!("help", help);
 }

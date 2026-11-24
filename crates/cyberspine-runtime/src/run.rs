@@ -149,16 +149,17 @@ const RT_OUTPUT_OVERWRITE: Code = Code::new("rt.output-overwrite");
 impl Error {
     /// How the CLI should exit for this failure.
     ///
-    /// A missing or malformed image is a rejected input, not a broken
-    /// environment: `docs/runtime.md` §1 puts "the image cannot be read" in the
-    /// same class as a rig mismatch, and only the paths that stop the run from
-    /// doing its job at all are environment failures.
+    /// An image that cannot be read is an environment failure; one that reads
+    /// but does not decode, is over the load limit, or names another rig is
+    /// rejected. An output path that is also an input is refused before the run
+    /// starts, so it is rejected as well (`docs/runtime.md` §1).
     pub fn class(&self) -> u8 {
         match self {
-            Self::NoImage
-            | Self::Image { .. }
-            | Self::Load { .. }
-            | Self::OutputOverwrite { .. } => EXIT_REJECTED,
+            Self::NoImage | Self::Load { .. } | Self::OutputOverwrite { .. } => EXIT_REJECTED,
+            Self::Image { source, .. } => match source {
+                LoadFileError::Io { .. } => EXIT_ENVIRONMENT,
+                LoadFileError::FileTooLarge { .. } | LoadFileError::Image(_) => EXIT_REJECTED,
+            },
             Self::Faulted(_) => EXIT_FAULTED,
             _ => EXIT_ENVIRONMENT,
         }

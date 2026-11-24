@@ -1,0 +1,206 @@
+name: Nightly
+
+# The checks that are too expensive for a pull request and only make sense as a
+# trend: more property cases, mutation testing of the day's diff, fuzzing.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "The date the mutation diff starts from (git rev-list --before)"
+        default: "24 hours ago"
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  # The pull request run executes the same tests with the default case count.
+  # This one pays minutes where that one pays seconds, on every host, because a
+  # property that only fails on Windows is exactly what a single host misses.
+  deep:
+    name: deep (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    env:
+      PROPTEST_CASES: 4096
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.99.1
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@nextest
+
+      # The same entry point a developer runs: fixtures, the suite, doctests.
+      - run: cargo xtask test
+
+  # Mutation testing in the day's diff. The tests are the only review the machine
+  # does, so a test that asserts nothing is the failure mode this job exists to
+  # find. `--in-place` keeps the fixture libraries the step above built and reuses
+  # one target directory; the checkout is disposable, so the edits it makes cannot
+  # leak.
+  mutants:
+    name: mutants (in diff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The window is a range of history, so the history has to be there.
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@1.99.1
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@nextest
+
+      - uses: taiki-e/install-action@cargo-mutants
+
+      # `tests/` loads these; no `cargo test` builds them.
+      - run: cargo xtask fixtures
+
+      - name: the day's diff
+        id: diff
+        env:
+          BASE: ${{ inputs.base || '24 hours ago' }}
+        run: |
+          base=$(git rev-list -1 --before="$BASE" HEAD)
+          if [ -z "$base" ] || [ "$base" = "$(git rev-parse HEAD)" ]; then
+            echo "nothing landed in the window: no mutants to run"
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --no-color "$base" HEAD > "$RUNNER_TEMP/nightly.diff"
+          wc -l "$RUNNER_TEMP/nightly.diff"
+
+      # Exit code 2 means a mutant survived: a bug the suite would not catch.
+      # `--workspace` because the default members are only the two binaries.
+      - if: steps.diff.outputs.empty != 'true'
+        run: |
+          cargo mutants --workspace --in-diff "$RUNNER_TEMP/nightly.diff" \
+            --in-place --annotations=github
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants
+          path: mutants.out/
+          if-no-files-found: ignore
+
+  # A corpus entry is a program the assembler once had to accept. Replaying them
+  # is the regression test no example can write: `-runs=0` executes the seed
+  # corpus once and stops, so a crash is a corpus entry this tree no longer
+  # handles.
+  fuzz:
+    name: fuzz (corpus replay)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # `cargo fuzz` needs nightly, and this tree pins everything else. The date
+      # is a deliberate choice, not the channel: bump it together with the
+      # fuzzing tools, when a new nightly is what you want to test against.
+      - uses: dtolnay/rust-toolchain@master
+        id: nightly
+        with:
+          toolchain: nightly-2026-11-17
+
+      - uses: Swatinem/rust-cache@v2
+
+      # There is no prebuilt `cargo-fuzz`; the other tools here come from
+      # `taiki-e/install-action`.
+      - run: cargo install cargo-fuzz --version 0.13.2 --locked
+
+      - name: assemble
+        run: cargo +${{ steps.nightly.outputs.name }} fuzz run assemble -- -runs=0
+
+      - name: assemble_unwind
+        run: cargo +${{ steps.nightly.outputs.name }} fuzz run assemble_unwind fuzz/corpus/assemble -- -runs=0
+
+  # A red nightly nobody reads is the same as no nightly. One rolling issue
+  # carries every failing signal: opened (or commented on) when the run is not
+  # green, closed when it is again. The mutation survivors are the part worth
+  # turning into work, so they go in the body.
+  route:
+    name: route
+    needs: [deep, mutants, fuzz]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      RUN: ${{ github.run_id }}
+      SHA: ${{ github.sha }}
+      DEEP: ${{ needs.deep.result }}
+      MUTANTS: ${{ needs.mutants.result }}
+      FUZZ: ${{ needs.fuzz.result }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: mutants
+          path: nightly
+        continue-on-error: true
+
+      - name: one issue for every signal
+        run: |
+          failed=0
+          jobs=""
+          for name in deep mutants fuzz; do
+            case "$name" in
+              deep) result="$DEEP" ;;
+              mutants) result="$MUTANTS" ;;
+              fuzz) result="$FUZZ" ;;
+            esac
+            case "$result" in
+              success|skipped) ;;
+              *) failed=1; jobs="$jobs $name ($result)" ;;
+            esac
+          done
+
+          gh label create nightly --description "opened by the nightly workflow" \
+            --color BFD4F2 --force >/dev/null 2>&1 || true
+          number=$(gh issue list --repo "$REPO" --label nightly --state open \
+            --json number --jq '.[0].number // empty')
+
+          if [ "$failed" = 0 ]; then
+            if [ -n "$number" ]; then
+              gh issue close "$number" --repo "$REPO" \
+                --comment "Green again: https://github.com/$REPO/actions/runs/$RUN"
+            fi
+            exit 0
+          fi
+
+          {
+            echo "The nightly run at \`${SHA:0:12}\` is not green:$jobs"
+            echo
+            echo "Run: https://github.com/$REPO/actions/runs/$RUN"
+            if [ -s nightly/missed.txt ]; then
+              total=$(wc -l < nightly/missed.txt)
+              echo
+              echo "### $total surviving mutant(s)"
+              echo
+              echo '```'
+              head -50 nightly/missed.txt
+              echo '```'
+            fi
+          } > body.md
+
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --repo "$REPO" --body-file body.md
+          else
+            gh issue create --repo "$REPO" --title "nightly: the run is not green" \
+              --label nightly --body-file body.md
+          fi

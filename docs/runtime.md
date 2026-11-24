@@ -55,9 +55,9 @@ cyinevm -i <IMAGE> [-i <IMAGE> ...] [-b <SPEC>] [--on-interrupt stop|continue]
 |---|---|
 | `0` | `--ticks`/`--until-halt` 正常结束、Ctrl-C、trace 管道关闭；中断本身不是错误 |
 | `2` | 命令行用法错误（clap 的约定） |
-| `3` | 输入被拒绝：镜像读不出、格式或 rig/shape/hz 与本次运行不符、输出路径与输入相同 |
+| `3` | 输入被拒绝：格式、rig/shape/hz 与本次运行不符、镜像超过加载上限、输出路径与输入相同 |
 | `4` | 运行异常结束：实例 fault |
-| `5` | 环境失败：后端、仲裁器、trace/裁决日志、信号处理器 |
+| `5` | 环境失败：镜像读不出、后端、仲裁器、trace/裁决日志、信号处理器 |
 
 `--report json` 在每个退出码下都会写出终态（fault 也包括在内），字段见
 [`diagnostics.md`](diagnostics.md) §5。

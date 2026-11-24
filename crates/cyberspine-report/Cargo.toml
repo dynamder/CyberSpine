@@ -5,6 +5,9 @@ edition = "2024"
 rust-version.workspace = true
 license.workspace = true
 
+[dev-dependencies]
+insta = "1.49.0"
+
 [dependencies]
 cyberspine-arbiter = { path = "../cyberspine-arbiter" }
 cyberspine-diag = { path = "../cyberspine-diag" }

@@ -11,7 +11,7 @@
 | 宿主 | 多实例、tick 循环、trace、fault、动作目录 | [`runtime.md`](docs/runtime.md) |
 | 中断 | `INTR`、原因模板、票据、多轮裁决、`Load`/`Silence`/`Restore` | [`interrupt.md`](docs/interrupt.md) |
 | 边界 | body 与仲裁器各三种打包；`--decisions` / `--replay` | [`backend.md`](docs/backend.md) |
-| 工程 | 三平台 CI、MSRV 1.89、`thumbv7em` no_std、QEMU 固件、fuzz | `.github/workflows/ci.yml` |
+| 工程 | 三平台 CI、MSRV 1.89、`thumbv7em` no_std、QEMU 固件；nightly 跑 4096 例属性、变异测试、fuzz 语料回放 | `.github/workflows/ci.yml`、`nightly.yml` |
 
 核心已足够支撑快路径；缺“写 → 跑 → 看 → 改”的回路与第一具真实身体。
 

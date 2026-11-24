@@ -7,15 +7,38 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
 
 jobs:
-  test:
-    name: test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+  # The nested workspaces keep their own lockfiles. A member's dependency can
+  # change without one of them following, and nothing in the root workspace
+  # notices: every `--locked` command inside that directory then fails, which is
+  # how the msrv and qemu jobs broke. Asking here costs seconds; asking in those
+  # jobs costs the whole build. `cargo xtask check` runs the same two as
+  # `firmware-lock` and `fuzz-lock`.
+  locks:
+    name: locks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.99.1
+
+      - name: firmware
+        run: cargo metadata --locked --format-version 1 --manifest-path firmware/Cargo.toml > /dev/null
+
+      - name: fuzz
+        run: cargo metadata --locked --format-version 1 --manifest-path fuzz/Cargo.toml > /dev/null
+
+  # The whole suite on one host, reported as data. `cargo xtask ci` builds the
+  # fixtures, runs the steps and the tests, and writes `target/verify/`; the
+  # step list below is an independent copy of `STEPS`, so deleting a gate from
+  # the tool shows up here instead of passing quietly.
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -26,57 +49,101 @@ jobs:
           components: rustfmt, clippy
           targets: thumbv7em-none-eabihf
 
-      - name: rustfmt
-        run: cargo fmt --all --check
+      - uses: Swatinem/rust-cache@v2
 
-      - name: clippy
-        run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
+      - uses: taiki-e/install-action@nextest
 
-      # The reason the split exists: the portable crates must be usable on a
-      # microcontroller. `cargo test` compiles them for the host, where a stray
-      # `std` call would still build, so this is the only check that notices.
-      - name: no_std (cyberspine-isa, thumbv7em)
-        run: cargo check -p cyberspine-isa --target thumbv7em-none-eabihf
-
-      - name: no_std (cyberspine-rig, thumbv7em)
-        run: cargo check -p cyberspine-rig --target thumbv7em-none-eabihf
-
-      - name: no_std (cyberspine-binfmt, thumbv7em)
-        run: cargo check -p cyberspine-binfmt --target thumbv7em-none-eabihf
-
-      - name: no_std (cyberspine-exec, thumbv7em)
-        run: cargo check -p cyberspine-exec --target thumbv7em-none-eabihf
-
-      - name: no_std (cyberspine-core, thumbv7em)
-        run: cargo check -p cyberspine-core --target thumbv7em-none-eabihf
-
-      # `fuzz/` is its own workspace and is not covered by `--workspace`.
-      - name: test (all platforms)
-        run: cargo test --workspace --all-targets
-
-      # The runtime's external backends are features. This build has neither,
-      # so the tests that pin the "not compiled" message run here.
-      - name: test (runtime without external backends)
-        run: cargo test -p cyberspine-runtime --no-default-features
-
-      - name: clippy (runtime without external backends)
-        run: cargo clippy -p cyberspine-runtime --no-default-features --all-targets --no-deps -- -D warnings
-
-      # `cyberspine-backend`'s transports are feature-gated, so the workspace run
-      # above compiles only the wire and remote layers. This one loads a real
-      # shared library and opens a real socket.
-      - name: test (backend integrations)
-        run: cargo test -p cyberspine-backend --all-features
-
-      - name: clippy (backend integrations)
-        run: cargo clippy -p cyberspine-backend --all-features --all-targets --no-deps -- -D warnings
-
-      # The two tools the project ships: assemble a real source, then run the
-      # image against the built-in linked dummy body.
-      - name: tools (assemble + run)
+      - name: the gate
         run: |
-          cargo run --release -p cyberspine-asm -- -a demos/maze/maze.csa -o target/maze.csp
-          cargo run --release -p cyberspine-runtime -- -i target/maze.csp --ticks 5 --unpaced
+          mkdir -p target
+          cargo xtask ci --json > target/verify.json
+
+      - name: the gate list
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+
+          expected = """fmt clippy nostd runtime-no-default runtime-dylib runtime-rpc
+          backend-export arbiter-export docs firmware-lock fuzz-lock fixtures tests
+          doctests""".split()
+
+          try:
+              report = json.load(open("target/verify/report.json"))
+          except FileNotFoundError:
+              sys.exit("the run wrote no report")
+
+          steps = report["steps"]
+          seen = [step["name"] for step in steps]
+          lines = ["| step | status | s |", "|---|---|---|"]
+          for step in steps:
+              lines.append(f"| {step['name']} | {step['status']} | {step['millis'] / 1000:.1f} |")
+          summary = "\n".join(lines)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary_file:
+              summary_file.write(summary + "\n")
+
+          problems = []
+          if missing := [name for name in expected if name not in seen]:
+              problems.append(f"steps in the gate but not in the report: {missing}")
+          if extra := [name for name in seen if name not in expected]:
+              problems.append(f"steps in the report but not in the gate: {extra}")
+          if report["dirty"]:
+              problems.append("the tree is dirty: this report is not of a commit")
+          if not report["ok"]:
+              problems.append("a step failed")
+          if problems:
+              sys.exit("\n".join(problems))
+          print(f"{len(steps)} steps passed at {report['commit'][:12]}")
+          PY
+
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify
+          path: |
+            target/verify/
+            target/verify.json
+          if-no-files-found: ignore
+
+  # The same suite on the two hosts `verify` does not cover. A failure here is
+  # "this broke on Windows" or "this broke on macOS", not "the rules changed".
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.99.1
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@nextest
+
+      # Builds the cdylib fixtures once, then runs the workspace tests.
+      - run: cargo xtask test
+
+  # The two tools the project ships: assemble a real source, then run the image
+  # against the built-in linked dummy body. The debug profile is enough; a
+  # release build here would only pay for optimisation nobody reads.
+  tools:
+    name: tools (assemble + run)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.99.1
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: |
+          cargo run --locked -p cyberspine-asm -- -a demos/maze/maze.csa -o target/maze.csp
+          cargo run --locked -p cyberspine-runtime -- -i target/maze.csp --ticks 5 --unpaced
 
   # The `rust-version` every manifest declares, checked against a real compiler
   # instead of trusted. The `+` overrides `rust-toolchain.toml`, which pins the
@@ -84,12 +151,15 @@ jobs:
   msrv:
     name: msrv (1.89)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@1.89.0
         with:
           targets: thumbv7em-none-eabihf
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: workspace
         run: cargo +1.89.0 check --workspace --all-targets --locked
@@ -102,6 +172,7 @@ jobs:
   qemu:
     name: qemu (cortex-m4)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -110,6 +181,8 @@ jobs:
         with:
           targets: thumbv7em-none-eabihf
 
+      - uses: Swatinem/rust-cache@v2
+
       - name: qemu-system-arm
         run: sudo apt-get update && sudo apt-get install -y qemu-system-arm
 
@@ -117,13 +190,34 @@ jobs:
       # target and the linker script, so the build runs from inside it.
       - name: build (firmware)
         working-directory: firmware
-        run: cargo build --release
+        run: cargo build --release --locked
 
       # The assertion, not just the compile: a failing check panics and exits 1.
       - name: run under QEMU
         working-directory: firmware
         run: |
-          qemu-system-arm -M mps2-an386 -cpu cortex-m4 \
+          timeout 60 qemu-system-arm -M mps2-an386 -cpu cortex-m4 \
             -semihosting-config enable=on,target=native \
             -nographic \
             -kernel target/thumbv7em-none-eabihf/release/cyberspine-firmware
+
+  # One check to require in branch protection: the jobs can be added to or split
+  # without the required context changing, and a skipped matrix leg cannot leave
+  # a branch protection rule waiting for a context nobody will ever create.
+  gate:
+    name: gate
+    needs: [locks, verify, test, tools, msrv, qemu]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: every job passed
+        run: |
+          echo "locks=${{ needs.locks.result }} verify=${{ needs.verify.result }} \
+          test=${{ needs.test.result }} tools=${{ needs.tools.result }} \
+          msrv=${{ needs.msrv.result }} qemu=${{ needs.qemu.result }}"
+          for result in "${{ needs.locks.result }}" "${{ needs.verify.result }}" \
+                        "${{ needs.test.result }}" "${{ needs.tools.result }}" \
+                        "${{ needs.msrv.result }}" "${{ needs.qemu.result }}"; do
+            [ "$result" = "success" ] || exit 1
+          done
