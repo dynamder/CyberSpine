@@ -7,7 +7,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use cyberspine_core::binfmt::image::Image;
+use cyberspine_core::binfmt::image::{Image, MAX_IMAGE_LEN};
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::isa::{Insn, OpCode};
 use cyberspine_store::{WriteError, write_atomic, write_image};
@@ -229,4 +229,27 @@ fn a_read_only_image_can_be_replaced() {
         fs::metadata(&path).expect("stat").permissions().readonly(),
         "the read-only attribute is carried over"
     );
+}
+
+#[test]
+fn an_image_above_the_loader_limit_is_never_written() {
+    let dir = scratch("too-large");
+    let path = dir.join("huge.csp");
+
+    let mut code = vec![Insn::new(OpCode::Nop); 530_000];
+    *code.last_mut().expect("the code is not empty") = Insn::new(OpCode::Halt);
+    let image = Image::new(code);
+    assert!(
+        image.to_bytes().len() > MAX_IMAGE_LEN,
+        "the fixture is above the loader's limit"
+    );
+
+    let error = write_image(&image, &path).expect_err("the loader refuses oversized images");
+
+    assert!(matches!(error, WriteError::TooLarge { .. }), "{error}");
+    assert!(
+        !path.exists(),
+        "an oversized image must never reach the disk"
+    );
+    assert_eq!(entries(&dir), Vec::<String>::new());
 }

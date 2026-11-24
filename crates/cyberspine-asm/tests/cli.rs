@@ -793,3 +793,41 @@ fn a_diagnostic_list_at_the_limit_says_how_many_it_dropped() {
     assert_eq!(records[64]["kind"], "truncated");
     assert_eq!(records[64]["dropped"], 36);
 }
+
+#[test]
+fn an_image_above_the_loader_limit_is_rejected_without_a_file() {
+    let dir = scratch("too-large");
+    let mut source = String::from(
+        ".layer 10\n.clock hz = 60\n.fuel 4096\n.max_wait 600.0\n.rig \"probe.rig.json\"\n.text\n",
+    );
+    for _ in 0..529_999 {
+        source.push_str("NOP\n");
+    }
+    source.push_str("HALT\n");
+    let path = write_file(&dir, "huge.csa", &source);
+    write_file(
+        &dir,
+        "probe.rig.json",
+        r#"{"rig":{"name":"probe","version":1},"muscles":[],"sensors_f":[],"sensors_i":[]}"#,
+    );
+    let image = dir.join("huge.csp");
+
+    let output = run(vec![
+        OsStr::new("-a"),
+        path.as_os_str(),
+        OsStr::new("-o"),
+        image.as_os_str(),
+        OsStr::new("--strip"),
+    ]);
+
+    assert_eq!(output.status.code(), Some(REJECTED));
+    assert!(
+        stderr(&output).contains("asm.image-too-large"),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(
+        !image.exists(),
+        "an image the loader refuses is not written"
+    );
+}

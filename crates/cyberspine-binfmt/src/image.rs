@@ -499,9 +499,10 @@ impl Image {
     ///
     /// # Panics
     ///
-    /// If the image exceeds a 32-bit field — 4 GiB of file, or 2³² instructions.
-    /// The format cannot represent such an action, so this is a builder bug rather
-    /// than an input error.
+    /// If the image exceeds a 32-bit field — 4 GiB of file, or 2³² instructions —
+    /// or a debug segment breaks its own encoding rules (a line map that does
+    /// not cover the code, a NUL in a string). Call [`Image::validate`] first;
+    /// it reports those as errors instead of asserting.
     pub fn to_bytes(&self) -> Vec<u8> {
         let tables = self.encode_tables();
         let segment = self

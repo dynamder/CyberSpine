@@ -22,6 +22,7 @@ const UNREADABLE_RIG: Code = Code::new("asm.unreadable-rig");
 const BAD_RIG: Code = Code::new("asm.bad-rig");
 const UNREADABLE_SOURCE: Code = Code::new("asm.unreadable-source");
 const UNWRITABLE_OUTPUT: Code = Code::new("asm.unwritable-output");
+const IMAGE_TOO_LARGE: Code = Code::new("asm.image-too-large");
 const SOURCE_OVERWRITE: Code = Code::new("asm.source-overwrite");
 const DENIED_WARNINGS: Code = Code::new("asm.denied-warnings");
 const INTERNAL: Code = Code::new("asm.internal");
@@ -115,17 +116,32 @@ fn run(cli: &CliArgs, source: &str, sink: &mut Diagnostics) -> u8 {
     match store::write_image(&image, &output) {
         Ok(()) => exit::OK,
         Err(error) => {
-            let diagnostic = match error {
-                WriteError::NotCanonical { source } => {
+            let (diagnostic, class) = match error {
+                WriteError::NotCanonical { source } => (
                     Diagnostic::error(INTERNAL, source.to_string())
                         .at(Anchor::whole(output.display().to_string()))
-                        .note("this is an assembler bug, please report it")
-                }
-                other => Diagnostic::error(UNWRITABLE_OUTPUT, other.to_string())
-                    .at(Anchor::whole(output.display().to_string())),
+                        .note("this is an assembler bug, please report it"),
+                    exit::ENVIRONMENT,
+                ),
+                WriteError::TooLarge { len, max } => (
+                    Diagnostic::error(
+                        IMAGE_TOO_LARGE,
+                        format!(
+                            "the generated image is {len} bytes, above the {max}-byte limit the loader accepts"
+                        ),
+                    )
+                    .at(Anchor::whole(output.display().to_string()))
+                    .with_help("split the action; an image the loader refuses is not written"),
+                    exit::REJECTED,
+                ),
+                other => (
+                    Diagnostic::error(UNWRITABLE_OUTPUT, other.to_string())
+                        .at(Anchor::whole(output.display().to_string())),
+                    exit::ENVIRONMENT,
+                ),
             };
             sink.push(diagnostic);
-            exit::ENVIRONMENT
+            class
         }
     }
 }

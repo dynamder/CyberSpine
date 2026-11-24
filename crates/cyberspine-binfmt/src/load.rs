@@ -398,9 +398,13 @@ impl VerifiedImage {
     /// This is the rule set [`VerifiedImage::from_bytes`] applies minus the
     /// container checks, which need the original bytes.
     pub fn verify(image: Image) -> Result<Self, LoadError> {
+        // Validate before encoding: `to_bytes` asserts the debug segment's
+        // line-map and string rules, and this is the `Result` that should
+        // report them (C9).
+        let plan = image.validate()?;
         let bytes = image.to_bytes();
         let hash = *blake3::hash(&bytes[..bytes.len() - HASH_LEN]).as_bytes();
-        Self::finish(image, hash)
+        Ok(Self(image, plan, hash))
     }
 
     fn finish(image: Image, hash: [u8; 32]) -> Result<Self, LoadError> {

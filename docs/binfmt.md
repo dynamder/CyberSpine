@@ -227,7 +227,7 @@ off    len    field
 - 每个指令下标一项；`FEXCITE group` 展开出的多条指令共用同一个源位置，于是出现重复项。
 - **标签按名字严格递增**（§8 的规范形式）。
 - **不改执行语义。** VM 不读这段；加载器校验后只交给宿主。段内字节参与 `content_hash`，所以同一源码的 debug / release 是两个 artifact（§7）。
-- 校验：magic、`version` major、`reserved == 0`、`source_count == 1`、标签名唯一且递增、`pc < code_len`、`line_map` 恰好 `code_len` 项、`line ≥ 1`、`column ≥ 1`、三段精确消费到 `file_len - 32`。
+- 校验：magic、`version` major、`reserved == 0`、`source_count == 1`、标签名唯一且递增、`pc < code_len`、`line_map` 恰好 `code_len` 项、`line ≥ 1`、`column ≥ 1`、source 与标签名不含 NUL（NUL 是终止符）、三段精确消费到 `file_len - 32`。
 
 ---
 
@@ -273,7 +273,7 @@ content_hash = blake3(file[0 .. file_len - 32])
 
 | # | 规则 |
 |---|---|
-| C0 | **文件总长上限**：`MAX_IMAGE_LEN = 4 MiB`。在任何解析、任何分配之前检查 |
+| C0 | **文件总长上限**：`MAX_IMAGE_LEN = 4 MiB`。在任何解析、任何分配之前检查；写入器（`cyberspine-store`）在落盘前执行同一上限，超限不产生文件 |
 | C1 | `file_len ≥ 136`；`magic` 匹配；`file_len` 精确等于实际字节数 |
 | C2 | `format_version` 的 **major** 必须相等（不等即拒绝）；**minor** 不等时，`major != 0` 发**警告**并继续、`major == 0` 拒绝；**patch 不参与判定**。`isa_version` 必须相等 |
 | C3 | `flags` 只允许 bit 0（`HAS_DEBUG`），其余位为 0；`reserved_a`、`reserved0`、`reserved_b` 全为 0（offset 60 已是 `reason_count`，不再是保留区）。`rig_fingerprint` 不在此列：它可以是任意 32 字节，全 0 表示未绑定 |

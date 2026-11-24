@@ -43,7 +43,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use cyberspine_core::binfmt::image::Image;
+use cyberspine_core::binfmt::image::{Image, MAX_IMAGE_LEN};
 use cyberspine_core::binfmt::load::LoadError;
 use thiserror::Error;
 
@@ -78,22 +78,37 @@ pub enum WriteError {
         #[source]
         source: LoadError,
     },
+
+    /// The encoded image is larger than the loader's `MAX_IMAGE_LEN`.
+    ///
+    /// This is a size limit, not a shape error: the image may be canonical and
+    /// still too large for any loader to accept.
+    #[error("the generated image is {len} bytes, above the {max}-byte limit the loader accepts")]
+    TooLarge { len: usize, max: usize },
 }
 
 /// Serialize `image` and atomically replace `path` with it.
 ///
-/// The bytes are checked against the loader first: an image the loader would
-/// reject is never written, so a broken build fails here instead of at load
-/// time.
+/// The image is checked against the loader first: one the loader would reject
+/// is never written, so a broken build fails here instead of at load time. That
+/// includes the 4 MiB container limit, which the loader checks before decoding
+/// a byte.
 pub fn write_image(image: &Image, path: impl AsRef<Path>) -> Result<(), WriteError> {
     let path = path.as_ref();
-    let bytes = image.to_bytes();
 
-    // The same property the fuzz oracle asserts, enforced on the one path that
-    // actually ships.
+    // Validate before encoding: `Image::to_bytes` asserts the debug segment's
+    // own rules, and `validate` is the `Result` that should report them.
     image
         .validate()
         .map_err(|source| WriteError::NotCanonical { source })?;
+
+    let bytes = image.to_bytes();
+    if bytes.len() > MAX_IMAGE_LEN {
+        return Err(WriteError::TooLarge {
+            len: bytes.len(),
+            max: MAX_IMAGE_LEN,
+        });
+    }
 
     write_atomic(path, &bytes).map_err(|source| WriteError::Io {
         path: path.to_path_buf(),
