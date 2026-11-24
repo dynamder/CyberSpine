@@ -26,6 +26,9 @@ test = false
 doc = false
 bench = false
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [profile.release]
 debug = 1
 

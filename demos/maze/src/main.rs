@@ -200,3 +200,31 @@ fn finish(session: &mut Session) -> ExitCode {
     );
     ExitCode::FAILURE
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cyberspine_demo_maze::{Body, MANIFEST, REVERSE_SOURCE};
+
+    fn finish_after(mut session: Session) -> ExitCode {
+        while session.running() && session.ticks() < MAX_TICKS {
+            session
+                .advance(f64::from(session.dt()))
+                .expect("the linked body answers");
+        }
+        finish(&mut session)
+    }
+
+    #[test]
+    fn a_solved_run_exits_zero() {
+        let session = Session::embedded().expect("the demo assembles and loads");
+        assert_eq!(finish_after(session), ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn a_run_that_never_reaches_the_goal_exits_one() {
+        let session = Session::open(REVERSE_SOURCE, MANIFEST, Body::linked())
+            .expect("the reverse action assembles and loads");
+        assert_eq!(finish_after(session), ExitCode::FAILURE);
+    }
+}

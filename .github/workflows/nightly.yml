@@ -39,7 +39,7 @@ jobs:
       - uses: taiki-e/install-action@nextest
 
       # The same entry point a developer runs: fixtures, the suite, doctests.
-      - run: cargo xtask test
+      - run: cargo --locked xtask test
 
   # Mutation testing in the day's diff. The tests are the only review the machine
   # does, so a test that asserts nothing is the failure mode this job exists to
@@ -65,7 +65,7 @@ jobs:
       - uses: taiki-e/install-action@cargo-mutants
 
       # `tests/` loads these; no `cargo test` builds them.
-      - run: cargo xtask fixtures
+      - run: cargo --locked xtask fixtures
 
       - name: the day's diff
         id: diff

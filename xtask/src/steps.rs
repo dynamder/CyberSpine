@@ -12,13 +12,15 @@ use crate::workspace::{cargo, root};
 
 pub enum Plan {
     Cargo(&'static [&'static str]),
+    /// The same, in a nested workspace with its own manifest and lockfile.
+    Nested(&'static str, &'static [&'static str]),
     Docs,
     /// A nested workspace: its own manifest, its own lockfile, and nothing in
     /// the root workspace's checks ever looks at either.
     Lock(&'static str),
 }
 
-pub const STEPS: [(&str, Plan); 11] = [
+pub const STEPS: [(&str, Plan); 14] = [
     ("fmt", Plan::Cargo(&["fmt", "--all", "--check"])),
     (
         "clippy",
@@ -111,6 +113,18 @@ pub const STEPS: [(&str, Plan); 11] = [
     ("docs", Plan::Docs),
     ("firmware-lock", Plan::Lock("firmware")),
     ("fuzz-lock", Plan::Lock("fuzz")),
+    (
+        "firmware-fmt",
+        Plan::Nested("firmware", &["fmt", "--check"]),
+    ),
+    (
+        "firmware-clippy",
+        Plan::Nested("firmware", &["clippy", "--no-deps", "--", "-D", "warnings"]),
+    ),
+    (
+        "fuzz-check",
+        Plan::Nested("fuzz", &["check", "--all-targets"]),
+    ),
 ];
 
 pub fn check(json: bool, no_log: bool) -> Result<(), String> {
@@ -147,6 +161,9 @@ fn lint(report: &mut Report) {
         match plan {
             Plan::Cargo(args) => {
                 run_logged(name, cargo_step(args), report);
+            }
+            Plan::Nested(directory, args) => {
+                run_logged(name, nested_step(directory, args), report);
             }
             Plan::Docs => run_docs(name, report),
             Plan::Lock(directory) => run_lock(name, directory, report),
@@ -190,7 +207,21 @@ fn tests(args: &[String], report: &mut Report) {
 }
 
 fn cargo_step(args: &'static [&'static str]) -> std::process::Command {
+    cargo_command(args, None)
+}
+
+fn nested_step(directory: &'static str, args: &'static [&'static str]) -> std::process::Command {
+    cargo_command(args, Some(directory))
+}
+
+fn cargo_command(
+    args: &'static [&'static str],
+    directory: Option<&'static str>,
+) -> std::process::Command {
     let mut command = cargo();
+    if let Some(directory) = directory {
+        command.current_dir(root().join(directory));
+    }
     command.arg(args[0]);
     if args[0] != "fmt" {
         command.arg("--locked");

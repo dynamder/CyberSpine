@@ -155,3 +155,21 @@ fn the_headless_stream_is_the_documented_one() {
         String::from_utf8(output.stdout).expect("stdout is UTF-8")
     );
 }
+
+/// The shorthand resolves a path next to the binary, so the test binary and the
+/// `maze` binary must agree on where the fixture library was built. `cargo xtask
+/// test` builds that library before the tests run.
+#[test]
+fn dylib_self_finds_the_library_beside_the_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_maze"))
+        .args(["-b", "dylib:self", "--headless"])
+        .output()
+        .expect("the maze binary runs");
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
