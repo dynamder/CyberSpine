@@ -160,6 +160,11 @@ mod tests {
     }
 
     #[test]
+    fn the_documented_frame_cap_is_one_mebibyte() {
+        assert_eq!(MAX_FRAME_LEN, 1 << 20, "docs/backend.md frame cap");
+    }
+
+    #[test]
     fn a_head_round_trips() {
         let bytes = frame(7, b"hello");
         let (kind, payload) = split(&PROTOCOL, &bytes).expect("a legal frame");

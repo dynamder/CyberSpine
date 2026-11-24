@@ -2,3 +2,7 @@
 /.cargo-target
 /.cargo-check
 /.acl-diagnosis
+*.snap.new
+*.pending-snap
+/mutants.out
+/mutants.out.old

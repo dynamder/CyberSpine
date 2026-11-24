@@ -233,3 +233,8 @@ fn an_empty_rig_has_an_empty_commit() {
 
     wire::validate_commit(&commit, 0).expect("no muscles, nothing to check");
 }
+
+#[test]
+fn the_documented_rig_cap_is_sixty_four_kibibytes() {
+    assert_eq!(cyberspine_backend::wire::MAX_RIG_JSON, 64 << 10);
+}

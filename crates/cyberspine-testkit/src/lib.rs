@@ -221,14 +221,122 @@ pub fn verified(image: Image) -> VerifiedImage {
     VerifiedImage::verify(image).expect("the fixture is a legal image")
 }
 
+/// The shared library a workspace member builds as a `cdylib`.
+///
+/// A test binary lives in `<profile>/deps`, so the profile directory is two
+/// levels up: the lookup does not depend on `CARGO_TARGET_DIR`, the profile or
+/// the platform's library suffix.
+pub fn fixture_library(package: &str) -> PathBuf {
+    let stem = package.replace('-', "_");
+    let file = format!(
+        "{}{stem}.{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_EXTENSION
+    );
+    let exe = std::env::current_exe().expect("the test binary has a path");
+    let profile = exe
+        .parent()
+        .and_then(|deps| deps.parent())
+        .expect("the test binary lives in a profile directory");
+
+    // `cargo build` lifts the library next to the binaries; `cargo test` builds
+    // it only into `deps`, so both are searched.
+    for dir in [profile.to_path_buf(), profile.join("deps")] {
+        let path = dir.join(&file);
+        if path.exists() {
+            return path;
+        }
+    }
+
+    panic!(
+        "{} is missing; build it with `cargo build -p {package}`, or run `cargo xtask test`",
+        profile.join(&file).display()
+    );
+}
+
+/// Run a binary to completion, killing it if it outlives `limit`.
+///
+/// A hung child would otherwise hang the whole test binary: `Command::output`
+/// has no deadline of its own.
+pub fn run_within(
+    program: &std::ffi::OsStr,
+    args: &[&std::ffi::OsStr],
+    limit: std::time::Duration,
+) -> std::process::Output {
+    run_in(None, program, args, limit)
+}
+
+/// [`run_within`], with the child's working directory.
+pub fn run_in(
+    cwd: Option<&std::path::Path>,
+    program: &std::ffi::OsStr,
+    args: &[&std::ffi::OsStr],
+    limit: std::time::Duration,
+) -> std::process::Output {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(dir) = cwd {
+        command.current_dir(dir);
+    }
+    let mut child = command
+        .spawn()
+        .unwrap_or_else(|error| panic!("{program:?} should spawn: {error}"));
+
+    let mut out = child.stdout.take().expect("stdout is piped");
+    let mut err = child.stderr.take().expect("stderr is piped");
+    let read_out = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = out.read_to_end(&mut bytes);
+        bytes
+    });
+    let read_err = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = err.read_to_end(&mut bytes);
+        bytes
+    });
+
+    let deadline = std::time::Instant::now() + limit;
+    loop {
+        if child.try_wait().expect("the child is waitable").is_some() {
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("{program:?} did not exit within {limit:?}: {args:?}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+
+    std::process::Output {
+        status: child.wait().expect("the child is waitable"),
+        stdout: read_out.join().expect("the stdout reader finishes"),
+        stderr: read_err.join().expect("the stderr reader finishes"),
+    }
+}
+
 /// A fresh directory under the test target, emptied if it already exists.
+///
+/// The process id makes the path unique per test process: a runner that gives
+/// every test its own process (nextest) would otherwise let two tests empty the
+/// same directory under each other.
 pub fn scratch_dir(name: &str) -> PathBuf {
     // Set by Cargo for the test process; a library cannot read it at compile
     // time, so it is read at run time and falls back to the temp directory.
     let base = std::env::var_os("CARGO_TARGET_TMPDIR")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir);
-    let dir = base.join("testkit").join(name);
+    let dir = base
+        .join("testkit")
+        .join(name)
+        .join(std::process::id().to_string());
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create the scratch directory");
     dir
