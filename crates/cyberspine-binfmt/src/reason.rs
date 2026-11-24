@@ -409,3 +409,65 @@ fn push_float(out: &mut String, value: f32, precision: Option<u8>) {
         None => out.push_str(&format!("{value}")),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct View {
+        vf: Option<f32>,
+        vi: Option<i32>,
+    }
+
+    impl ReasonView for View {
+        fn f(&self, _reg: u8) -> f32 {
+            0.0
+        }
+
+        fn i(&self, _reg: u8) -> i32 {
+            0
+        }
+
+        fn vf(&self, _var: u32) -> Option<f32> {
+            self.vf
+        }
+
+        fn vi(&self, _var: u32) -> Option<i32> {
+            self.vi
+        }
+    }
+
+    #[test]
+    fn a_missing_variable_renders_missing_instead_of_panicking() {
+        let template = StoredTemplate::parse("{vf:0}/{vi:1}", 2, 2).expect("a stored template");
+
+        assert_eq!(
+            template.render(&View { vf: None, vi: None }),
+            "<missing>/<missing>"
+        );
+    }
+
+    #[test]
+    fn a_stored_template_must_not_name_a_variable() {
+        assert_eq!(
+            StoredTemplate::parse("{vf:phase}", 0, 0),
+            Err(TemplateError::NameInStored {
+                name: "phase".to_string()
+            }),
+            "the assembler rewrites names to indices before the host sees a template"
+        );
+    }
+
+    #[test]
+    fn a_precision_applies_to_the_rendered_value() {
+        let template = StoredTemplate::parse("{vf:0:.1}", 1, 0).expect("a stored template");
+
+        assert_eq!(
+            template.render(&View {
+                vf: Some(1.25),
+                vi: None
+            }),
+            "1.2"
+        );
+    }
+}

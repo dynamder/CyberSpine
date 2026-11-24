@@ -7,8 +7,9 @@
 
 use std::ffi::OsStr;
 use std::path::PathBuf;
-use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::process::Output;
+use std::sync::OnceLock;
+use std::time::Duration;
 
 use cyberspine_asm::assembler::{generate_image, parse};
 use cyberspine_core::binfmt::load::VerifiedImage;
@@ -43,50 +44,46 @@ fn scratch(name: &str) -> PathBuf {
     scratch_dir(&format!("runtime/matrix/{name}"))
 }
 
-/// `tag` keeps the tests independent: `scratch_dir` wipes the directory it
-/// returns, so two tests sharing a name delete each other's fixtures.
-fn image(tag: &str) -> PathBuf {
-    let dir = scratch(&format!("image/{tag}"));
-    let rig = cyberspine_manifest::from_json(MANIFEST).expect("the manifest is valid");
-    let asm = parse(SOURCE).expect("the source parses");
-    let image = generate_image(&asm, &rig).expect("the source generates");
-    let bytes = VerifiedImage::verify(image)
-        .expect("the image is valid")
-        .to_bytes();
-    let path = dir.join("halt.csp");
-    std::fs::write(&path, bytes).expect("the image is written");
-    path
+/// The one image every case runs, built once: `scratch_dir` empties the
+/// directory it returns, so two tests building it at the same time would delete
+/// each other's file.
+fn image() -> PathBuf {
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let dir = scratch("image");
+        let rig = cyberspine_manifest::from_json(MANIFEST).expect("the manifest is valid");
+        let asm = parse(SOURCE).expect("the source parses");
+        let image = generate_image(&asm, &rig).expect("the source generates");
+        let bytes = VerifiedImage::verify(image)
+            .expect("the image is valid")
+            .to_bytes();
+        let path = dir.join("halt.csp");
+        std::fs::write(&path, bytes).expect("the image is written");
+        path
+    })
+    .clone()
 }
 
-fn garbage(tag: &str) -> PathBuf {
-    let dir = scratch(&format!("garbage/{tag}"));
-    let path = dir.join("not-an-image.csp");
-    std::fs::write(&path, b"GARBAGE").expect("the file is written");
-    path
+fn garbage() -> PathBuf {
+    static PATH: OnceLock<PathBuf> = OnceLock::new();
+    PATH.get_or_init(|| {
+        let dir = scratch("garbage");
+        let path = dir.join("not-an-image.csp");
+        std::fs::write(&path, b"GARBAGE").expect("the file is written");
+        path
+    })
+    .clone()
 }
 
 /// Run the binary, but never let the test hang on it.
 fn run(args: &[&OsStr], case: &str) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_cyinevm"))
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("the cyinevm binary should spawn");
-
-    let deadline = Instant::now() + LIMIT;
-    loop {
-        if child.try_wait().expect("the child is waitable").is_some() {
-            return child.wait_with_output().expect("the output is collected");
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("`{case}` did not exit within {LIMIT:?}");
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    let output =
+        cyberspine_testkit::run_within(OsStr::new(env!("CARGO_BIN_EXE_cyinevm")), args, LIMIT);
+    assert!(
+        output.status.code().is_some(),
+        "`{case}` was killed by a signal"
+    );
+    output
 }
 
 fn code(output: &Output) -> i32 {
@@ -116,9 +113,9 @@ fn assert_no_panic(output: &Output, case: &str) {
 
 #[test]
 fn bad_flag_combinations_are_usage_errors() {
-    let image_path = image("flags");
+    let image_path = image();
     let image = image_path.as_os_str();
-    let garbage_path = garbage("flags");
+    let garbage_path = garbage();
     let garbage = garbage_path.as_os_str();
     let bogus = OsStr::new("target/definitely-not-here.csp");
 
@@ -217,7 +214,7 @@ fn bad_flag_combinations_are_usage_errors() {
 
 #[test]
 fn the_matrix_keeps_the_documented_codes() {
-    let image_path = image("matrix");
+    let image_path = image();
     let image = image_path.as_os_str();
 
     assert_eq!(
@@ -253,7 +250,7 @@ fn no_two_flag_prefix_panics() {
     // table is an instance of — no short argument vector reaches a panic. Every
     // invocation ends with `--ticks 0`, so a valid combination terminates
     // instead of waiting for Ctrl-C.
-    let image_path = image("prefix");
+    let image_path = image();
     let flags: &[&OsStr] = &[
         OsStr::new("--unpaced"),
         OsStr::new("--until-halt"),

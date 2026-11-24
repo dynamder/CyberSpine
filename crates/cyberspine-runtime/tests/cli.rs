@@ -4,15 +4,18 @@
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
+use std::time::Duration;
 
 use cyberspine_asm::assembler::{generate_image, generate_image_debug, parse};
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::rig::Rig;
 use cyberspine_testkit::scratch_dir;
 
+/// A run that needs longer than this is a hang, not a slow test.
+const RUN_LIMIT: Duration = Duration::from_secs(30);
+
 /// The input was understood and rejected (`docs/diagnostics.md` §6).
-#[cfg(feature = "rpc")]
 const REJECTED: i32 = 3;
 /// An instance faulted.
 const FAULTED: i32 = 4;
@@ -109,10 +112,7 @@ fn write_debug_image(dir: &Path, name: &str, source: &str, manifest: &str) -> Pa
 }
 
 fn run(args: Vec<&OsStr>) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_cyinevm"))
-        .args(args)
-        .output()
-        .expect("the cyinevm binary should run")
+    cyberspine_testkit::run_within(OsStr::new(env!("CARGO_BIN_EXE_cyinevm")), &args, RUN_LIMIT)
 }
 
 fn stderr(output: &Output) -> String {
@@ -265,6 +265,31 @@ fn a_missing_image_is_reported() {
     assert!(
         stderr(&output).contains("could not read"),
         "stderr: {}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn a_corrupt_image_is_rejected_not_an_environment_failure() {
+    let dir = scratch("corrupt-image");
+    let path = dir.join("corrupt.csp");
+    fs::write(&path, b"not an image").expect("the file is written");
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        path.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("0"),
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(REJECTED),
+        "docs/runtime.md §1: a file that reads but is not an image is rejected",
+    );
+    assert!(
+        stderr(&output).contains("binfmt."),
+        "the loader names the rule: {}",
         stderr(&output)
     );
 }
@@ -624,52 +649,8 @@ fn a_decision_log_replays_the_same_run() {
 }
 
 #[cfg(feature = "dylib")]
-fn arbiter_fixture() -> &'static PathBuf {
-    use std::sync::OnceLock;
-
-    static PATH: OnceLock<PathBuf> = OnceLock::new();
-    PATH.get_or_init(|| {
-        let output = Command::new(env!("CARGO"))
-            .args([
-                "build",
-                "-p",
-                "cyberspine-arbiter-fixture",
-                "--message-format=json",
-                "--offline",
-            ])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .output()
-            .expect("cargo runs");
-        assert!(
-            output.status.success(),
-            "cargo could not build the fixture:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
-            let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
-                continue;
-            };
-            if record["reason"] != "compiler-artifact" {
-                continue;
-            }
-            if !record["package_id"]
-                .as_str()
-                .unwrap_or_default()
-                .contains("cyberspine-arbiter-fixture")
-            {
-                continue;
-            }
-            for file in record["filenames"].as_array().into_iter().flatten() {
-                let path = PathBuf::from(file.as_str().unwrap_or_default());
-                if path.extension().and_then(|ext| ext.to_str())
-                    == Some(std::env::consts::DLL_EXTENSION)
-                {
-                    return path;
-                }
-            }
-        }
-        panic!("cargo did not report a shared library for the fixture");
-    })
+fn arbiter_fixture() -> PathBuf {
+    cyberspine_testkit::fixture_library("cyberspine-arbiter-fixture")
 }
 
 #[cfg(feature = "dylib")]
@@ -696,6 +677,51 @@ fn a_dylib_arbiter_rules_in_two_rounds() {
         "the first round crossed the boundary: {}",
         stderr(&output)
     );
+}
+
+/// A body that panics is the environment failing, not the program faulting: the
+/// exit class says "this run could not be carried out" (`docs/runtime.md` §1),
+/// and the panic guard turns the failure into a message instead of an abort.
+#[cfg(feature = "dylib")]
+#[test]
+fn a_panicking_body_fails_the_run_as_the_environment() {
+    let dir = scratch("dylib-panic");
+    let image = write_image(&dir, "halt.csp", HALT, cyberspine_panic_fixture::RIG_JSON);
+    let spec = format!(
+        "dylib:{}",
+        cyberspine_testkit::fixture_library("cyberspine-panic-fixture").display()
+    );
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("-b"),
+        OsStr::new(&spec),
+        OsStr::new("--ticks"),
+        OsStr::new("1"),
+        OsStr::new("--unpaced"),
+        OsStr::new("--report"),
+        OsStr::new("json"),
+    ]);
+
+    let message = stderr(&output);
+    assert_eq!(
+        output.status.code(),
+        Some(ENVIRONMENT),
+        "a panicking body is not an instance fault: {message}"
+    );
+    assert!(
+        message.contains("the body panicked (4)"),
+        "the ABI status is PANIC: {message}"
+    );
+    assert!(
+        message.contains(cyberspine_panic_fixture::PANIC_REASON),
+        "the body's own message reaches the user: {message}"
+    );
+
+    let report: serde_json::Value =
+        serde_json::from_str(stdout(&output).trim()).expect("the report is json");
+    assert_eq!(report["outcome"], "environment");
 }
 
 /// The run report is the machine answer to "did it finish, and why".
@@ -862,4 +888,16 @@ fn a_diverged_replay_is_a_json_warning_too() {
     let value = json_record_with_code(&text, "rt.replay-unused");
     assert_eq!(value["kind"], "diagnostic");
     assert_eq!(value["level"], "warning");
+}
+
+#[test]
+fn the_help_text_is_the_cli_contract() {
+    let output = run(vec![OsStr::new("--help")]);
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+
+    // The usage line carries the file name the platform produced; the contract
+    // is the command name.
+    let help = stdout(&output).replace("cyinevm.exe", "cyinevm");
+    insta::assert_snapshot!("help", help);
 }

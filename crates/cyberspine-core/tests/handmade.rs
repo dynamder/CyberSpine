@@ -145,7 +145,7 @@ fn hand_header(file_len: usize, code_len: usize) -> [u8; HEADER_LEN] {
     let mut h = [0u8; HEADER_LEN];
 
     h[0..4].copy_from_slice(b"CSPX"); //  0  magic
-    h[4..6].copy_from_slice(&0x0800u16.to_le_bytes()); //  4  format 1.0.0
+    h[4..6].copy_from_slice(&0x0840u16.to_le_bytes()); //  4  format 1.1.0
     h[6..8].copy_from_slice(&1u16.to_le_bytes()); //  6  isa_version = 1
     h[8..10].copy_from_slice(&0u16.to_le_bytes()); //  8  reserved_a = 0
     h[10..12].copy_from_slice(&0u16.to_le_bytes()); // 10  flags = 0
@@ -279,6 +279,29 @@ const LAST: usize = CODE_LEN - 1;
 /// Run with `cargo test --test handmade -- --ignored`. The committed files are
 /// the golden reference; this exists so the bytes are reproducible and the
 /// layout is documented in code.
+/// An older minor loads and says so.
+///
+/// The golden is the current minor, so the older file is forged here: what is
+/// under test is the rule (`binfmt.md` C2 — a minor is a report, not a gate),
+/// not a second copy of the bytes.
+#[test]
+fn an_older_minor_loads_with_a_warning() {
+    let older = rehash(&handmade_valid(), &[(4, &0x0800u16.to_le_bytes())]);
+
+    let mut diagnostics = cyberspine_diag::Diagnostics::new(false);
+    let loaded = VerifiedImage::from_bytes_with(&older, &mut diagnostics);
+
+    assert!(loaded.is_ok(), "an older minor is a warning, not a refusal");
+    assert!(
+        diagnostics
+            .items()
+            .iter()
+            .any(|item| item.code.as_str() == "binfmt.C2"),
+        "{:?}",
+        diagnostics.items()
+    );
+}
+
 #[test]
 #[ignore = "writes tests/fixtures/*.csp; run deliberately to regenerate goldens"]
 fn regenerate_fixtures() {
@@ -316,7 +339,7 @@ fn the_hand_assembled_bytes_match_the_offset_table() {
 
     // §4, field by field, read straight out of the byte string.
     assert_eq!(&bytes[0..4], b"CSPX");
-    assert_eq!(u16::from_le_bytes(bytes[4..6].try_into().unwrap()), 0x0800);
+    assert_eq!(u16::from_le_bytes(bytes[4..6].try_into().unwrap()), 0x0840);
     assert_eq!(u16::from_le_bytes(bytes[6..8].try_into().unwrap()), 1);
     assert_eq!(
         u16::from_le_bytes(bytes[8..10].try_into().unwrap()),

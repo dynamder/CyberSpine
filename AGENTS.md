@@ -3,6 +3,7 @@
 This is a bytecode VM project, intending to give a unify interface to drive real or virtual robots, actuators, etc.
 
 ## Primary rule
+You are not allowed to modify the AGENTS.md under any circumstances.
 
 You should almost never write code comments. Try use clear naming and module structure, plus leveraging the rust type system to make the code self-explanary. You should always try to make illegal things impossible to express, like using type-state pattern to eliminate illegal state transition. Only for those extremely tricky things you should write a concise comment to notice others. Doc comments are recommended, but they should be targeted on how to use the api and the common pitfalls when using them, and the doc comments should be concise.
 
@@ -28,6 +29,9 @@ If you are writing a new feature, you should always search relevant code and try
 
 Git commit in small step, conventional commit, but don't prose about the commit message. The commit message should only be a few sentences.
 
+A test that pins bytes (the snapshots under `tests/snapshots/`) is a contract. CI never does. A change that touches both
+`src/` and a `.snap` file is a contract change. You should almost rarely change a contract, if you are sure you need to, say in the PR or directly to the user why each changed line is expected.
+
 When you finish a new feature, there should always be a human-runnable and human-distinguishable executable for users to run, see and check.
 
 ## Maintaining
@@ -38,7 +42,7 @@ Keep the issue and pr message you write concise, only cover the necessary messag
 
 ## Tools
 
-The two tools are the workspace default members. Build them with:
+The two tools are the workspace default members(It's also the deployment artifact). Build them with:
 
 ```bash
 cargo build --release
@@ -46,3 +50,15 @@ cargo build --release
 
 `target/release/cyinea` assembles a `.csa`; `target/release/cyinevm` runs a `.csp`.
 Omit `--backend` to run against the built-in dummy body.
+
+The checks are one command, and it is the same list CI runs:
+
+```bash
+cargo xtask check   # fmt, clippy, no_std, every feature combination
+cargo xtask test    # build the cdylib fixtures, then the workspace tests
+cargo xtask ci      # both
+cargo xtask doctor  # build environment and worktree hygiene
+```
+
+Tests load the fixture libraries from the profile directory; they do not build
+them. `cargo xtask test` takes care of that.

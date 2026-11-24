@@ -6,9 +6,15 @@ members = [
     "demos/maze/world",
     "demos/maze/dylib",
     "demos/maze/rpc",
+    "xtask",
 ]
 default-members = ["crates/cyberspine-asm", "crates/cyberspine-runtime"]
 
 [workspace.package]
 license = "MIT OR Apache-2.0"
 rust-version = "1.89"
+
+# Line tables are enough for a test backtrace; full debuginfo is most of the
+# build time and almost all of the target directory.
+[profile.dev]
+debug = 1
