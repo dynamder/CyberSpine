@@ -25,7 +25,9 @@ thiserror = "2.0.21"
 [dev-dependencies]
 cyberspine-asm = { path = "../cyberspine-asm" }
 cyberspine-manifest = { path = "../cyberspine-manifest" }
+cyberspine-panic-fixture = { path = "../cyberspine-panic-fixture" }
 cyberspine-testkit = { path = "../cyberspine-testkit" }
+insta = "1.49.0"
 serde_json = "1"
 
 [[bin]]

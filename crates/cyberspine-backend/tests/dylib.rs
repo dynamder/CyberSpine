@@ -1,69 +1,27 @@
 //! End to end through a real shared library.
 //!
-//! The fixture crate is built on demand: Cargo does not build another package's
-//! `cdylib` for a test, so this test asks it to. The artifact path comes from
-//! `--message-format=json`, which keeps the test independent of the target
-//! directory, the profile and the platform's library suffix.
+//! The library is a workspace member, so a build or a workspace test run has
+//! already produced it; the test only has to find it.
 
 #![cfg(feature = "dylib")]
 
 #[path = "../../cyberspine-backend-fixture/src/body.rs"]
 mod body;
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::OnceLock;
+// The fixture crate depends on this one, so its source is included rather than
+// linked: a dev-dependency would be a package cycle.
+#[path = "../../cyberspine-panic-fixture/src/body.rs"]
+mod panic_body;
+
+use std::path::PathBuf;
 
 use cyberspine_backend::dylib;
 use cyberspine_rig::BoundFingerprint;
 use cyberspine_testkit as testkit;
 use cyberspine_vm::{Backend, Host, Shape};
 
-fn fixture() -> &'static Path {
-    static PATH: OnceLock<PathBuf> = OnceLock::new();
-
-    PATH.get_or_init(|| {
-        let output = Command::new(env!("CARGO"))
-            .args([
-                "build",
-                "-p",
-                "cyberspine-backend-fixture",
-                "--message-format=json",
-                "--offline",
-            ])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .output()
-            .expect("cargo runs");
-
-        assert!(
-            output.status.success(),
-            "cargo could not build the fixture:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
-            let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
-                continue;
-            };
-            if record["reason"] != "compiler-artifact" {
-                continue;
-            }
-            let package = record["package_id"].as_str().unwrap_or_default();
-            if !package.contains("cyberspine-backend-fixture") {
-                continue;
-            }
-            for file in record["filenames"].as_array().into_iter().flatten() {
-                let path = PathBuf::from(file.as_str().unwrap_or_default());
-                if path.extension().and_then(|ext| ext.to_str())
-                    == Some(std::env::consts::DLL_EXTENSION)
-                {
-                    return path;
-                }
-            }
-        }
-
-        panic!("cargo did not report a shared library for the fixture");
-    })
+fn fixture() -> PathBuf {
+    testkit::fixture_library("cyberspine-backend-fixture")
 }
 
 /// Four ticks of a program that publishes both muscles every tick.
@@ -99,7 +57,7 @@ fn the_fixture_manifest_and_body_declare_the_same_rig() {
 
 #[test]
 fn a_library_declares_the_same_body_as_the_linked_type() {
-    let loaded = dylib::open(fixture()).expect("the fixture loads");
+    let loaded = dylib::open(&fixture()).expect("the fixture loads");
 
     assert_eq!(
         loaded.fingerprint(),
@@ -121,7 +79,7 @@ fn a_library_declares_the_same_body_as_the_linked_type() {
 fn a_library_produces_the_same_trace_as_the_linked_body() {
     let linked = trace(Host::new(body::Fixture::new()));
     let loaded = trace(Host::new(
-        dylib::open(fixture()).expect("the fixture loads"),
+        dylib::open(&fixture()).expect("the fixture loads"),
     ));
 
     assert_eq!(loaded, linked, "one body, two packagings, one trace");
@@ -141,5 +99,47 @@ fn a_missing_library_names_the_path_it_could_not_load() {
     assert!(
         error.to_string().contains("cyberspine-absent-body"),
         "{error}"
+    );
+}
+
+fn panic_fixture() -> PathBuf {
+    testkit::fixture_library("cyberspine-panic-fixture")
+}
+
+#[test]
+fn the_panic_fixture_is_the_body_its_manifest_describes() {
+    let declared =
+        cyberspine_manifest::from_json(panic_body::RIG_JSON).expect("the manifest parses");
+
+    assert_eq!(declared, panic_body::rig());
+    assert_eq!(
+        panic_body::Panicky::new().fingerprint(),
+        BoundFingerprint::of(&declared)
+    );
+}
+
+/// A body that panics is an ABI failure (`4`), not an unwind into the host: the
+/// `catch_unwind` in `export!` is the difference between this test running and
+/// the whole process aborting (`docs/backend.md` §5).
+#[test]
+fn a_panicking_body_returns_a_status_instead_of_unwinding_into_the_host() {
+    let loaded = dylib::open(&panic_fixture()).expect("the fixture introduces itself");
+    let image = testkit::verified(testkit::action(Vec::new(), &panic_body::rig()));
+    let (mut session, _) = Host::new(loaded)
+        .load(image)
+        .expect("the image fits the body");
+
+    let error = session
+        .tick()
+        .expect_err("the body panics on the first sample");
+    let message = error.to_string();
+
+    assert!(
+        message.contains("the body panicked (4)"),
+        "the status has to be PANIC: {message}"
+    );
+    assert!(
+        message.contains(panic_body::PANIC_REASON),
+        "the panic message crosses the boundary through last_error: {message}"
     );
 }

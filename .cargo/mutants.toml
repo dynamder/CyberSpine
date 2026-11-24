@@ -1,0 +1,24 @@
+# Mutation testing: which of these bugs would the suite not notice?
+#
+# Run it as `cargo mutants --workspace`: the workspace's `default-members` are
+# the two shipped binaries, and mutating only those would leave the libraries
+# unexamined.
+test_tool = "nextest"
+
+# A mutant in a library crate is often caught by a *dependent's* tests, so the
+# run has to be the workspace's, not the mutated package's.
+test_workspace = true
+
+# What is left out, and why:
+#   xtask/**            the harness that runs the tests, not a thing it tests
+#   crates/*-fixture/** loaded by another crate's test; mutating the fixture
+#                       measures the scaffolding
+#   crates/cyberspine-testkit/**  the test scaffolding itself
+#   demos/**            examples, and the demo body is a `cdylib` built before the
+#                       run: a mutant inside it is never reloaded
+exclude_globs = [
+    "xtask/**",
+    "crates/*-fixture/**",
+    "crates/cyberspine-testkit/**",
+    "demos/**",
+]

@@ -1,65 +1,19 @@
 //! End to end through a real shared library.
 //!
-//! The fixture crate is built on demand: Cargo does not build another package's
-//! `cdylib` for a test, so this test asks it to. The artifact path comes from
-//! `--message-format=json`, which keeps the test independent of the target
-//! directory, the profile and the platform's library suffix.
+//! The library is a workspace member, so a build or a workspace test run has
+//! already produced it; the test only has to find it.
 
 #![cfg(feature = "dylib")]
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::OnceLock;
+use std::path::PathBuf;
 
 use cyberspine_arbiter::{
     Arbiter, Completion, EventId, InstanceRef, InterruptEvent, Verdict, dylib,
 };
+use cyberspine_testkit as testkit;
 
-fn fixture() -> &'static Path {
-    static PATH: OnceLock<PathBuf> = OnceLock::new();
-
-    PATH.get_or_init(|| {
-        let output = Command::new(env!("CARGO"))
-            .args([
-                "build",
-                "-p",
-                "cyberspine-arbiter-fixture",
-                "--message-format=json",
-                "--offline",
-            ])
-            .current_dir(env!("CARGO_MANIFEST_DIR"))
-            .output()
-            .expect("cargo runs");
-
-        assert!(
-            output.status.success(),
-            "cargo could not build the fixture:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-
-        for line in String::from_utf8_lossy(&output.stdout).lines() {
-            let Ok(record) = serde_json::from_str::<serde_json::Value>(line) else {
-                continue;
-            };
-            if record["reason"] != "compiler-artifact" {
-                continue;
-            }
-            let package = record["package_id"].as_str().unwrap_or_default();
-            if !package.contains("cyberspine-arbiter-fixture") {
-                continue;
-            }
-            for file in record["filenames"].as_array().into_iter().flatten() {
-                let path = PathBuf::from(file.as_str().unwrap_or_default());
-                if path.extension().and_then(|ext| ext.to_str())
-                    == Some(std::env::consts::DLL_EXTENSION)
-                {
-                    return path;
-                }
-            }
-        }
-
-        panic!("cargo did not report a shared library for the fixture");
-    })
+fn fixture() -> PathBuf {
+    testkit::fixture_library("cyberspine-arbiter-fixture")
 }
 
 fn event() -> InterruptEvent {
@@ -79,7 +33,7 @@ fn event() -> InterruptEvent {
 
 #[test]
 fn two_rounds_cross_the_library_boundary() {
-    let mut arbiter = dylib::open(fixture()).expect("the fixture loads");
+    let mut arbiter = dylib::open(&fixture()).expect("the fixture loads");
     assert_eq!(arbiter.build_id(), "cyberspine-arbiter-fixture/0.1.0");
 
     arbiter.deliver(event());
