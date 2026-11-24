@@ -121,10 +121,10 @@ pub enum ImageGenError {
     JumpOffsetOverflow { pc: usize, location: Location },
     #[error("malformed {op:?}: expected an index operand")]
     MissingIndexOperand { op: OpCode, location: Location },
-    #[error("`{0}` is declared more than once")]
-    DuplicateName(SmolStr),
-    #[error("`{0}` is a reserved name")]
-    ReservedName(SmolStr),
+    #[error("`{name}` is declared more than once")]
+    DuplicateName { name: SmolStr, location: Location },
+    #[error("`{name}` is a reserved name")]
+    ReservedName { name: SmolStr, location: Location },
     #[error("the rig is not usable: {0}")]
     Rig(#[from] RigError),
     #[error("FEXCITE target `{name}` is neither a muscle nor a group")]
@@ -140,9 +140,13 @@ pub enum ImageGenError {
     #[error("group `{name}` is only legal as a FEXCITE target")]
     GroupOutsideExcite { name: SmolStr, location: Location },
     #[error("group `{group}` contains unknown muscle `{member}`")]
-    UnknownGroupMember { group: SmolStr, member: SmolStr },
-    #[error("group `{0}` collides with a muscle name")]
-    GroupNameCollision(SmolStr),
+    UnknownGroupMember {
+        group: SmolStr,
+        member: SmolStr,
+        location: Location,
+    },
+    #[error("group `{name}` collides with a muscle name")]
+    GroupNameCollision { name: SmolStr, location: Location },
     #[error("FEXCITE is still pending here; FLUSH is missing")]
     PendingNotFlushed {
         excite_pc: usize,
@@ -187,8 +191,8 @@ cyberspine_diag::codes! {
         Self::JumpTargetOutOfRange { .. } => "asm.jump-out-of-range",
         Self::JumpOffsetOverflow { .. } => "asm.jump-out-of-range",
         Self::MissingIndexOperand { .. } => "asm.bad-operand",
-        Self::DuplicateName(_) => "asm.duplicate-name",
-        Self::ReservedName(_) => "asm.reserved-name",
+        Self::DuplicateName { .. } => "asm.duplicate-name",
+        Self::ReservedName { .. } => "asm.reserved-name",
         Self::Rig(_) => "asm.rig",
         Self::UnknownExciteTarget { .. } => "asm.name-not-in-rig",
         Self::UnknownSensorF { .. } => "asm.name-not-in-rig",
@@ -197,7 +201,7 @@ cyberspine_diag::codes! {
         Self::UnknownVarI { .. } => "asm.name-not-in-rig",
         Self::GroupOutsideExcite { .. } => "asm.name-not-in-rig",
         Self::UnknownGroupMember { .. } => "asm.unknown-group-member",
-        Self::GroupNameCollision(_) => "asm.duplicate-name",
+        Self::GroupNameCollision { .. } => "asm.duplicate-name",
         Self::PendingNotFlushed { .. } => "asm.pending-leak",
         Self::InvalidWait { .. } => "asm.bad-wait",
         Self::ZeroHz => "asm.bad-field",
@@ -214,8 +218,9 @@ cyberspine_diag::codes! {
 impl ImageGenError {
     /// This error as a diagnostic, located in `file`.
     ///
-    /// Header, rig and size errors have no single line to point at, so they name
-    /// the file as a whole rather than inventing a position.
+    /// A field-level header error (`hz`, `max_wait`), a rig error and a size
+    /// error have no single line to point at, so they name the file as a whole
+    /// rather than inventing a position.
     pub fn diagnostic(&self, file: &str) -> Diagnostic {
         let anchor = match self.location() {
             Some(location) => diagnostic::anchor(file, location),
@@ -230,7 +235,8 @@ impl ImageGenError {
     }
 
     /// Where in the source this error belongs, when the source construct is
-    /// known. Header, rig and size errors have no single line to point at.
+    /// known. Field-level header, rig and size errors have no single line to
+    /// point at.
     pub fn location(&self) -> Option<Location> {
         match self {
             Self::DuplicateLabel { location, .. }
@@ -249,12 +255,12 @@ impl ImageGenError {
             | Self::MissingReason { location }
             | Self::InvalidReason { location, .. }
             | Self::ReasonTooLong { location, .. }
-            | Self::InvalidWait { location, .. } => Some(*location),
-            Self::DuplicateName(_)
-            | Self::ReservedName(_)
-            | Self::UnknownGroupMember { .. }
-            | Self::GroupNameCollision(_)
-            | Self::Rig(_)
+            | Self::InvalidWait { location, .. }
+            | Self::DuplicateName { location, .. }
+            | Self::ReservedName { location, .. }
+            | Self::UnknownGroupMember { location, .. }
+            | Self::GroupNameCollision { location, .. } => Some(*location),
+            Self::Rig(_)
             | Self::ZeroHz
             | Self::InvalidMaxWait
             | Self::TooManyInstructions
@@ -521,13 +527,20 @@ impl Symbols {
             image_sensors_f.push((name.clone(), SensorSource::Muscle));
         }
 
-        for group in &header.muscle_groups {
-            check_declarable(&group.name)?;
+        for declared in &header.muscle_groups {
+            let group = &declared.item;
+            check_declarable(&group.name, declared.location)?;
             if muscles.contains_key(&group.name) {
-                return Err(ImageGenError::GroupNameCollision(group.name.clone()));
+                return Err(ImageGenError::GroupNameCollision {
+                    name: group.name.clone(),
+                    location: declared.location,
+                });
             }
             if groups.contains_key(&group.name) {
-                return Err(ImageGenError::DuplicateName(group.name.clone()));
+                return Err(ImageGenError::DuplicateName {
+                    name: group.name.clone(),
+                    location: declared.location,
+                });
             }
             let mut members = Vec::with_capacity(group.members.len());
             for member in &group.members {
@@ -537,6 +550,7 @@ impl Symbols {
                         .ok_or_else(|| ImageGenError::UnknownGroupMember {
                             group: group.name.clone(),
                             member: member.clone(),
+                            location: declared.location,
                         })?;
                 members.push(index);
             }
@@ -558,10 +572,14 @@ impl Symbols {
         sensors_i.insert(SmolStr::new("tick"), image_sensors_i.len() as u32);
         image_sensors_i.push((builtin("tick"), SensorSource::BuiltinTick));
 
-        for (index, (name, init)) in header.vars_f.iter().enumerate() {
-            check_declarable(name)?;
+        for (index, declared) in header.vars_f.iter().enumerate() {
+            let (name, init) = &declared.item;
+            check_declarable(name, declared.location)?;
             if vars_f.contains_key(name) {
-                return Err(ImageGenError::DuplicateName(name.clone()));
+                return Err(ImageGenError::DuplicateName {
+                    name: name.clone(),
+                    location: declared.location,
+                });
             }
             vars_f.insert(name.clone(), index as u32);
             image_vars_f.push((
@@ -570,10 +588,14 @@ impl Symbols {
             ));
         }
 
-        for (index, (name, init)) in header.vars_i.iter().enumerate() {
-            check_declarable(name)?;
+        for (index, declared) in header.vars_i.iter().enumerate() {
+            let (name, init) = &declared.item;
+            check_declarable(name, declared.location)?;
             if vars_i.contains_key(name) {
-                return Err(ImageGenError::DuplicateName(name.clone()));
+                return Err(ImageGenError::DuplicateName {
+                    name: name.clone(),
+                    location: declared.location,
+                });
             }
             vars_i.insert(name.clone(), index as u32);
             image_vars_i.push((
@@ -603,9 +625,12 @@ fn builtin(text: &'static str) -> Name {
     Name::new(text).expect("the built-in names are identifiers")
 }
 
-fn check_declarable(name: &SmolStr) -> Result<(), ImageGenError> {
+fn check_declarable(name: &SmolStr, location: Location) -> Result<(), ImageGenError> {
     if is_reserved_name(name) {
-        Err(ImageGenError::ReservedName(name.clone()))
+        Err(ImageGenError::ReservedName {
+            name: name.clone(),
+            location,
+        })
     } else {
         Ok(())
     }

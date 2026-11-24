@@ -14,7 +14,7 @@ use crate::assembler::{
         into_syntax, snippet, token_snippet,
     },
     ident,
-    text::quoted_string,
+    text::{Located, quoted_string},
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -140,9 +140,11 @@ pub struct AsmHeader {
     /// The manifest path from `.rig`, resolved against the source file by the
     /// caller. `None` means the manifest has to come from `--rig`.
     pub rig: Option<SmolStr>,
-    pub muscle_groups: Vec<GroupDef>,
-    pub vars_f: Vec<(SmolStr, f32)>,
-    pub vars_i: Vec<(SmolStr, i32)>,
+    /// Declared groups, each pinned to the line it was written on: their name
+    /// checks run during generation, but the place belongs to the declaration.
+    pub muscle_groups: Vec<Located<GroupDef>>,
+    pub vars_f: Vec<Located<(SmolStr, f32)>>,
+    pub vars_i: Vec<Located<(SmolStr, i32)>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -466,9 +468,9 @@ pub fn header(input: &mut &str) -> Result<AsmHeader, AsmParseErrors> {
     let mut parsing_fixed_header = ParsingFixedHeader::default();
     let mut description: Option<String> = None;
     let mut rig: Option<SmolStr> = None;
-    let mut muscle_groups: Vec<GroupDef> = Vec::new();
-    let mut vars_f: Vec<(SmolStr, f32)> = Vec::new();
-    let mut vars_i: Vec<(SmolStr, i32)> = Vec::new();
+    let mut muscle_groups: Vec<Located<GroupDef>> = Vec::new();
+    let mut vars_f: Vec<Located<(SmolStr, f32)>> = Vec::new();
+    let mut vars_i: Vec<Located<(SmolStr, i32)>> = Vec::new();
     let mut errors = Vec::new();
     let mut header_end_line = None;
 
@@ -542,9 +544,18 @@ pub fn header(input: &mut &str) -> Result<AsmHeader, AsmParseErrors> {
                         };
                         push_field(result, location, &mut errors);
                     }
-                    HeaderStmt::Group(group_def) => muscle_groups.push(group_def),
-                    HeaderStmt::Varf { name, value } => vars_f.push((name, value)),
-                    HeaderStmt::VarI { name, value } => vars_i.push((name, value)),
+                    HeaderStmt::Group(group_def) => muscle_groups.push(Located {
+                        item: group_def,
+                        location,
+                    }),
+                    HeaderStmt::Varf { name, value } => vars_f.push(Located {
+                        item: (name, value),
+                        location,
+                    }),
+                    HeaderStmt::VarI { name, value } => vars_i.push(Located {
+                        item: (name, value),
+                        location,
+                    }),
                     // `.text` was handled above so it can end the loop before
                     // the declaration tables are updated.
                     HeaderStmt::Text => {}

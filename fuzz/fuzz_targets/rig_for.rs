@@ -38,11 +38,11 @@ pub fn rig_for(asm: &Asm) -> Rig {
         .header
         .muscle_groups
         .iter()
-        .map(|group| group.name.as_str())
+        .map(|declared| declared.item.name.as_str())
         .collect();
 
-    for group in &asm.header.muscle_groups {
-        muscles.extend(group.members.iter().map(|member| member.as_str()));
+    for declared in &asm.header.muscle_groups {
+        muscles.extend(declared.item.members.iter().map(|member| member.as_str()));
     }
 
     for item in &asm.text {

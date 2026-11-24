@@ -567,6 +567,40 @@ fn a_generation_error_is_rendered_at_its_line() {
     assert!(!dir.join("jump.csp").exists(), "nothing is written");
 }
 
+/// `docs/asm.md` §6.1: a declaration error is located too. The duplicate
+/// `.var_f` sits on line 7 of this source.
+#[test]
+fn a_duplicate_declaration_is_rendered_at_its_line() {
+    let dir = scratch("declaration-location");
+    let source = write_file(
+        &dir,
+        "dup.csa",
+        "\
+.layer 10
+.clock hz = 60
+.fuel 4096
+.max_wait 600.0
+.rig \"greet.rig.json\"
+.var_f phase = 0.0
+.var_f phase = 1.0
+.text
+    HALT
+",
+    );
+    write_file(&dir, "greet.rig.json", MANIFEST);
+
+    let output = run(vec![OsStr::new("-a"), source.as_os_str()]);
+
+    assert_eq!(output.status.code(), Some(REJECTED));
+    let message = stderr(&output);
+    assert!(message.contains("asm.duplicate-name"), "stderr: {message}");
+    assert!(
+        message.contains("dup.csa:7:"),
+        "the declaration error must carry path:line:col, got: {message}"
+    );
+    assert!(!dir.join("dup.csp").exists(), "nothing is written");
+}
+
 /// Warnings are reported but do not fail the build unless asked to.
 #[test]
 fn warnings_are_reported_and_denied_on_request() {

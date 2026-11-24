@@ -17,8 +17,8 @@ use winnow::{
 use crate::assembler::{
     Line, comments,
     diagnostic::{
-        AsmParseErrors, Location, PResult, ParseErrorKind, cut_at, into_syntax, snippet,
-        token_snippet,
+        AsmParseErrors, Location, PResult, ParseErrorKind, SyntaxError, cut_at, into_syntax,
+        snippet, token_snippet,
     },
     ident, is_reserved_name,
     text::insn::insn,
@@ -196,8 +196,14 @@ fn directive_name(rest: &str) -> SmolStr {
 /// string lexer, so a reason and a manifest path cannot disagree about escapes.
 pub(crate) fn quoted_string<'i>(input: &mut Line<'i>) -> PResult<SmolStr> {
     let text = *input;
+    // A token that never opens a quote is a backtrack, not a cut: the caller
+    // knows what it expected there (a quoted manifest path, a quoted reason
+    // string) and reports that instead of a bare "syntax error".
     let Some(rest) = text.strip_prefix('"') else {
-        return cut_at(text, ParseErrorKind::Unexpected);
+        return Err(ErrMode::Backtrack(SyntaxError::at(
+            text,
+            ParseErrorKind::Unexpected,
+        )));
     };
 
     let mut out = String::new();

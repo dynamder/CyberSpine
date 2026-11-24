@@ -9,7 +9,7 @@
 //! below make that explicit: `rig` builds the smallest rig a test can get away
 //! with, and the `_with` forms take it.
 
-use cyberspine_asm::assembler::{ImageGenError, generate_image, parse};
+use cyberspine_asm::assembler::{ImageGenError, Location, generate_image, parse};
 use cyberspine_core::binfmt::image::{Image, SensorSource};
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::isa::jump::jump_target;
@@ -448,7 +448,7 @@ fn a_group_name_cannot_collide_with_a_muscle() {
     let rig = rig(&["a"], &[], &[]);
     let err = error_with(".group a = a\n.text\nHALT\n", &rig);
     assert!(
-        matches!(err, ImageGenError::GroupNameCollision(_)),
+        matches!(err, ImageGenError::GroupNameCollision { .. }),
         "unexpected error: {err}"
     );
 }
@@ -491,8 +491,13 @@ fn duplicate_declarations_are_rejected() {
         ".group g = a\n.group g = a\n.text\nHALT\n",
     ] {
         let err = error_with(body, &rig);
+        assert_eq!(
+            err.location(),
+            Some(Location::new(6, 1)),
+            "for {body:?}: the error belongs on the duplicate declaration"
+        );
         assert!(
-            matches!(err, ImageGenError::DuplicateName(_)),
+            matches!(err, ImageGenError::DuplicateName { .. }),
             "for {body:?}: unexpected error: {err}"
         );
     }
@@ -509,7 +514,7 @@ fn reserved_names_are_rejected_in_the_tables_the_source_still_owns() {
     ] {
         let err = error_with(body, &rig);
         assert!(
-            matches!(err, ImageGenError::ReservedName(_)),
+            matches!(err, ImageGenError::ReservedName { .. }),
             "for {body:?}: unexpected error: {err}"
         );
     }

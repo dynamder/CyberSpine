@@ -71,7 +71,10 @@ pub fn lint(asm: &Asm) -> Vec<Warning> {
         .header
         .muscle_groups
         .iter()
-        .map(|group| (group.name.as_str(), group.members.len()))
+        .map(|declared| {
+            let group = &declared.item;
+            (group.name.as_str(), group.members.len())
+        })
         .collect();
     let mut warnings = Vec::new();
 
