@@ -8,7 +8,7 @@
 use cyberspine_core::binfmt::image::SensorSource;
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::rig::{Name, Rig};
-use cyberspine_vm::{Backend, BackendError, DummyBackend, Host, Permissive, RigPolicy};
+use cyberspine_vm::{Backend, BackendError, DummyBackend, Host, RigPolicy, ShapeOnly};
 
 /// What a linked body tells the operator when it is selected without a spec.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,10 +36,11 @@ pub struct Dummy;
 
 impl LinkedBody for Dummy {
     type Body = DummyBackend;
-    type Policy = Permissive;
+    type Policy = ShapeOnly;
 
-    const NOTICE: Notice =
-        Notice::Warn("no --backend given; using the built-in dummy body (rig check disabled)");
+    const NOTICE: Notice = Notice::Warn(
+        "no --backend given; using the built-in dummy body (it has no identity of its own)",
+    );
 
     fn open(image: &VerifiedImage) -> Result<DummyBackend, BackendError> {
         dummy_from_image(image)
@@ -54,8 +55,8 @@ pub type Official = Dummy;
 ///
 /// Its rig cannot carry the image's identity: the image has a fingerprint, not
 /// the manifest text, and `BoundFingerprint` deliberately has no constructor
-/// from bytes. The dummy therefore runs under [`Permissive`] and the notice says
-/// the rig check is disabled.
+/// from bytes. The dummy therefore runs under [`ShapeOnly`] — the shape is still
+/// checked, the fingerprint is not — and the notice says so.
 fn dummy_from_image(image: &VerifiedImage) -> Result<DummyBackend, BackendError> {
     let mut rig = Rig::new("dummy", 0);
 

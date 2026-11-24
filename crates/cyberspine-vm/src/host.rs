@@ -201,13 +201,24 @@ pub trait RigPolicy {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Strict;
 
-/// Accepts an image that names no body.
+/// Accepts an image that names no body; an image that names one is still
+/// checked, so this is not "run anything".
 ///
 /// For paths that legitimately have no rig: tests, and firmware that runs
 /// hand-built images. A real host must not use this — under [`Strict`] the
 /// question "was this action built for this body" is a machine check.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Permissive;
+
+/// Binds an image by shape only, because the body has no identity to offer.
+///
+/// The built-in dummy is the only body like this: it rebuilds its rig from the
+/// image's own name table, so its fingerprint says nothing about the device.
+/// That is a different statement from [`Permissive`] — "this body cannot prove
+/// who it is", not "this image need not say who it is for" — and a real body
+/// must never be driven under it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ShapeOnly;
 
 impl RigPolicy for Strict {
     fn check(declared: Fingerprint, backend: BoundFingerprint) -> Result<(), LoadError> {
@@ -222,6 +233,15 @@ impl RigPolicy for Strict {
 }
 
 impl RigPolicy for Permissive {
+    fn check(declared: Fingerprint, backend: BoundFingerprint) -> Result<(), LoadError> {
+        if declared.is_unbound() {
+            return Ok(());
+        }
+        Strict::check(declared, backend)
+    }
+}
+
+impl RigPolicy for ShapeOnly {
     fn check(_declared: Fingerprint, _backend: BoundFingerprint) -> Result<(), LoadError> {
         Ok(())
     }

@@ -69,11 +69,15 @@ cyinevm -i <IMAGE> [-i <IMAGE> ...] [-b <SPEC>] [--on-interrupt stop|continue]
 muscles、`SensorSource::Backend` 的 `sensors_f` / `sensors_i`。
 
 dummy 不可能是镜像的 rig：镜像只有指纹，没有 manifest 文本，而 `BoundFingerprint` 刻意
-没有从 `[u8; 32]` 构造的入口。因此这条路径使用 `Host::permissive()`，并在 stderr 打印：
+没有从 `[u8; 32]` 构造的入口。它没有身份可报，因此这条路径使用 `Host<_, ShapeOnly>`
+（只按 shape 约束），并在 stderr 打印：
 
 ```text
-warning: no --backend given; using the built-in dummy body (rig check disabled)
+warning: no --backend given; using the built-in dummy body (it has no identity of its own)
 ```
+
+`ShapeOnly` 与 `Permissive` 是两件事：`Permissive` 放行"镜像没有指纹"，已绑定的镜像照旧比对；
+`ShapeOnly` 说的是"这个 body 证明不了自己是谁"。前者给测试/固件，后者只给 dummy。
 
 这条 warning **不受 `--quiet` 影响**。如果需要严格 rig 校验，请使用外部 body 或静态链接
 真实 body（§7）。
@@ -242,7 +246,7 @@ pub type Official = MyBody;
 要点：
 
 - `Body` 和 `Policy` 是关联类型，linked 路径没有 `Box<dyn Backend>`，也没有 `bool` 开关。
-- 真实 body 使用 `Strict`；官方 dummy 使用 `Permissive` 并带 `Notice::Warn`。
+- 真实 body 使用 `Strict`；官方 dummy 使用 `ShapeOnly` 并带 `Notice::Warn`。
 - `Notice::Silent` 不打印 warning；`Notice::Warn(text)` 在启动时打印到 stderr。
 - 用 `--no-default-features` 构建，得到不含 `dylib`/`rpc` 代码的 `cyinevm`。
 
@@ -250,7 +254,7 @@ pub type Official = MyBody;
 
 ## 8. 非目标（v1）
 
-- `--permissive`：外部 body 始终 strict；dummy 的 permissive 是类型 `Policy` 决定的，
+- `--permissive`：外部 body 始终 strict；dummy 的 `ShapeOnly` 是类型 `Policy` 决定的，
   不是命令行开关。
 - `inspect` / 反汇编：加载失败的报错已经包含 rig 与 shape；调试信息是 `asm.md` §8 的独立任务。
 - 自动重连、热插拔、动作调度：属于上层，不属于运行时。
