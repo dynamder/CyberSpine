@@ -353,7 +353,8 @@ RPC 服务端每个连接一个任务：静默的连接不占住服务，宿主�
 ### 7.6 失败策略
 
 - `failure`：宿主为所有在途事件合成一份**配置的默认裁决**（`--on-interrupt`，默认 `Stop`），
-  session 不终止。
+  session 不终止；但整场运行不再可信（之后每个 `INTR` 都被迫走默认裁决），所以
+  `cyinevm` 以 **exit 5** 结束（`runtime.md` §1 的环境失败）。
 - 动作装载失败：报错并跳过该动作，`completion` 照常执行；`Load` + `Stop` 的 `Switch` 因此
   fail-closed 成"没有新动作、旧实例已卸载"。
 - 仲裁器与 backend 同级可信；它只能回 `Ruling`，读改不到实例状态。
@@ -396,7 +397,10 @@ pub trait ActionResolver {
 - 记录的是**每一轮**裁决：`(event, tick, actions, completion)`。`tick` 是该轮被应用的 tick，
   不是中断发生的 tick——同一事件的多轮可以落在不同 tick 上，副作用时序才可复现。
 - 不记录 `source` / `note`：那是观测数据，与 VM 重放无关。
-- 重放按 `tick <= now` 逐轮释放；缺失记录 = 该实例保持挂起，与原运行一致。
+- 重放按 `tick <= now` 逐轮释放；录制里没有的事件，或录制在给出裁决前就用完的事件，由宿主
+  按兜底默认裁决结清，并逐个报 `interrupt ...: never answered`：回放持有整份脚本，所以它知道
+  "不会再有下一轮"，宿主不必永远等下去（`--until-halt` 因此能结束）。整场运行正常结束时，
+  其中"录制里根本没有"的那些还会汇总成 `rt.replay-orphan` notice（`diagnostics.md` §5）。
 - `--decisions <PATH>` 写 JSON Lines，`--replay <PATH>` 读回。
 - `--trace` 仍只记每 tick 的命令向量；渲染文本属于运行产物，不进入 ISA 契约。
 

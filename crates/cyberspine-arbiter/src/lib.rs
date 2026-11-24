@@ -228,11 +228,19 @@ pub struct Decision {
 pub struct Batch {
     pub decisions: Vec<Decision>,
     pub failure: Option<ArbiterError>,
+    /// Events this arbiter has taken and will never answer.
+    ///
+    /// A replay can say this — it holds the whole recording — and an arbiter
+    /// wired to a live device cannot. The host settles each one with its
+    /// fallback, the same way a `failure` settles everything still owed;
+    /// without it a run waiting on a recording that never covered the interrupt
+    /// waits forever.
+    pub abandoned: Vec<EventId>,
 }
 
 impl Batch {
     pub fn is_empty(&self) -> bool {
-        self.decisions.is_empty() && self.failure.is_none()
+        self.decisions.is_empty() && self.failure.is_none() && self.abandoned.is_empty()
     }
 }
 
@@ -240,7 +248,7 @@ impl From<Vec<Decision>> for Batch {
     fn from(decisions: Vec<Decision>) -> Self {
         Self {
             decisions,
-            failure: None,
+            ..Self::default()
         }
     }
 }

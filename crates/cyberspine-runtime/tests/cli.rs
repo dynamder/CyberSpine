@@ -72,6 +72,21 @@ forever:
     JMP     forever
 ";
 
+/// A loop that never halts on its own, paced slowly enough for a test to
+/// interrupt it: 50 ticks is one second.
+#[cfg(unix)]
+const SPIN: &str = "\
+.layer 10
+.clock hz = 50
+.fuel 4096
+.max_wait 600.0
+
+.text
+forever:
+    YIELD
+    JMP     forever
+";
+
 fn scratch(name: &str) -> PathBuf {
     scratch_dir(&format!("runtime/{name}"))
 }
@@ -210,6 +225,36 @@ fn a_fault_is_reported_and_fails_the_run() {
     );
 }
 
+/// `docs/runtime.md` §1: `--trace` writes one line per tick, and the tick that
+/// faulted is the one a reader most needs to see.
+#[test]
+fn the_faulting_tick_is_in_the_trace() {
+    let dir = scratch("trace-fault");
+    let image = write_image(&dir, "loop.csp", LOOP, MANIFEST);
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("3"),
+        OsStr::new("--unpaced"),
+        OsStr::new("--trace"),
+        OsStr::new("-q"),
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(FAULTED),
+        "stderr: {}",
+        stderr(&output)
+    );
+    let trace = stdout(&output);
+    assert!(
+        trace.lines().skip(1).any(|line| line.starts_with("0\t")),
+        "the faulted tick is missing from the trace:\n{trace}"
+    );
+}
+
 #[test]
 fn a_fault_of_a_debug_build_names_its_source_line() {
     let dir = scratch("fault-debug");
@@ -249,8 +294,10 @@ fn until_halt_stops_when_the_instance_is_gone() {
     assert!(output.status.success(), "stderr: {}", stderr(&output));
 }
 
+/// `docs/runtime.md` §1: a file that cannot be read is an environment failure,
+/// and the report is still written — a terminal record for every exit code.
 #[test]
-fn a_missing_image_is_reported() {
+fn a_missing_image_is_an_environment_failure_with_a_report() {
     let dir = scratch("missing-image");
     let missing = dir.join("absent.csp");
 
@@ -259,13 +306,25 @@ fn a_missing_image_is_reported() {
         missing.as_os_str(),
         OsStr::new("--ticks"),
         OsStr::new("0"),
+        OsStr::new("--report"),
+        OsStr::new("json"),
     ]);
 
-    assert_eq!(output.status.code(), Some(ENVIRONMENT));
+    assert_eq!(
+        output.status.code(),
+        Some(ENVIRONMENT),
+        "stderr: {}",
+        stderr(&output)
+    );
     assert!(
         stderr(&output).contains("could not read"),
         "stderr: {}",
         stderr(&output)
+    );
+    assert!(
+        stdout(&output).contains("\"outcome\":\"environment\""),
+        "the failed run still reports its outcome: {}",
+        stdout(&output)
     );
 }
 
@@ -291,6 +350,126 @@ fn a_corrupt_image_is_rejected_not_an_environment_failure() {
         stderr(&output).contains("binfmt."),
         "the loader names the rule: {}",
         stderr(&output)
+    );
+}
+
+/// `docs/runtime.md` §1: an output path that is also an input is refused before
+/// anything is opened, the way `cyinea` refuses to write over its source.
+#[test]
+fn a_decision_log_over_an_input_is_refused() {
+    let dir = scratch("decisions-over-input");
+    let image = write_image(&dir, "victim.csp", HALT, MANIFEST);
+    let before = fs::read(&image).expect("the image is readable");
+    let replay = dir.join("run.jsonl");
+    fs::write(&replay, "").expect("an empty log is a valid recording");
+
+    for input in [&image, &replay] {
+        let mut args = vec![
+            OsStr::new("-i"),
+            image.as_os_str(),
+            OsStr::new("--ticks"),
+            OsStr::new("2"),
+            OsStr::new("--unpaced"),
+            OsStr::new("--decisions"),
+            input.as_os_str(),
+        ];
+        if *input == replay {
+            args.extend([OsStr::new("--replay"), replay.as_os_str()]);
+        }
+
+        let output = run(args);
+
+        assert_eq!(
+            output.status.code(),
+            Some(REJECTED),
+            "stderr: {}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains("rt.output-overwrite"),
+            "stderr: {}",
+            stderr(&output)
+        );
+        assert_eq!(
+            fs::read(&image).expect("the image is still readable"),
+            before,
+            "a refused run leaves the image untouched"
+        );
+    }
+}
+
+/// `docs/runtime.md` §1: a shared library the run names is an input too, even
+/// though this run has already mapped it.
+#[test]
+fn a_decision_log_over_a_named_library_is_refused() {
+    let dir = scratch("decisions-over-library");
+    let image = write_image(&dir, "halt.csp", HALT, MANIFEST);
+    let library = dir.join("body.dll");
+    let body = format!("dylib:{}", library.display());
+    let arbiter = format!("dylib:{}", library.display());
+
+    for (flag, spec) in [("-b", &body), ("--interrupt", &arbiter)] {
+        let output = run(vec![
+            OsStr::new("-i"),
+            image.as_os_str(),
+            OsStr::new(flag),
+            OsStr::new(spec.as_str()),
+            OsStr::new("--ticks"),
+            OsStr::new("0"),
+            OsStr::new("--decisions"),
+            library.as_os_str(),
+        ]);
+
+        assert_eq!(
+            output.status.code(),
+            Some(REJECTED),
+            "{flag} {spec}: stderr: {}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains("rt.output-overwrite"),
+            "{flag} {spec}: stderr: {}",
+            stderr(&output)
+        );
+    }
+}
+
+/// `docs/runtime.md` §1: `--ticks 0` loads and validates every input, so a path
+/// that would fail later still fails now.
+#[test]
+fn zero_ticks_still_validates_every_input() {
+    let dir = scratch("zero-ticks");
+    let image = write_image(&dir, "halt.csp", HALT, MANIFEST);
+    let missing = dir.join("absent.jsonl");
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("0"),
+        OsStr::new("--replay"),
+        missing.as_os_str(),
+    ]);
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "a missing recording is not a successful run: stderr: {}",
+        stderr(&output)
+    );
+
+    let log = dir.join("decisions.jsonl");
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("0"),
+        OsStr::new("--decisions"),
+        log.as_os_str(),
+    ]);
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        log.exists(),
+        "the decision log is created even when nothing ticks"
     );
 }
 
@@ -503,6 +682,32 @@ const INTERRUPT: &str = "\
     HALT
 ";
 
+/// The same shape, with the reason the arbiter fixture treats as "fail".
+#[cfg(feature = "dylib")]
+const INTERRUPT_WITH_FAILURE: &str = "\
+.layer 10
+.clock hz = 1000
+.fuel 4096
+.max_wait 600.0
+
+.text
+    INTR    \"fail\"
+    HALT
+";
+
+/// Two interrupts, so a recording can cover the first and not the second.
+const TWO_INTERRUPTS: &str = "\
+.layer 10
+.clock hz = 1000
+.fuel 4096
+.max_wait 600.0
+
+.text
+    INTR    \"one\"
+    INTR    \"two\"
+    HALT
+";
+
 #[test]
 fn an_interrupt_is_reported_and_the_default_policy_stops_it() {
     let dir = scratch("interrupt-stop");
@@ -648,6 +853,74 @@ fn a_decision_log_replays_the_same_run() {
     );
 }
 
+/// `docs/interrupt.md` §7.6: an event the recording never answers is settled
+/// with the fallback verdict, so `--until-halt` against a shorter recording
+/// ends instead of waiting for a round that cannot arrive.
+#[test]
+fn until_halt_ends_when_the_replay_has_no_round() {
+    let dir = scratch("until-halt-orphan");
+    let image = write_image(&dir, "two.csp", TWO_INTERRUPTS, MANIFEST);
+    let replay = dir.join("run.jsonl");
+    fs::write(
+        &replay,
+        "{\"event\":0,\"tick\":0,\"actions\":[],\"completion\":{\"finished\":\"continue\"}}\n",
+    )
+    .expect("the recording is written");
+
+    let output = cyberspine_testkit::run_within(
+        OsStr::new(env!("CARGO_BIN_EXE_cyinevm")),
+        &[
+            OsStr::new("-i"),
+            image.as_os_str(),
+            OsStr::new("--until-halt"),
+            OsStr::new("--replay"),
+            replay.as_os_str(),
+            OsStr::new("-q"),
+        ],
+        Duration::from_secs(10),
+    );
+
+    assert!(output.status.success(), "stderr: {}", stderr(&output));
+    assert!(
+        stderr(&output).contains("rt.replay-orphan"),
+        "the round the recording lacks is reported: {}",
+        stderr(&output)
+    );
+}
+
+/// `docs/runtime.md` §1: an arbiter that stops adjudicating is an environment
+/// failure, even though the host keeps the run going on the fallback verdict.
+#[cfg(feature = "dylib")]
+#[test]
+fn an_arbiter_that_fails_mid_run_exits_five() {
+    let dir = scratch("arbiter-failure");
+    let image = write_image(&dir, "interrupt.csp", INTERRUPT_WITH_FAILURE, MANIFEST);
+    let spec = format!("dylib:{}", arbiter_fixture().display());
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--interrupt"),
+        OsStr::new(&spec),
+        OsStr::new("--ticks"),
+        OsStr::new("4"),
+        OsStr::new("--unpaced"),
+        OsStr::new("--quiet"),
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(ENVIRONMENT),
+        "the run continued on the fallback but is not a success: stderr: {}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("the fixture was told to fail"),
+        "the failure is reported: {}",
+        stderr(&output)
+    );
+}
+
 #[cfg(feature = "dylib")]
 fn arbiter_fixture() -> PathBuf {
     cyberspine_testkit::fixture_library("cyberspine-arbiter-fixture")
@@ -772,6 +1045,68 @@ fn a_faulted_run_reports_its_outcome_and_exits_four() {
     let line = stdout(&output);
     let value: serde_json::Value = serde_json::from_str(line.trim()).expect("the report is json");
     assert_eq!(value["outcome"], "faulted");
+}
+
+/// `docs/diagnostics.md` §5 has an outcome for Ctrl-C and §8 says a truncated
+/// run is not "rounds were never applied" noise. A `--ticks` run interrupted
+/// half way is neither a budget nor a divergence.
+#[cfg(unix)]
+#[test]
+fn ctrl_c_reports_stopped_and_says_nothing_about_the_replay() {
+    use std::process::{Command, Stdio};
+
+    let dir = scratch("ctrl-c");
+    let image = write_image(&dir, "spin.csp", SPIN, MANIFEST);
+    let replay = dir.join("run.jsonl");
+    fs::write(
+        &replay,
+        "{\"event\":9,\"tick\":0,\"actions\":[],\"completion\":{\"finished\":\"stop\"}}\n",
+    )
+    .expect("the recording is written");
+
+    let child = Command::new(env!("CARGO_BIN_EXE_cyinevm"))
+        .args([
+            OsStr::new("-i"),
+            image.as_os_str(),
+            OsStr::new("--ticks"),
+            OsStr::new("200"),
+            OsStr::new("--replay"),
+            replay.as_os_str(),
+            OsStr::new("--report"),
+            OsStr::new("json"),
+            OsStr::new("-q"),
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the cyinevm binary should spawn");
+
+    // Long enough that the handler is installed on a cold, slow runner: the run
+    // is 200 ticks at 50 Hz, so it is still going.
+    std::thread::sleep(Duration::from_millis(1000));
+    let signal = Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("kill runs");
+    assert!(signal.success(), "the test could not signal the run");
+
+    let output = child.wait_with_output().expect("the run is collected");
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "Ctrl-C is not a failure: stderr: {}",
+        stderr(&output)
+    );
+    assert!(
+        stdout(&output).contains("\"outcome\":\"stopped\""),
+        "the run reported: {}",
+        stdout(&output)
+    );
+    assert!(
+        !stderr(&output).contains("rt.replay-unused"),
+        "a truncated run is not a divergence: {}",
+        stderr(&output)
+    );
 }
 
 /// `--json` changes the diagnostic format, never the stream.

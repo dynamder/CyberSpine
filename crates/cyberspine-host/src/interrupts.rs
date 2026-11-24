@@ -8,8 +8,8 @@
 use std::collections::HashMap;
 
 use cyberspine_arbiter::{
-    Action, Arbiter, Batch, Completion, Decision, EventId, InstanceRef, InterruptEvent,
-    Verdict as ArbiterVerdict,
+    Action, Arbiter, ArbiterError, Batch, Completion, Decision, EventId, InstanceRef,
+    InterruptEvent, Verdict as ArbiterVerdict,
 };
 use cyberspine_vm::{
     Backend, InstanceId, Interrupt, Resolution, RigPolicy, Ruling, Session, Verdict,
@@ -40,6 +40,9 @@ pub struct Interrupts<A: Arbiter> {
     log: Option<Log>,
     /// What the host answers when the arbiter itself is gone.
     default: ArbiterVerdict,
+    /// The arbiter's own account of why it stopped adjudicating, kept so the
+    /// run can end with that failure instead of a fallback verdict and exit 0.
+    failed: Option<ArbiterError>,
 }
 
 impl<A: Arbiter> Interrupts<A> {
@@ -55,12 +58,20 @@ impl<A: Arbiter> Interrupts<A> {
             resolver,
             log,
             default,
+            failed: None,
         }
     }
 
     /// How many tickets the arbiter still owes an answer.
     pub fn in_flight(&self) -> usize {
         self.inflight.len()
+    }
+
+    /// The arbiter's failure, if it stopped adjudicating. The host settles the
+    /// tickets it still owes with the fallback, so a run continues; the failure
+    /// is still the run's outcome.
+    pub fn take_failure(&mut self) -> Option<ArbiterError> {
+        self.failed.take()
     }
 
     pub fn pump<B: Backend, P: RigPolicy>(
@@ -110,7 +121,11 @@ impl<A: Arbiter> Interrupts<A> {
         }
 
         let now = session.now();
-        let Batch { decisions, failure } = self.arbiter.take(now);
+        let Batch {
+            decisions,
+            failure,
+            abandoned,
+        } = self.arbiter.take(now);
         for Decision { event, ruling } in decisions {
             let Some(mut inflight) = self.inflight.remove(&event) else {
                 reports.push(Report::Unknown { event });
@@ -166,6 +181,19 @@ impl<A: Arbiter> Interrupts<A> {
             }
         }
 
+        // An event the arbiter says it will never answer is settled with the
+        // fallback verdict. Otherwise the instance stays parked forever and a
+        // `--until-halt` run waits for a round that cannot arrive.
+        for event in abandoned {
+            let Some(inflight) = self.inflight.remove(&event) else {
+                continue;
+            };
+            reports.push(Report::Abandoned { event });
+            let instance = inflight.ticket.instance;
+            let settled = settle(session, inflight.ticket, self.default, &mut reports);
+            forget(settled, self.default, registry, instance);
+        }
+
         if let Some(error) = failure {
             reports.push(Report::Failed {
                 cause: error.cause().clone(),
@@ -175,6 +203,7 @@ impl<A: Arbiter> Interrupts<A> {
                 let settled = settle(session, inflight.ticket, self.default, &mut reports);
                 forget(settled, self.default, registry, instance);
             }
+            self.failed = Some(error);
         }
 
         Ok(reports)
@@ -545,6 +574,7 @@ mod tests {
             Batch {
                 decisions: Vec::new(),
                 failure: self.error.take(),
+                abandoned: Vec::new(),
             }
         }
     }

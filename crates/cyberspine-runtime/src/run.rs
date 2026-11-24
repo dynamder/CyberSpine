@@ -125,6 +125,8 @@ pub enum Error {
     Actions(#[from] ActionError),
     #[error(transparent)]
     Decisions(#[from] LogError),
+    #[error("{output} is also an input: writing it would truncate what this run reads")]
+    OutputOverwrite { output: PathBuf, input: PathBuf },
 }
 
 // Exit classes: the input was rejected (3), the run ended abnormally (4), or the
@@ -142,18 +144,33 @@ const RT_TRACE: Code = Code::new("rt.trace-write");
 const RT_SIGNAL: Code = Code::new("rt.signal");
 const RT_ACTIONS: Code = Code::new("rt.actions");
 const RT_DECISIONS: Code = Code::new("rt.decisions");
+const RT_OUTPUT_OVERWRITE: Code = Code::new("rt.output-overwrite");
 
 impl Error {
     /// How the CLI should exit for this failure.
+    ///
+    /// An image that cannot be read is an environment failure; one that reads
+    /// but does not decode, is over the load limit, or names another rig is
+    /// rejected. An output path that is also an input is refused before the run
+    /// starts, so it is rejected as well (`docs/runtime.md` §1).
     pub fn class(&self) -> u8 {
         match self {
-            Self::NoImage | Self::Load { .. } => EXIT_REJECTED,
+            Self::NoImage | Self::Load { .. } | Self::OutputOverwrite { .. } => EXIT_REJECTED,
             Self::Image { source, .. } => match source {
                 LoadFileError::Io { .. } => EXIT_ENVIRONMENT,
                 LoadFileError::FileTooLarge { .. } | LoadFileError::Image(_) => EXIT_REJECTED,
             },
             Self::Faulted(_) => EXIT_FAULTED,
             _ => EXIT_ENVIRONMENT,
+        }
+    }
+
+    /// The terminal outcome of a run that ended with this failure.
+    pub fn outcome(&self) -> Outcome {
+        match self.class() {
+            EXIT_REJECTED => Outcome::Rejected,
+            EXIT_FAULTED => Outcome::Faulted,
+            _ => Outcome::Environment,
         }
     }
 
@@ -190,46 +207,67 @@ impl Error {
             Self::Arbiter(error) => vec![Diagnostic::from(error.cause().clone())],
             Self::Actions(error) => vec![Diagnostic::error(RT_ACTIONS, error.to_string())],
             Self::Decisions(error) => vec![Diagnostic::error(RT_DECISIONS, error.to_string())],
+            Self::OutputOverwrite { output, input } => vec![
+                Diagnostic::error(
+                    RT_OUTPUT_OVERWRITE,
+                    format!("`{}` would be truncated", output.display()),
+                )
+                .at(Anchor::whole(output.display().to_string()))
+                .with_help(format!(
+                    "`{}` is read by this run; choose another output path",
+                    input.display()
+                )),
+            ],
         }
     }
 }
 
 /// Run the body linked into this binary.
+///
+/// The report comes back even when the run never started, so `--report` can
+/// keep its promise of a terminal record for every exit code.
 pub fn run_linked<L: LinkedBody>(
     paths: &[PathBuf],
     options: &Options,
     sink: &mut Diagnostics,
     on_event: &mut dyn FnMut(&Report),
-) -> Result<(RunReport, Option<Error>), Error> {
+) -> (RunReport, Option<Error>) {
     if let Notice::Warn(text) = L::NOTICE {
         sink.push(Diagnostic::warning(RT_DUMMY_BODY, text));
     }
 
-    let (first, rest) = paths.split_first().ok_or(Error::NoImage)?;
-    let image = read_image(first).map_err(|source| Error::Image {
-        path: first.clone(),
-        source,
-    })?;
-    let body = L::open(&image)?;
-    let host = L::host(body);
-    let mut context = Registry::new(&image);
-    let layer = image.header().layer;
-    let hash = image.content_hash();
-    let debug = image.debug().cloned();
-    let (mut session, id) = host.load(image).map_err(|(_, source)| Error::Load {
-        path: first.clone(),
-        source,
-    })?;
-    context.push(
-        id,
-        layer,
-        hash,
-        first.display().to_string().into_boxed_str(),
-        debug,
-    );
-    load_rest(&mut session, &mut context, rest)?;
+    let opened: Result<_, Error> = (|| {
+        guard_outputs(paths, options, None)?;
+        let (first, rest) = paths.split_first().ok_or(Error::NoImage)?;
+        let image = read_image(first).map_err(|source| Error::Image {
+            path: first.clone(),
+            source,
+        })?;
+        let body = L::open(&image)?;
+        let host = L::host(body);
+        let mut context = Registry::new(&image);
+        let layer = image.header().layer;
+        let hash = image.content_hash();
+        let debug = image.debug().cloned();
+        let (mut session, id) = host.load(image).map_err(|(_, source)| Error::Load {
+            path: first.clone(),
+            source,
+        })?;
+        context.push(
+            id,
+            layer,
+            hash,
+            first.display().to_string().into_boxed_str(),
+            debug,
+        );
+        load_rest(&mut session, &mut context, rest)?;
+        Ok((session, context))
+    })();
 
-    Ok(run_session(session, context, options, sink, on_event))
+    match opened {
+        Ok((session, context)) => run_session(session, context, options, sink, on_event),
+        Err(error) => failed(error),
+    }
 }
 
 /// Run a body named by an external spec.
@@ -239,33 +277,120 @@ pub fn run_external(
     options: &Options,
     sink: &mut Diagnostics,
     on_event: &mut dyn FnMut(&Report),
-) -> Result<(RunReport, Option<Error>), Error> {
-    let body = open_external(spec)?;
-    let host = Host::new(body);
+) -> (RunReport, Option<Error>) {
+    let opened: Result<_, Error> = (|| {
+        guard_outputs(paths, options, Some(spec))?;
+        let body = open_external(spec)?;
+        let host = Host::new(body);
 
-    let (first, rest) = paths.split_first().ok_or(Error::NoImage)?;
-    let image = read_image(first).map_err(|source| Error::Image {
-        path: first.clone(),
-        source,
-    })?;
-    let mut context = Registry::new(&image);
-    let layer = image.header().layer;
-    let hash = image.content_hash();
-    let debug = image.debug().cloned();
-    let (mut session, id) = host.load(image).map_err(|(_, source)| Error::Load {
-        path: first.clone(),
-        source,
-    })?;
-    context.push(
-        id,
-        layer,
-        hash,
-        first.display().to_string().into_boxed_str(),
-        debug,
-    );
-    load_rest(&mut session, &mut context, rest)?;
+        let (first, rest) = paths.split_first().ok_or(Error::NoImage)?;
+        let image = read_image(first).map_err(|source| Error::Image {
+            path: first.clone(),
+            source,
+        })?;
+        let mut context = Registry::new(&image);
+        let layer = image.header().layer;
+        let hash = image.content_hash();
+        let debug = image.debug().cloned();
+        let (mut session, id) = host.load(image).map_err(|(_, source)| Error::Load {
+            path: first.clone(),
+            source,
+        })?;
+        context.push(
+            id,
+            layer,
+            hash,
+            first.display().to_string().into_boxed_str(),
+            debug,
+        );
+        load_rest(&mut session, &mut context, rest)?;
+        Ok((session, context))
+    })();
 
-    Ok(run_session(session, context, options, sink, on_event))
+    match opened {
+        Ok((session, context)) => run_session(session, context, options, sink, on_event),
+        Err(error) => failed(error),
+    }
+}
+
+/// A run whose session never existed: the report still describes the outcome.
+fn failed(error: Error) -> (RunReport, Option<Error>) {
+    (RunReport::empty(error.outcome()), Some(error))
+}
+
+/// Refuse an output path that is also an input.
+///
+/// `--decisions` truncates the file it opens, so `--decisions <image>` turns the
+/// image this run just loaded into an empty file and exits 0. The check runs
+/// before anything is opened, for the same reason `cyinea` refuses to write an
+/// image over its source (`asm.source-overwrite`).
+///
+/// A body or arbiter named `dylib:<path>` is an input too: truncating the shared
+/// library breaks every later run even though this one already mapped it.
+fn guard_outputs(
+    paths: &[PathBuf],
+    options: &Options,
+    body: Option<&BackendSpec>,
+) -> Result<(), Error> {
+    let Some(output) = options.decisions.as_deref() else {
+        return Ok(());
+    };
+    let inputs = paths
+        .iter()
+        .map(PathBuf::as_path)
+        .chain(options.replay.as_deref())
+        .chain(body.and_then(BackendSpec::dylib_path))
+        .chain(options.interrupt.as_ref().and_then(ArbiterSpec::dylib_path));
+    for input in inputs {
+        if same_file(output, input) {
+            return Err(Error::OutputOverwrite {
+                output: output.to_path_buf(),
+                input: input.to_path_buf(),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Whether two paths name the same file, whether or not either exists yet.
+///
+/// An output file usually does not exist, so the comparison falls back to the
+/// canonical parent directory plus the file name. Hard links have no textual
+/// commonality at all, hence the inode check on Unix.
+fn same_file(left: &std::path::Path, right: &std::path::Path) -> bool {
+    if let (Some(left), Some(right)) = (path_identity(left), path_identity(right))
+        && (left == right
+            || cfg!(windows)
+                && left
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case(&right.to_string_lossy()))
+    {
+        return true;
+    }
+    same_inode(left, right)
+}
+
+fn path_identity(path: &std::path::Path) -> Option<PathBuf> {
+    let absolute = std::path::absolute(path).ok()?;
+    if let Ok(canonical) = std::fs::canonicalize(&absolute) {
+        return Some(canonical);
+    }
+    let parent = std::fs::canonicalize(absolute.parent()?).ok()?;
+    Some(parent.join(absolute.file_name()?))
+}
+
+#[cfg(unix)]
+fn same_inode(left: &std::path::Path, right: &std::path::Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (std::fs::metadata(left), std::fs::metadata(right)) {
+        (Ok(left), Ok(right)) => left.dev() == right.dev() && left.ino() == right.ino(),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn same_inode(_: &std::path::Path, _: &std::path::Path) -> bool {
+    false
 }
 
 /// Load every image after the first one into the session.
@@ -339,13 +464,12 @@ fn run_session<B: Backend, P: RigPolicy>(
     let result = run_loop(&mut session, &mut context, options, sink, on_event);
 
     let outcome = match &result {
-        Ok(()) => match options.mode {
-            RunMode::RealTime(Stop::Ticks(_)) | RunMode::UnpacedTicks(_) => Outcome::Budget,
-            RunMode::RealTime(Stop::UntilHalt) => Outcome::Halted,
-            RunMode::RealTime(Stop::Never) => Outcome::Stopped,
+        Ok(ending) => match ending {
+            Ending::Budget => Outcome::Budget,
+            Ending::Halted => Outcome::Halted,
+            Ending::Stopped => Outcome::Stopped,
         },
-        Err(Error::Faulted(_)) => Outcome::Faulted,
-        Err(_) => Outcome::Environment,
+        Err(error) => error.outcome(),
     };
 
     let report = RunReport {
@@ -373,7 +497,7 @@ fn run_loop<B: Backend, P: RigPolicy>(
     options: &Options,
     sink: &mut Diagnostics,
     on_event: &mut dyn FnMut(&Report),
-) -> Result<(), Error> {
+) -> Result<Ending, Error> {
     if !options.quiet {
         let shape = session.shape();
         eprintln!(
@@ -401,15 +525,11 @@ fn run_loop<B: Backend, P: RigPolicy>(
         session.set_tracing(true);
     }
     if trace.as_ref().is_some_and(Trace::is_broken) {
-        return Ok(());
+        return Ok(Ending::Stopped);
     }
-    if matches!(
-        options.mode,
-        RunMode::RealTime(Stop::Ticks(0)) | RunMode::UnpacedTicks(0)
-    ) {
-        return Ok(());
-    }
-
+    // `--ticks 0` means "load and validate, do not tick", so it must still open
+    // the arbiter, the action directory and the decision log: a bad path is a
+    // failure even when nothing is going to run.
     let Installed {
         arbiter,
         mut notices,
@@ -430,12 +550,17 @@ fn run_loop<B: Backend, P: RigPolicy>(
         on_event,
     );
 
-    // A replay that was cut short did not diverge — it just did not finish.
-    // Ctrl-C (`Stop::Never` is only exit-able by Ctrl-C) and a failed run are
-    // both situations where "rounds were never applied" is expected noise.
-    let completed = !matches!(options.mode, RunMode::RealTime(Stop::Never));
-    if result.is_ok()
-        && completed
+    // An arbiter that died mid-run leaves every later interrupt on the fallback
+    // verdict, so the run is not the one that was asked for. The rest of the
+    // session still finishes; the exit code says what happened.
+    let result = match (result, interrupts.take_failure()) {
+        (Ok(_), Some(error)) => Err(Error::Arbiter(error)),
+        (result, _) => result,
+    };
+
+    // "Rounds were never applied" is only noise when the run did not end on its
+    // own terms: a replay cut short by Ctrl-C or by a fault did not diverge.
+    if matches!(result, Ok(Ending::Budget | Ending::Halted))
         && let Some(source) = notices.as_mut()
     {
         for notice in source.take_notices() {
@@ -446,6 +571,18 @@ fn run_loop<B: Backend, P: RigPolicy>(
     result
 }
 
+/// Why the loop stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ending {
+    /// The tick budget ran out.
+    Budget,
+    /// Every instance halted, so `--until-halt` was satisfied.
+    Halted,
+    /// Ctrl-C, or the trace's reader closed the pipe: the configured end was
+    /// not reached, and nothing about the run is wrong.
+    Stopped,
+}
+
 fn drive<B: Backend, P: RigPolicy>(
     session: &mut Session<B, P>,
     context: &mut Registry,
@@ -453,7 +590,7 @@ fn drive<B: Backend, P: RigPolicy>(
     interrupts: &mut Interrupts<Box<dyn Arbiter>>,
     trace: &mut Option<Trace>,
     on_event: &mut dyn FnMut(&Report),
-) -> Result<(), Error> {
+) -> Result<Ending, Error> {
     let stop = Arc::new(AtomicBool::new(false));
     ctrlc::set_handler({
         let stop = Arc::clone(&stop);
@@ -464,51 +601,51 @@ fn drive<B: Backend, P: RigPolicy>(
         RunMode::UnpacedTicks(ticks) => {
             for _ in 0..ticks {
                 if interrupted(&stop) {
-                    break;
+                    return Ok(Ending::Stopped);
                 }
                 session.tick()?;
                 if !observe(session, context, trace.as_mut(), interrupts, on_event)? {
-                    return Ok(());
+                    return Ok(Ending::Stopped);
                 }
             }
+            Ok(Ending::Budget)
         }
         RunMode::RealTime(Stop::Ticks(ticks)) => {
             let frame = Duration::from_secs_f32(session.dt());
             let mut deadline = Instant::now();
             for _ in 0..ticks {
                 if interrupted(&stop) {
-                    break;
+                    return Ok(Ending::Stopped);
                 }
                 deadline += frame;
                 sleep_until(deadline);
                 session.tick()?;
                 if !observe(session, context, trace.as_mut(), interrupts, on_event)? {
-                    return Ok(());
+                    return Ok(Ending::Stopped);
                 }
             }
+            Ok(Ending::Budget)
         }
         RunMode::RealTime(mode) => {
             let frame = Duration::from_secs_f32(session.dt());
             let mut last = Instant::now();
             loop {
                 if interrupted(&stop) {
-                    break;
+                    return Ok(Ending::Stopped);
                 }
                 thread::sleep(frame);
                 let elapsed = last.elapsed().as_secs_f64();
                 last = Instant::now();
                 session.advance(elapsed)?;
                 if !observe(session, context, trace.as_mut(), interrupts, on_event)? {
-                    return Ok(());
+                    return Ok(Ending::Stopped);
                 }
                 if mode == Stop::UntilHalt && session.is_idle() {
-                    break;
+                    return Ok(Ending::Halted);
                 }
             }
         }
     }
-
-    Ok(())
 }
 
 fn interrupted(stop: &AtomicBool) -> bool {
@@ -585,17 +722,19 @@ fn observe<B: Backend, P: RigPolicy, A: Arbiter>(
     interrupts: &mut Interrupts<A>,
     on_event: &mut dyn FnMut(&Report),
 ) -> Result<bool, Error> {
-    report_faults(session, context)?;
-    for report in interrupts.pump(session, context)? {
-        if !report.is_silent() {
-            on_event(&report);
-        }
-    }
-
+    // The trace goes out first: the tick that faulted is the one a reader most
+    // wants, and `report_faults` returns early on purpose.
     if let Some(trace) = trace {
         trace.drain(session)?;
         if trace.is_broken() {
             return Ok(false);
+        }
+    }
+
+    report_faults(session, context)?;
+    for report in interrupts.pump(session, context)? {
+        if !report.is_silent() {
+            on_event(&report);
         }
     }
 
@@ -636,7 +775,7 @@ impl Arbiter for BuiltinArbiter {
     fn take(&mut self, _now: u64) -> Batch {
         Batch {
             decisions: core::mem::take(&mut self.queue),
-            failure: None,
+            ..Batch::default()
         }
     }
 }
