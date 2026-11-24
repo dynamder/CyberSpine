@@ -1,0 +1,7 @@
+---
+source: demos/maze/tests/maze.rs
+expression: "String::from_utf8(output.stderr).expect(\"stderr is UTF-8\")"
+---
+interrupt: instance 0 (maze.csa) at pc 49 tick 7: no progress: x=4 y=11 heading=1 bumps=4
+interrupt 0: junction: the unsigned junction: backing off
+interrupt 0: finished after 1 round(s), last: junction: the unsigned junction: backing off · the unsigned junction: turning left

@@ -460,6 +460,7 @@ cyinevm -i interrupt.csp --replay run.jsonl --trace
 | ABI、dylib、rpc、线上消息 | [`crates/cyberspine-plugin/src/`](../crates/cyberspine-plugin/src/) 的 `abi.rs` / `dylib.rs` / `rpc.rs`、[`server.rs`](../crates/cyberspine-plugin/src/server.rs)；arbiter 的消息在 [`crates/cyberspine-arbiter/src/wire.rs`](../crates/cyberspine-arbiter/src/wire.rs) |
 | 在途票据表、`failure` 兜底、动作应用 | [`crates/cyberspine-host/src/interrupts.rs`](../crates/cyberspine-host/src/interrupts.rs) |
 | 实例表（`InstanceId` ↔ `InstanceRef`） | [`crates/cyberspine-host/src/registry.rs`](../crates/cyberspine-host/src/registry.rs) |
+| 装载与登记：一个 session + 它的实例表 | [`crates/cyberspine-host/src/run.rs`](../crates/cyberspine-host/src/run.rs) |
 | 宿主观测流 `Report` | [`crates/cyberspine-host/src/report.rs`](../crates/cyberspine-host/src/report.rs) |
 | 动作目录 | [`crates/cyberspine-host/src/actions.rs`](../crates/cyberspine-host/src/actions.rs) |
 | 决策日志与重放 | [`crates/cyberspine-host/src/decisions.rs`](../crates/cyberspine-host/src/decisions.rs) |
@@ -543,9 +544,9 @@ interrupt 0: finished after 1 round(s), last: junction: the unsigned junction: b
 屏幕底部固定 3 行裁决日志（在棋盘和 legend 下面，日志增减不会顶动地图）：
 
 ```text
-  ruling  interrupt 0: no progress: x=4 y=11 heading=1 bumps=4
-  ruling  interrupt 0 round 1: the unsigned junction: backing off
-  ruling  interrupt 0 finished: the unsigned junction: turning left
+  ruling  interrupt: instance 0 (maze.csa) at pc 49 tick 7: no progress: x=4 y=11 heading=1 bumps=4
+  ruling  interrupt 0: junction: the unsigned junction: backing off
+  ruling  interrupt 0: finished after 1 round(s), last: junction: the unsigned junction: backing off · the unsigned junction: turning left
 ```
 
 这 3 行保留到下一次裁决；`--headless` 的 stderr 是完整流。odometer 的构成是：4 个 bump 来自探测，2 个 move 来自退后和重新进入，
@@ -553,8 +554,8 @@ turns 仍是 6。
 
 ### 14.4 宿主侧
 
-maze 没有自己的仲裁循环：它和 `cyinevm` 共用 [`crates/cyberspine-host`](../crates/cyberspine-host)
-的 `Registry` + `Interrupts::pump` + `Report`。`pump` 每个 tick 做四件事：
+maze 没有自己的装载/仲裁循环：它和 `cyinevm` 共用 [`crates/cyberspine-host`](../crates/cyberspine-host)
+的 `Run`（装载 + 登记 + 每 tick pump）+ `Report`。`pump` 每个 tick 做四件事：
 
 1. 把 `Session::take_interrupts` 的票据变成 `InterruptEvent`，投给仲裁器，记在在途表；
 2. `arbiter.take(now)` 拿回 `Batch`；

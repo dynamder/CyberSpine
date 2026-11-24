@@ -135,3 +135,4 @@ R1.3 改动 arbiter 线格式：升 `ABI_VERSION`，或引入 v2 帧。
 - 2026-11-21：诊断重构（[`diagnostics.md`](docs/diagnostics.md)）：单一 `Diagnostic` 载体、每 crate 稳定码、`cyberspine-report` 唯一渲染器；`cyinea`/`cyinevm` 的 `--json` 与 `--report json`；退出码改为 `3/4/5`；fault/INTR 的源行路径按镜像目录解析（此前打印的是相对路径）。R0.3 完成。
 - 2026-11-21：body 与 arbiter 的失败携带 `Cause`（码 + 消息 + help）；仲裁器失败跨线带码（预发布阶段不 bump 线上版本）。中断/裁决事件流搬进 `cyberspine-report`，`--json` 下与诊断、终态同一套记录。`Code` 支持运行时拥有的字符串，插件可以给自己的失败起名。
 - 2026-11-24：拆出 `cyberspine-run-report`：诊断渲染留在 `cyberspine-report`，中断/裁决事件流与运行终态独立；`cyinea` 不再经由报告层链接 host/arbiter。
+- 2026-11-24：maze demo 与 `cyinevm` 共用 `cyberspine-host::Run`（装载、登记、pump）和同一个事件渲染器；`maze --headless` 的输出与文档一致，并由快照钉住。

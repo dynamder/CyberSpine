@@ -18,11 +18,13 @@ cyberspine-core = { path = "../../crates/cyberspine-core" }
 cyberspine-demo-maze-world = { path = "world" }
 cyberspine-host = { path = "../../crates/cyberspine-host" }
 cyberspine-manifest = { path = "../../crates/cyberspine-manifest" }
+cyberspine-run-report = { path = "../../crates/cyberspine-run-report" }
 cyberspine-vm = { path = "../../crates/cyberspine-vm" }
 thiserror = "2.0.21"
 
 [dev-dependencies]
 cyberspine-testkit = { path = "../../crates/cyberspine-testkit" }
+insta = "1.49.0"
 serde_json = "1"
 
 [[bin]]

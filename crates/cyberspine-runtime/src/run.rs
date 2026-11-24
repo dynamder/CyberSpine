@@ -1,5 +1,5 @@
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -10,14 +10,15 @@ use cyberspine_arbiter::{
     Ruling as ArbiterRuling, Verdict as ArbiterVerdict,
 };
 use cyberspine_backend::BackendSpec;
+use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_diag::{Anchor, Code, Diagnostic, Diagnostics, Site};
 use cyberspine_host::{
-    ActionDirectory, ActionError, ActionResolver, Interrupts, Log, LogError, Registry, Replay,
-    Report, into_diagnostic,
+    ActionDirectory, ActionError, ActionResolver, Interrupts, Log, LogError, Replay, Report, Run,
+    into_diagnostic,
 };
 use cyberspine_run_report::{InstanceReport, Outcome, RunReport};
 use cyberspine_vm::io::{LoadFileError, read_image};
-use cyberspine_vm::{Backend, BackendError, Host, LoadError, RigPolicy, Session};
+use cyberspine_vm::{Backend, BackendError, Host, LoadError, RigPolicy};
 use thiserror::Error;
 
 use crate::linked::{LinkedBody, Notice};
@@ -245,27 +246,11 @@ pub fn run_linked<L: LinkedBody>(
         })?;
         let body = L::open(&image)?;
         let host = L::host(body);
-        let mut context = Registry::new(&image);
-        let layer = image.header().layer;
-        let hash = image.content_hash();
-        let debug = image.debug().cloned();
-        let (mut session, id) = host.load(image).map_err(|(_, source)| Error::Load {
-            path: first.clone(),
-            source,
-        })?;
-        context.push(
-            id,
-            layer,
-            hash,
-            first.display().to_string().into_boxed_str(),
-            debug,
-        );
-        load_rest(&mut session, &mut context, rest)?;
-        Ok((session, context))
+        open_run(host, first, image, rest)
     })();
 
     match opened {
-        Ok((session, context)) => run_session(session, context, options, sink, on_event),
+        Ok(run) => run_session(run, options, sink, on_event),
         Err(error) => failed(error),
     }
 }
@@ -288,27 +273,11 @@ pub fn run_external(
             path: first.clone(),
             source,
         })?;
-        let mut context = Registry::new(&image);
-        let layer = image.header().layer;
-        let hash = image.content_hash();
-        let debug = image.debug().cloned();
-        let (mut session, id) = host.load(image).map_err(|(_, source)| Error::Load {
-            path: first.clone(),
-            source,
-        })?;
-        context.push(
-            id,
-            layer,
-            hash,
-            first.display().to_string().into_boxed_str(),
-            debug,
-        );
-        load_rest(&mut session, &mut context, rest)?;
-        Ok((session, context))
+        open_run(host, first, image, rest)
     })();
 
     match opened {
-        Ok((session, context)) => run_session(session, context, options, sink, on_event),
+        Ok(run) => run_session(run, options, sink, on_event),
         Err(error) => failed(error),
     }
 }
@@ -399,8 +368,7 @@ fn same_inode(_: &std::path::Path, _: &std::path::Path) -> bool {
 /// "another action" into "another instance of this rig" or into a named
 /// mismatch (`docs/isa.md` §8).
 fn load_rest<B: Backend, P: RigPolicy>(
-    session: &mut Session<B, P>,
-    context: &mut Registry,
+    run: &mut Run<B, P>,
     paths: &[PathBuf],
 ) -> Result<(), Error> {
     for path in paths {
@@ -408,22 +376,29 @@ fn load_rest<B: Backend, P: RigPolicy>(
             path: path.clone(),
             source,
         })?;
-        let layer = image.header().layer;
-        let hash = image.content_hash();
-        let debug = image.debug().cloned();
-        let id = session.load(image).map_err(|source| Error::Load {
-            path: path.clone(),
-            source,
-        })?;
-        context.push(
-            id,
-            layer,
-            hash,
-            path.display().to_string().into_boxed_str(),
-            debug,
-        );
+        run.load(image, path.display().to_string().into_boxed_str())
+            .map_err(|source| Error::Load {
+                path: path.clone(),
+                source,
+            })?;
     }
     Ok(())
+}
+
+/// Start the run from the first image, then load the rest.
+fn open_run<B: Backend, P: RigPolicy>(
+    host: Host<B, P>,
+    first: &Path,
+    image: VerifiedImage,
+    rest: &[PathBuf],
+) -> Result<Run<B, P>, Error> {
+    let (mut run, _) = Run::start(host, image, first.display().to_string().into_boxed_str())
+        .map_err(|(_, source)| Error::Load {
+            path: first.to_path_buf(),
+            source,
+        })?;
+    load_rest(&mut run, rest)?;
+    Ok(run)
 }
 
 fn open_external(spec: &BackendSpec) -> Result<Box<dyn Backend>, Error> {
@@ -455,13 +430,12 @@ fn require(feature: Feature) -> Result<(), Error> {
 /// tick 7 of 120" is the answer the caller needs, and it only exists after the
 /// loop has stopped.
 fn run_session<B: Backend, P: RigPolicy>(
-    mut session: Session<B, P>,
-    mut context: Registry,
+    mut run: Run<B, P>,
     options: &Options,
     sink: &mut Diagnostics,
     on_event: &mut dyn FnMut(&Report),
 ) -> (RunReport, Option<Error>) {
-    let result = run_loop(&mut session, &mut context, options, sink, on_event);
+    let result = run_loop(&mut run, options, sink, on_event);
 
     let outcome = match &result {
         Ok(ending) => match ending {
@@ -474,10 +448,11 @@ fn run_session<B: Backend, P: RigPolicy>(
 
     let report = RunReport {
         outcome,
-        ticks: session.now(),
-        dt: session.dt(),
-        overruns: session.overruns(),
-        instances: context
+        ticks: run.session().now(),
+        dt: run.session().dt(),
+        overruns: run.session().overruns(),
+        instances: run
+            .registry()
             .loaded()
             .iter()
             .map(|loaded| InstanceReport {
@@ -492,25 +467,24 @@ fn run_session<B: Backend, P: RigPolicy>(
 }
 
 fn run_loop<B: Backend, P: RigPolicy>(
-    session: &mut Session<B, P>,
-    context: &mut Registry,
+    run: &mut Run<B, P>,
     options: &Options,
     sink: &mut Diagnostics,
     on_event: &mut dyn FnMut(&Report),
 ) -> Result<Ending, Error> {
     if !options.quiet {
-        let shape = session.shape();
+        let shape = run.session().shape();
         eprintln!(
             "body: {} muscle(s), {} float sensor(s), {} integer sensor(s)",
             shape.muscles, shape.sensors_f, shape.sensors_i
         );
         eprintln!(
             "rig: {} at {} Hz, {} instance(s)",
-            context.rig(),
-            session.hz(),
-            context.loaded().len()
+            run.registry().rig(),
+            run.session().hz(),
+            run.registry().loaded().len()
         );
-        for loaded in context.loaded() {
+        for loaded in run.registry().loaded() {
             eprintln!(
                 "  instance {}: layer {}, {}",
                 loaded.id, loaded.layer, loaded.action
@@ -518,11 +492,11 @@ fn run_loop<B: Backend, P: RigPolicy>(
         }
     }
 
-    let mut trace = options.trace.then(|| Trace::new(context.names()));
+    let mut trace = options.trace.then(|| Trace::new(run.registry().names()));
     if let Some(trace) = trace.as_mut() {
         trace.header()?;
-        session.set_trace_capacity(64);
-        session.set_tracing(true);
+        run.session_mut().set_trace_capacity(64);
+        run.session_mut().set_tracing(true);
     }
     if trace.as_ref().is_some_and(Trace::is_broken) {
         return Ok(Ending::Stopped);
@@ -541,14 +515,7 @@ fn run_loop<B: Backend, P: RigPolicy>(
         fallback(options.on_interrupt),
     );
 
-    let result = drive(
-        session,
-        context,
-        options,
-        &mut interrupts,
-        &mut trace,
-        on_event,
-    );
+    let result = drive(run, options, &mut interrupts, &mut trace, on_event);
 
     // An arbiter that died mid-run leaves every later interrupt on the fallback
     // verdict, so the run is not the one that was asked for. The rest of the
@@ -584,8 +551,7 @@ enum Ending {
 }
 
 fn drive<B: Backend, P: RigPolicy>(
-    session: &mut Session<B, P>,
-    context: &mut Registry,
+    run: &mut Run<B, P>,
     options: &Options,
     interrupts: &mut Interrupts<Box<dyn Arbiter>>,
     trace: &mut Option<Trace>,
@@ -603,15 +569,15 @@ fn drive<B: Backend, P: RigPolicy>(
                 if interrupted(&stop) {
                     return Ok(Ending::Stopped);
                 }
-                session.tick()?;
-                if !observe(session, context, trace.as_mut(), interrupts, on_event)? {
+                run.session_mut().tick()?;
+                if !observe(run, trace.as_mut(), interrupts, on_event)? {
                     return Ok(Ending::Stopped);
                 }
             }
             Ok(Ending::Budget)
         }
         RunMode::RealTime(Stop::Ticks(ticks)) => {
-            let frame = Duration::from_secs_f32(session.dt());
+            let frame = Duration::from_secs_f32(run.session().dt());
             let mut deadline = Instant::now();
             for _ in 0..ticks {
                 if interrupted(&stop) {
@@ -619,15 +585,15 @@ fn drive<B: Backend, P: RigPolicy>(
                 }
                 deadline += frame;
                 sleep_until(deadline);
-                session.tick()?;
-                if !observe(session, context, trace.as_mut(), interrupts, on_event)? {
+                run.session_mut().tick()?;
+                if !observe(run, trace.as_mut(), interrupts, on_event)? {
                     return Ok(Ending::Stopped);
                 }
             }
             Ok(Ending::Budget)
         }
         RunMode::RealTime(mode) => {
-            let frame = Duration::from_secs_f32(session.dt());
+            let frame = Duration::from_secs_f32(run.session().dt());
             let mut last = Instant::now();
             loop {
                 if interrupted(&stop) {
@@ -636,11 +602,11 @@ fn drive<B: Backend, P: RigPolicy>(
                 thread::sleep(frame);
                 let elapsed = last.elapsed().as_secs_f64();
                 last = Instant::now();
-                session.advance(elapsed)?;
-                if !observe(session, context, trace.as_mut(), interrupts, on_event)? {
+                run.session_mut().advance(elapsed)?;
+                if !observe(run, trace.as_mut(), interrupts, on_event)? {
                     return Ok(Ending::Stopped);
                 }
-                if mode == Stop::UntilHalt && session.is_idle() {
+                if mode == Stop::UntilHalt && run.session().is_idle() {
                     return Ok(Ending::Halted);
                 }
             }
@@ -716,8 +682,7 @@ fn sleep_until(deadline: Instant) {
 }
 
 fn observe<B: Backend, P: RigPolicy, A: Arbiter>(
-    session: &mut Session<B, P>,
-    context: &mut Registry,
+    run: &mut Run<B, P>,
     trace: Option<&mut Trace>,
     interrupts: &mut Interrupts<A>,
     on_event: &mut dyn FnMut(&Report),
@@ -725,14 +690,14 @@ fn observe<B: Backend, P: RigPolicy, A: Arbiter>(
     // The trace goes out first: the tick that faulted is the one a reader most
     // wants, and `report_faults` returns early on purpose.
     if let Some(trace) = trace {
-        trace.drain(session)?;
+        trace.drain(run.session_mut())?;
         if trace.is_broken() {
             return Ok(false);
         }
     }
 
-    report_faults(session, context)?;
-    for report in interrupts.pump(session, context)? {
+    report_faults(run)?;
+    for report in run.pump(interrupts)? {
         if !report.is_silent() {
             on_event(&report);
         }
@@ -780,11 +745,8 @@ impl Arbiter for BuiltinArbiter {
     }
 }
 
-fn report_faults<B: Backend, P: RigPolicy>(
-    session: &mut Session<B, P>,
-    context: &Registry,
-) -> Result<(), Error> {
-    let faults = session.take_faults();
+fn report_faults<B: Backend, P: RigPolicy>(run: &mut Run<B, P>) -> Result<(), Error> {
+    let faults = run.session_mut().take_faults();
     if faults.is_empty() {
         return Ok(());
     }
@@ -792,7 +754,8 @@ fn report_faults<B: Backend, P: RigPolicy>(
     let mut diagnostics = Vec::with_capacity(faults.len());
     for record in faults {
         let pc = record.fault.pc();
-        let image = context
+        let image = run
+            .registry()
             .action_of(record.instance)
             .unwrap_or("<unknown image>")
             .to_string();
@@ -804,7 +767,7 @@ fn report_faults<B: Backend, P: RigPolicy>(
         ));
         // §8 of asm.md: a debug build carries the source position; a release
         // build says only the pc, and that is the whole difference.
-        if let Some(source) = context.source_of(record.instance, pc) {
+        if let Some(source) = run.registry().source_of(record.instance, pc) {
             diagnostic = diagnostic.label(source, "the instruction came from here");
         }
         diagnostics.push(diagnostic);

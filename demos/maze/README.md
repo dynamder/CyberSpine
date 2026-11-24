@@ -158,9 +158,9 @@ interrupt 0: finished after 1 round(s), last: junction: the unsigned junction: b
 屏幕底部固定 3 行裁决日志（在棋盘和 legend 下面，日志增减不会顶动地图）：
 
 ```text
-  ruling  interrupt 0: no progress: x=4 y=11 heading=1 bumps=4
-  ruling  interrupt 0 round 1: the unsigned junction: backing off
-  ruling  interrupt 0 finished: the unsigned junction: turning left
+  ruling  interrupt: instance 0 (maze.csa) at pc 49 tick 7: no progress: x=4 y=11 heading=1 bumps=4
+  ruling  interrupt 0: junction: the unsigned junction: backing off
+  ruling  interrupt 0: finished after 1 round(s), last: junction: the unsigned junction: backing off · the unsigned junction: turning left
 ```
 
 这 3 行会一直保留到下一次裁决；`--headless` 的 stderr 是完整流。
