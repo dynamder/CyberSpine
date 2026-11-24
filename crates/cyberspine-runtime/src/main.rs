@@ -2,7 +2,7 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use cyberspine_diag::Diagnostics;
-use cyberspine_report::{Format, Renderer};
+use cyberspine_run_report::{Format, Renderer};
 
 use cyberspine_runtime::{Args, linked, run_external, run_linked};
 

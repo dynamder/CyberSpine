@@ -1,17 +1,16 @@
 use std::io::{self, Write};
 
+use cyberspine_arbiter::{Action, Verdict};
 use cyberspine_host::{Report, RoundTrace};
+use cyberspine_report::AnchorJson;
 use serde::Serialize;
-
-use crate::json::{self, SCHEMA};
-use crate::source::SourceCache;
 
 /// The interrupt/ruling stream as it happens.
 ///
 /// These are not diagnostics: an interrupt is normal traffic, and a ruling is the
 /// host answering it. They still go through the same renderer so that `--json`
 /// describes the whole run in one vocabulary instead of half of it.
-pub fn render(_sources: &mut SourceCache, report: &Report, out: &mut impl Write) -> io::Result<()> {
+pub fn render(report: &Report, out: &mut impl Write) -> io::Result<()> {
     match report {
         Report::Interrupt {
             instance,
@@ -93,7 +92,7 @@ pub fn render_json(report: &Report, out: &mut impl Write) -> io::Result<()> {
     }
 
     let record = Record {
-        schema: SCHEMA,
+        schema: cyberspine_diag::SCHEMA,
         kind: "event",
         event: EventJson::of(report),
     };
@@ -112,7 +111,7 @@ enum EventJson<'a> {
         tick: u64,
         reason: &'a str,
         #[serde(skip_serializing_if = "Option::is_none")]
-        site: Option<json::Anchor<'a>>,
+        site: Option<AnchorJson<'a>>,
     },
     Round {
         event: u64,
@@ -120,7 +119,7 @@ enum EventJson<'a> {
         round: usize,
         source: &'a str,
         note: &'a str,
-        actions: &'a [cyberspine_arbiter::Action],
+        actions: &'a [Action],
     },
     Finished {
         event: u64,
@@ -128,8 +127,8 @@ enum EventJson<'a> {
         rounds: usize,
         last: Option<LastJson<'a>>,
         note: &'a str,
-        actions: &'a [cyberspine_arbiter::Action],
-        verdict: cyberspine_arbiter::Verdict,
+        actions: &'a [Action],
+        verdict: Verdict,
     },
     Unknown {
         event: u64,
@@ -180,7 +179,7 @@ impl<'a> EventJson<'a> {
                 pc: *pc,
                 tick: *tick,
                 reason,
-                site: site.as_ref().map(json::Anchor::of),
+                site: site.as_ref().map(AnchorJson::of),
             },
             Report::Round {
                 event,

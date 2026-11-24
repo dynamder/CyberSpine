@@ -9,15 +9,13 @@
 //! The JSON shape is a contract. `schema` is bumped only when a field is removed
 //! or changes meaning; `code` is stable, `message` is not.
 
-mod event;
 mod format;
 mod human;
 mod json;
-mod run;
 mod source;
 
 pub use format::Format;
-pub use run::{InstanceReport, Outcome, RunReport};
+pub use json::AnchorJson;
 pub use source::SourceCache;
 
 use std::io::{self, Write};
@@ -78,26 +76,6 @@ impl Renderer {
         match self.format {
             Format::Human => human::render(&mut self.sources, diagnostic, out),
             Format::Json => json::render(diagnostic, out),
-        }
-    }
-
-    /// One interrupt or ruling, as it happens.
-    pub fn event(
-        &mut self,
-        report: &cyberspine_host::Report,
-        out: &mut impl Write,
-    ) -> io::Result<()> {
-        match self.format {
-            Format::Human => event::render(&mut self.sources, report, out),
-            Format::Json => event::render_json(report, out),
-        }
-    }
-
-    /// The terminal state of a run, once it has stopped.
-    pub fn run(&mut self, report: &RunReport, out: &mut impl Write) -> io::Result<()> {
-        match self.format {
-            Format::Human => human::render_run(report, out),
-            Format::Json => json::render_run(report, out),
         }
     }
 }

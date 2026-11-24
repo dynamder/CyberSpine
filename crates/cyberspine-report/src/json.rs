@@ -24,7 +24,7 @@ struct Record<'a> {
     code: &'a str,
     message: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    primary: Option<Anchor<'a>>,
+    primary: Option<AnchorJson<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     labels: Vec<Label<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -41,7 +41,7 @@ impl<'a> Record<'a> {
             level: diagnostic.level.as_str(),
             code: diagnostic.code.as_str(),
             message: &diagnostic.message,
-            primary: diagnostic.primary.as_ref().map(Anchor::of),
+            primary: diagnostic.primary.as_ref().map(AnchorJson::of),
             labels: diagnostic
                 .labels
                 .iter()
@@ -57,15 +57,19 @@ impl<'a> Record<'a> {
     }
 }
 
+/// An anchored place as the JSON contract spells it.
+///
+/// The diagnostic renderer and the run-report renderer share this so a `site`
+/// and a `primary` can never disagree about an artifact or a `kind`.
 #[derive(Debug, Serialize)]
-pub(crate) struct Anchor<'a> {
+pub struct AnchorJson<'a> {
     artifact: &'a str,
     #[serde(flatten)]
     site: SiteJson,
 }
 
-impl<'a> Anchor<'a> {
-    pub(crate) fn of(anchor: &'a cyberspine_diag::Anchor) -> Self {
+impl<'a> AnchorJson<'a> {
+    pub fn of(anchor: &'a cyberspine_diag::Anchor) -> Self {
         Self {
             artifact: &anchor.artifact,
             site: SiteJson::of(anchor.site),
@@ -101,23 +105,4 @@ impl SiteJson {
             Site::Whole => Self::Whole,
         }
     }
-}
-
-/// One run, one object, on stdout.
-pub fn render_run(report: &crate::RunReport, out: &mut impl Write) -> io::Result<()> {
-    #[derive(Serialize)]
-    struct Record<'a> {
-        schema: u32,
-        kind: &'static str,
-        #[serde(flatten)]
-        report: &'a crate::RunReport,
-    }
-
-    let record = Record {
-        schema: SCHEMA,
-        kind: "run",
-        report,
-    };
-    serde_json::to_writer(&mut *out, &record).map_err(io::Error::other)?;
-    out.write_all(b"\n")
 }

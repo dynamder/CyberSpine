@@ -15,7 +15,7 @@ use cyberspine_host::{
     ActionDirectory, ActionError, ActionResolver, Interrupts, Log, LogError, Registry, Replay,
     Report, into_diagnostic,
 };
-use cyberspine_report::{InstanceReport, Outcome, RunReport};
+use cyberspine_run_report::{InstanceReport, Outcome, RunReport};
 use cyberspine_vm::io::{LoadFileError, read_image};
 use cyberspine_vm::{Backend, BackendError, Host, LoadError, RigPolicy, Session};
 use thiserror::Error;
