@@ -21,7 +21,9 @@ pub use diag::Warning;
 pub use image::{Image, MAX_IMAGE_LEN, NameRef, Names};
 pub use load::{LoadError, VerifiedImage};
 pub use plan::{Plan, SensorFSource, SensorISource};
-pub use reason::{MAX_REASON_LEN, ReasonView, Segment, Template, TemplateError, Value, VarRef};
+pub use reason::{
+    MAX_REASON_LEN, ReasonView, SourceTemplate, StoredTemplate, Template, TemplateError,
+};
 
 // The diagnostic vocabulary an image can be reported in. Re-exported because a
 // caller who has an image also has its diagnostics, and asking them to add a

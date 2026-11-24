@@ -2,7 +2,7 @@
 //! (`docs/isa.md` §4.8, `docs/binfmt.md` §6.6).
 
 use cyberspine_core::binfmt::load::{LoadError, VerifiedImage};
-use cyberspine_core::binfmt::reason::{ReasonView, Template, TemplateError};
+use cyberspine_core::binfmt::reason::{ReasonView, SourceTemplate, StoredTemplate, TemplateError};
 use cyberspine_core::exec::{Instance, InterruptError, Program, Sensors, Status, Step};
 use cyberspine_core::isa::OpCode;
 use cyberspine_testkit::{action, halt, intr, rig, verified};
@@ -46,8 +46,8 @@ fn a_template_renders_registers_variables_and_braces() {
         vf: 0.5,
         vi: 7,
     };
-    let template =
-        Template::parse("x={f1:.2} i={i2} vf={vf:0} vi={vi:0} {{lit}}").expect("valid template");
+    let template = StoredTemplate::parse("x={f1:.2} i={i2} vf={vf:0} vi={vi:0} {{lit}}", 1, 1)
+        .expect("valid template");
 
     assert_eq!(
         template.render(&view),
@@ -58,8 +58,8 @@ fn a_template_renders_registers_variables_and_braces() {
 
 #[test]
 fn a_source_name_resolves_to_a_var_index() {
-    let mut template = Template::parse("phase={vf:phase}").expect("valid source template");
-    template
+    let template = SourceTemplate::parse("phase={vf:phase}")
+        .expect("valid source template")
         .resolve_vars(|name| (name == "phase").then_some(2), |_| None)
         .expect("phase is declared");
 
@@ -67,10 +67,20 @@ fn a_source_name_resolves_to_a_var_index() {
 }
 
 #[test]
-fn a_stored_template_must_not_name_a_variable() {
-    let template = Template::parse("{vf:phase}").expect("syntactically valid");
+fn a_source_template_names_its_variables() {
     assert_eq!(
-        template.check_stored(1, 0),
+        SourceTemplate::parse("{vf:0}"),
+        Err(TemplateError::IndexInSource {
+            text: "0".to_string()
+        }),
+        "an index is the stored form; a source file names the variable"
+    );
+}
+
+#[test]
+fn a_stored_template_must_not_name_a_variable() {
+    assert_eq!(
+        StoredTemplate::parse("{vf:phase}", 1, 0),
         Err(TemplateError::NameInStored {
             name: "phase".to_string()
         })
@@ -79,17 +89,50 @@ fn a_stored_template_must_not_name_a_variable() {
 
 #[test]
 fn a_stored_index_must_be_inside_its_table() {
-    let template = Template::parse("{vf:5}").expect("syntactically valid");
     assert_eq!(
-        template.check_stored(2, 0),
+        StoredTemplate::parse("{vf:5}", 2, 0),
         Err(TemplateError::StoredVarIndexOutOfRange { index: 5, count: 2 })
+    );
+}
+
+/// `docs/binfmt.md` §6.6 allows non-ASCII reason text, so every byte index the
+/// parser takes must land on a character boundary.
+#[test]
+fn a_non_ascii_template_parses_and_round_trips() {
+    let template =
+        StoredTemplate::parse("héllo {f1:.1} — {{世界}}", 0, 0).expect("non-ascii text is legal");
+    assert_eq!(
+        StoredTemplate::parse(&template.canonical(), 0, 0).expect("the canonical form parses back"),
+        template,
+        "escaped braces survive the round trip"
+    );
+
+    let view = View {
+        f1: 0.5,
+        i2: 0,
+        vf: 0.0,
+        vi: 0,
+    };
+    assert_eq!(template.render(&view), "héllo 0.5 — {世界}");
+
+    let plain = StoredTemplate::parse("é", 0, 0).expect("a non-ascii literal is a template");
+    assert_eq!(plain.render(&view), "é");
+}
+
+#[test]
+fn a_non_ascii_stored_reason_loads() {
+    let image = interrupt_image("héllo {f1}");
+    assert_eq!(
+        image.reason(0),
+        "héllo {f1}",
+        "the loader accepts and keeps non-ascii reason text"
     );
 }
 
 #[test]
 fn a_register_outside_0_to_63_is_refused() {
     assert_eq!(
-        Template::parse("{f64}"),
+        SourceTemplate::parse("{f64}"),
         Err(TemplateError::RegisterOutOfRange {
             text: "64".to_string()
         })

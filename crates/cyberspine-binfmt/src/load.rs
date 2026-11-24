@@ -35,7 +35,7 @@ use super::image::{
     format_parts,
 };
 use super::plan::{Plan, SensorFSource, SensorISource};
-use super::reason::{MAX_REASON_LEN, Template, TemplateError};
+use super::reason::{MAX_REASON_LEN, StoredTemplate, TemplateError};
 use cyberspine_rig::{Fingerprint, Name, NameError};
 
 /// Which metadata table an error refers to.
@@ -825,10 +825,7 @@ fn check_metadata(image: &Image) -> Result<Plan, LoadError> {
                 max: MAX_REASON_LEN,
             });
         }
-        let template =
-            Template::parse(text).map_err(|source| LoadError::InvalidReason { index, source })?;
-        template
-            .check_stored(image.vars_f.len() as u32, image.vars_i.len() as u32)
+        StoredTemplate::parse(text, image.vars_f.len() as u32, image.vars_i.len() as u32)
             .map_err(|source| LoadError::InvalidReason { index, source })?;
     }
 
