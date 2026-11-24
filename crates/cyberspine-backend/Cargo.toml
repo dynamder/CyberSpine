@@ -7,23 +7,24 @@ license.workspace = true
 
 # A feature is a dependency edge, not a `no_std` switch: the portable crates
 # never depend on this one, so a host that only loads dynamic libraries does not
-# have to compile a runtime. Plugin authors take `export` alone.
+# have to compile a runtime. Plugin authors take `export` alone. The loaders and
+# the transport loops live in `cyberspine-plugin`; these features only say which
+# of them this crate exposes.
 [features]
 default = []
-dylib = ["dep:libloading"]
-rpc = ["dep:tokio"]
+dylib = ["cyberspine-plugin/dylib"]
+rpc = ["cyberspine-plugin/rpc"]
 export = []
 
 [dependencies]
 cyberspine-frame = { path = "../cyberspine-frame" }
 cyberspine-manifest = { path = "../cyberspine-manifest" }
+cyberspine-plugin = { path = "../cyberspine-plugin" }
 cyberspine-rig = { path = "../cyberspine-rig" }
 cyberspine-vm = { path = "../cyberspine-vm" }
-libloading = { version = "0.9", optional = true }
 rmp-serde = "1.3.1"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2.0.21"
-tokio = { version = "1.54", optional = true, features = ["io-util", "net", "rt", "time"] }
 
 [dev-dependencies]
 cyberspine-testkit = { path = "../cyberspine-testkit" }

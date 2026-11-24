@@ -281,13 +281,12 @@ dependencies = [
  "cyberspine-arbiter-fixture",
  "cyberspine-diag",
  "cyberspine-frame",
+ "cyberspine-plugin",
  "cyberspine-testkit",
- "libloading",
  "rmp-serde",
  "serde",
  "serde_json",
  "thiserror",
- "tokio",
 ]
 
 [[package]]
@@ -323,15 +322,14 @@ version = "0.1.0"
 dependencies = [
  "cyberspine-frame",
  "cyberspine-manifest",
+ "cyberspine-plugin",
  "cyberspine-rig",
  "cyberspine-testkit",
  "cyberspine-vm",
- "libloading",
  "rmp-serde",
  "serde",
  "serde_json",
  "thiserror",
- "tokio",
 ]
 
 [[package]]
@@ -471,6 +469,16 @@ dependencies = [
  "cyberspine-backend",
  "cyberspine-rig",
  "cyberspine-vm",
+]
+
+[[package]]
+name = "cyberspine-plugin"
+version = "0.1.0"
+dependencies = [
+ "cyberspine-frame",
+ "libloading",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]

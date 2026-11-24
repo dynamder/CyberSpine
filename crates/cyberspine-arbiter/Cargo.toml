@@ -7,20 +7,20 @@ license.workspace = true
 
 # The same feature edges the backend uses: a host that only loads shared
 # libraries does not compile a runtime, and a plugin author takes `export` alone.
+# The loaders and the transport loops are `cyberspine-plugin`'s.
 [features]
 default = []
-dylib = ["dep:libloading"]
-rpc = ["dep:tokio"]
+dylib = ["cyberspine-plugin/dylib"]
+rpc = ["cyberspine-plugin/rpc"]
 export = []
 
 [dependencies]
 cyberspine-diag = { path = "../cyberspine-diag" }
 cyberspine-frame = { path = "../cyberspine-frame" }
-libloading = { version = "0.9", optional = true }
+cyberspine-plugin = { path = "../cyberspine-plugin" }
 rmp-serde = "1.3.1"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2.0.21"
-tokio = { version = "1.54", optional = true, features = ["io-util", "net", "rt", "time"] }
 
 [dev-dependencies]
 cyberspine-arbiter-fixture = { path = "../cyberspine-arbiter-fixture" }

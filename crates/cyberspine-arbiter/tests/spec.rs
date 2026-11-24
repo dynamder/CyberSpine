@@ -21,14 +21,17 @@ fn a_spec_is_a_kind_and_a_target() {
 
 #[test]
 fn a_spec_that_names_nothing_is_refused() {
-    assert!(matches!(ArbiterSpec::parse("rpc"), Err(SpecError::Shape)));
+    assert!(matches!(
+        ArbiterSpec::parse("rpc"),
+        Err(SpecError::Shape { .. })
+    ));
     assert!(matches!(
         ArbiterSpec::parse("rpc:"),
         Err(SpecError::Empty { .. })
     ));
     assert!(matches!(
         ArbiterSpec::parse("bluetooth:x"),
-        Err(SpecError::Kind(kind)) if kind == "bluetooth"
+        Err(SpecError::Kind { kind, .. }) if kind == "bluetooth"
     ));
 }
 
@@ -36,6 +39,6 @@ fn a_spec_that_names_nothing_is_refused() {
 fn the_builtin_arbiter_is_not_a_spec() {
     assert!(matches!(
         ArbiterSpec::parse("builtin:stop"),
-        Err(SpecError::Builtin)
+        Err(SpecError::Builtin { .. })
     ));
 }

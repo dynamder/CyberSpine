@@ -201,6 +201,7 @@ version = "0.1.0"
 dependencies = [
  "cyberspine-diag",
  "cyberspine-frame",
+ "cyberspine-plugin",
  "rmp-serde",
  "serde",
  "thiserror",
@@ -298,6 +299,14 @@ dependencies = [
  "cyberspine-rig",
  "serde",
  "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "cyberspine-plugin"
+version = "0.1.0"
+dependencies = [
+ "cyberspine-frame",
  "thiserror",
 ]
 

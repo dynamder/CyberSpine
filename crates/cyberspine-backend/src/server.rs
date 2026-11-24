@@ -15,6 +15,8 @@ use cyberspine_manifest::from_json;
 use cyberspine_rig::BoundFingerprint;
 use cyberspine_vm::{Backend, BackendError, Shape, Snapshot};
 
+pub use cyberspine_plugin::server::{Connection, Serve};
+
 use crate::wire::{self, Ack, Commit, Failure, Hello, Kind, Sample, Step, Welcome};
 
 /// The wire form of [`SampleReply`](crate::wire::SampleReply), borrowing the
@@ -141,7 +143,7 @@ impl<B: Backend> Server<B> {
 
             Kind::Sample => {
                 let request: Sample = wire::decode(payload).map_err(protocol)?;
-                if connection.is_repeated(request.seq) {
+                if connection.is_repeated(u64::from(request.seq)) {
                     return Ok(());
                 }
                 let mut snapshot = Snapshot {
@@ -164,7 +166,7 @@ impl<B: Backend> Server<B> {
 
             Kind::Commit => {
                 let request: Commit = wire::decode(payload).map_err(protocol)?;
-                if connection.is_repeated(request.seq) {
+                if connection.is_repeated(u64::from(request.seq)) {
                     return Ok(());
                 }
                 wire::validate_commit(&request, self.shape.muscles).map_err(protocol)?;
@@ -180,7 +182,7 @@ impl<B: Backend> Server<B> {
 
             Kind::Step => {
                 let request: Step = wire::decode(payload).map_err(protocol)?;
-                if connection.is_repeated(request.seq) {
+                if connection.is_repeated(u64::from(request.seq)) {
                     return Ok(());
                 }
                 self.body
@@ -199,27 +201,9 @@ impl<B: Backend> Server<B> {
     }
 }
 
-/// One transport's session with this server.
-///
-/// The retry that needs deduplication is a *transport buffer* retry: the ABI
-/// reports a too-small reply buffer after running the request, so the caller
-/// re-sends the same frame. That is a fact about one connection — a TCP client
-/// numbers its requests from 1 again every time it connects — so the cursor
-/// lives here and not on the [`Server`].
-#[derive(Debug, Default)]
-pub struct Connection {
-    last_seq: Option<u32>,
-}
-
-impl Connection {
-    /// Whether this request was already executed. The reply it wants is still in
-    /// the server's buffer.
-    fn is_repeated(&mut self, seq: u32) -> bool {
-        if self.last_seq == Some(seq) {
-            return true;
-        }
-        self.last_seq = Some(seq);
-        false
+impl<B: Backend + Send + 'static> Serve for Server<B> {
+    fn answer_frame(&mut self, connection: &mut Connection, request: &[u8]) -> Vec<u8> {
+        self.answer(connection, request).to_vec()
     }
 }
 

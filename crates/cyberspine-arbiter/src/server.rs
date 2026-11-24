@@ -4,6 +4,8 @@
 //! server — are thin wrappers around [`Server`], so an arbiter behaves the same
 //! whichever way it is packaged.
 
+pub use cyberspine_plugin::server::{Connection, Serve};
+
 use crate::wire::{self, Failure, Hello, Kind, Rulings, Tick, Welcome, WireCause};
 use crate::{Action, Arbiter, Decision};
 
@@ -106,24 +108,9 @@ impl<A: Arbiter> Server<A> {
     }
 }
 
-/// One transport's session with this server.
-///
-/// Deduplication belongs here, not on the [`Server`]: a host's `seq` restarts at
-/// 0 every time it connects, so a cursor kept by the server would hand a fresh
-/// host the reply the previous host was waiting for.
-#[derive(Debug, Default)]
-pub struct Connection {
-    last_seq: Option<u64>,
-}
-
-impl Connection {
-    /// Whether this is the frame the previous reply was built from.
-    fn is_repeated(&mut self, seq: u64) -> bool {
-        if self.last_seq == Some(seq) {
-            return true;
-        }
-        self.last_seq = Some(seq);
-        false
+impl<A: Arbiter + Send + 'static> Serve for Server<A> {
+    fn answer_frame(&mut self, connection: &mut Connection, request: &[u8]) -> Vec<u8> {
+        self.answer(connection, request).to_vec()
     }
 }
 
