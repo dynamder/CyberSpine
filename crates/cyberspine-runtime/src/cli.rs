@@ -83,10 +83,10 @@ pub enum ReportFormat {
 }
 
 impl ReportFormat {
-    pub fn format(self) -> cyberspine_report::Format {
+    pub fn format(self) -> cyberspine_run_report::Format {
         match self {
-            Self::Human => cyberspine_report::Format::Human,
-            Self::Json => cyberspine_report::Format::Json,
+            Self::Human => cyberspine_run_report::Format::Human,
+            Self::Json => cyberspine_run_report::Format::Json,
         }
     }
 }

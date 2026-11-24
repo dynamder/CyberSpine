@@ -8,7 +8,7 @@
 
 ## 0. 三条不变量
 
-1. **产生 ≠ 渲染。** 除 `cyberspine-report` 外，任何 crate 都不把诊断变成字节。
+1. **产生 ≠ 渲染。** 除 `cyberspine-report`（诊断）与建在其上的 `cyberspine-run-report`（运行事件与终态）外，任何 crate 都不把诊断变成字节。
    库 crate 里的 `println!`/`eprintln!` 正在清零，见 §8 的例外清单。
 2. **失败不是返回值，是 sink 事件。** 阶段函数返回"产物有没有"，为什么没有进
    `Diagnostics`。`Diagnostics::failed()` 是唯一判定点。
@@ -115,7 +115,10 @@ if sink.failed() { /* 唯一的停止点 */ }
   不是集合：`cyinevm` 用 `Result` 表示"这次运行停了"，在 `main` 一次性转换成诊断。
   关键不在于用什么类型，而在于**只有一处把错误变成字节**。
 
-## 5. 输出（`cyberspine-report`）
+## 5. 输出（`cyberspine-report` / `cyberspine-run-report`）
+
+诊断渲染在 `cyberspine-report`；中断流与运行终态在 `cyberspine-run-report`。拆开是因为后者
+依赖 host/arbiter，而 `cyinea` 只编译、不运行镜像，不应链接插件边界。
 
 **流固定，格式可变：诊断永远走 stderr，产物永远走 stdout。**
 
@@ -140,7 +143,7 @@ if sink.failed() { /* 唯一的停止点 */ }
 - `code` 稳定，`message` 不稳定。
 - `Site::Whole` 序列化成 `{"kind":"whole"}`；`primary` 缺失时字段省略。
 
-中断与裁决也是一条一条的记录，随运行实时写出（`crates/cyberspine-report/src/event.rs`）：
+中断与裁决也是一条一条的记录，随运行实时写出（`crates/cyberspine-run-report/src/event.rs`）：
 
 ```json
 {"schema":1,"kind":"event","what":"interrupt","event":0,"instance":0,
@@ -152,7 +155,7 @@ if sink.failed() { /* 唯一的停止点 */ }
 `verdict` / `failed`。事件不是诊断：中断是正常通信，裁决是宿主对它的回答；它们共用同一个
 渲染器，只是为了让 `--json` 用一个词汇描述整场运行。
 
-运行终态是另一条记录，由 `--report json` 写出（`crates/cyberspine-report/src/run.rs`）：
+运行终态是另一条记录，由 `--report json` 写出（`crates/cyberspine-run-report/src/render.rs`）：
 
 ```json
 {"schema":1,"kind":"run","outcome":"halted","ticks":31,"dt":0.016666668,

@@ -79,16 +79,3 @@ pub fn render(
 
     Ok(())
 }
-
-/// The one-line terminal summary: what an operator reads last.
-pub fn render_run(report: &crate::RunReport, out: &mut impl Write) -> io::Result<()> {
-    writeln!(
-        out,
-        "run: {} after {} tick(s) of {:.3} ms, {} instance(s), {} overrun(s)",
-        report.outcome.as_str(),
-        report.ticks,
-        f64::from(report.dt) * 1000.0,
-        report.instances.len(),
-        report.overruns
-    )
-}
