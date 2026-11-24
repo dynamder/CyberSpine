@@ -9,12 +9,15 @@
 //! refused before the first tick. That is the same check the host makes at load
 //! time, moved to the side that owns the body.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
 use serde::Serialize;
 
 use cyberspine_manifest::from_json;
 use cyberspine_rig::BoundFingerprint;
 use cyberspine_vm::{Backend, BackendError, Shape, Snapshot};
 
+use cyberspine_plugin::server::panic_message;
 pub use cyberspine_plugin::server::{Connection, Serve};
 
 use crate::wire::{self, Ack, Commit, Failure, Hello, Kind, Sample, Step, Welcome};
@@ -106,8 +109,10 @@ impl<B: Backend> Server<B> {
         match refusal {
             Ok(()) => &self.reply,
             Err(failure) => {
-                wire::encode(Kind::Error, &failure, &mut self.reply)
-                    .expect("a Failure is always encodable");
+                // The message comes from the body, so it has no length bound.
+                // Capping is what makes "a Failure is always encodable" true.
+                wire::encode(Kind::Error, &failure.capped(), &mut self.reply)
+                    .expect("a capped Failure is encodable");
                 &self.reply
             }
         }
@@ -203,7 +208,26 @@ impl<B: Backend> Server<B> {
 
 impl<B: Backend + Send + 'static> Serve for Server<B> {
     fn answer_frame(&mut self, connection: &mut Connection, request: &[u8]) -> Vec<u8> {
-        self.answer(connection, request).to_vec()
+        // A body is user code and may panic. The dynamic-library guard already
+        // turns that into a status; the TCP loop needs the same answer as a
+        // frame, or a panic takes the connection (and the mutex) with it.
+        match catch_unwind(AssertUnwindSafe(|| {
+            self.answer(connection, request).to_vec()
+        })) {
+            Ok(reply) => reply,
+            Err(payload) => {
+                let failure = Failure {
+                    seq: 0,
+                    code: wire::code::PANIC,
+                    message: panic_message(payload),
+                }
+                .capped();
+                let mut reply = Vec::new();
+                wire::encode(Kind::Error, &failure, &mut reply)
+                    .expect("a capped panic failure is encodable");
+                reply
+            }
+        }
     }
 }
 

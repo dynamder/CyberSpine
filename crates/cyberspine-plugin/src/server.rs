@@ -33,6 +33,18 @@ impl Connection {
     }
 }
 
+/// The text inside a panic payload.
+///
+/// A transport that catches a plugin panic still has to tell the other side what
+/// happened; the payload is the only place that sentence lives.
+pub fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|text| (*text).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "the plugin panicked".to_owned())
+}
+
 /// A server the TCP loop can drive.
 ///
 /// The implementation owns the reply buffer and returns a copy: the loop hands it

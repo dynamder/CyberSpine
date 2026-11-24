@@ -139,3 +139,4 @@ R1.3 改动 arbiter 线格式：升 `ABI_VERSION`，或引入 v2 帧。
 - 2026-11-24：诊断截断不再静默：`--json` 末尾追加 `kind:"truncated"`，人读末尾追加 `note`；诊断/事件渲染写不进 stderr 时按环境失败退出 5。
 - 2026-11-24：`--decisions` 在运行结束时显式 flush；写盘失败（磁盘满、只读挂载）按环境失败退出 5 并报 `rt.decisions`。
 - 2026-11-24：镜像写入路径补齐三条：`write_image` 拒绝超过 4 MiB 的产物，`verify` 先校验 debug 段再编码（短行表返回错误而非 panic），debug 标签名与 source 一样拒绝 NUL。
+- 2026-11-24：body 的 `Failure` 消息按帧上限截断；RPC 服务对每个请求做 `catch_unwind`，把 body panic 变成 `PANIC` Failure，连接与后续请求继续。

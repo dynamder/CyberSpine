@@ -140,6 +140,31 @@ pub struct Failure {
     pub message: String,
 }
 
+impl Failure {
+    /// Cap a message so the frame always fits the protocol's size limit.
+    ///
+    /// The producer of the text is the body: a backend error message has no
+    /// length bound, and a refusal still has to become a frame the host can
+    /// read. A capped message keeps its prefix and says it was cut.
+    pub fn capped(mut self) -> Self {
+        const SUFFIX: &str = "…(truncated)";
+        // MessagePack adds a handful of bytes around the string; 64 is well
+        // above the array/seq/code/string headers.
+        let limit = MAX_FRAME_LEN.saturating_sub(64);
+        if self.message.len() <= limit {
+            return self;
+        }
+
+        let mut end = limit - SUFFIX.len();
+        while !self.message.is_char_boundary(end) {
+            end -= 1;
+        }
+        self.message.truncate(end);
+        self.message.push_str(SUFFIX);
+        self
+    }
+}
+
 /// What a [`Failure`] means. The text is for a human; the code is for the caller.
 pub mod code {
     /// The frame itself was wrong: wrong kind here, wrong shape, bad ordering.
