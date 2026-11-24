@@ -70,6 +70,26 @@ impl Log {
             source,
         })
     }
+
+    /// Flush what was written and close the file.
+    ///
+    /// A `BufWriter` flushed in `Drop` cannot report a full disk, so the run
+    /// ends its log explicitly: a write that only happened at process exit
+    /// would otherwise be lost without a diagnostic.
+    pub fn finish(self) -> Result<(), LogError> {
+        finish_writer(self.out, &self.path)
+    }
+}
+
+fn finish_writer<W: Write>(mut out: BufWriter<W>, path: &Path) -> Result<(), LogError> {
+    out.flush().map_err(|source| LogError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    out.into_inner().map(|_| ()).map_err(|error| LogError::Io {
+        path: path.to_path_buf(),
+        source: error.into_error(),
+    })
 }
 
 /// An arbiter that answers from a recorded stream.
@@ -451,6 +471,40 @@ mod tests {
         assert!(report.take_notices().is_empty(), "the source drains");
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    struct Full;
+
+    impl Write for Full {
+        fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("the writer is full"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("the writer is full"))
+        }
+    }
+
+    #[test]
+    fn a_flush_failure_names_the_log_path() {
+        let path = Path::new("run.jsonl");
+        let error =
+            super::finish_writer(BufWriter::new(Full), path).expect_err("the writer is full");
+        assert!(error.to_string().contains("run.jsonl"), "{error}");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_full_device_fails_when_the_log_is_finished() {
+        let mut log = Log::create(Path::new("/dev/full")).expect("/dev/full opens");
+        log.write(&Record::new(
+            EventId::new(0),
+            0,
+            &ruling(Completion::Finished(Verdict::Stop)),
+        ))
+        .expect("the record fits the buffer");
+        let error = log.finish().expect_err("the device is full");
+        assert!(error.to_string().contains("/dev/full"), "{error}");
     }
 
     #[test]

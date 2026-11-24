@@ -1293,3 +1293,64 @@ fn a_truncated_diagnostic_list_says_how_many_it_dropped() {
     assert_eq!(records[64]["kind"], "truncated");
     assert_eq!(records[64]["dropped"], 37);
 }
+
+#[test]
+fn a_decision_log_that_cannot_be_created_is_an_environment_failure() {
+    let dir = scratch("decisions-create");
+    let image = write_image(&dir, "halt.csp", HALT, MANIFEST);
+    let target = dir.join("a-directory");
+    fs::create_dir(&target).expect("the target directory is created");
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("0"),
+        OsStr::new("--decisions"),
+        target.as_os_str(),
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(ENVIRONMENT),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("rt.decisions"),
+        "stderr: {}",
+        stderr(&output)
+    );
+}
+
+/// `/dev/full` is Linux-only; macOS and the BSDs have no always-full device.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_decision_log_that_cannot_be_flushed_is_an_environment_failure() {
+    let dir = scratch("decisions-full");
+    let image = write_image(&dir, "interrupt.csp", INTERRUPT, MANIFEST);
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("3"),
+        OsStr::new("--unpaced"),
+        OsStr::new("--on-interrupt"),
+        OsStr::new("continue"),
+        OsStr::new("--decisions"),
+        OsStr::new("/dev/full"),
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(ENVIRONMENT),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("rt.decisions"),
+        "stderr: {}",
+        stderr(&output)
+    );
+}

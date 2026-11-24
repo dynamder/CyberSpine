@@ -532,7 +532,19 @@ fn run_loop<B: Backend, P: RigPolicy>(
         }
     }
 
-    result
+    // The log is a product of the run: a `BufWriter` flushed in `Drop` cannot
+    // report a full disk. A failed flush is an environment failure, but a run
+    // that already failed keeps its diagnostics — both are shown, and the log
+    // error names the exit code because the recording is incomplete.
+    match interrupts.finish() {
+        Ok(()) => result,
+        Err(error) => {
+            if let Err(run_error) = &result {
+                sink.push_all(run_error.diagnostics());
+            }
+            Err(Error::Decisions(error))
+        }
+    }
 }
 
 /// Why the loop stopped.

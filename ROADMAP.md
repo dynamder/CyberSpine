@@ -137,3 +137,4 @@ R1.3 改动 arbiter 线格式：升 `ABI_VERSION`，或引入 v2 帧。
 - 2026-11-24：拆出 `cyberspine-run-report`：诊断渲染留在 `cyberspine-report`，中断/裁决事件流与运行终态独立；`cyinea` 不再经由报告层链接 host/arbiter。
 - 2026-11-24：maze demo 与 `cyinevm` 共用 `cyberspine-host::Run`（装载、登记、pump）和同一个事件渲染器；`maze --headless` 的输出与文档一致，并由快照钉住。
 - 2026-11-24：诊断截断不再静默：`--json` 末尾追加 `kind:"truncated"`，人读末尾追加 `note`；诊断/事件渲染写不进 stderr 时按环境失败退出 5。
+- 2026-11-24：`--decisions` 在运行结束时显式 flush；写盘失败（磁盘满、只读挂载）按环境失败退出 5 并报 `rt.decisions`。

@@ -125,7 +125,8 @@ interrupt: instance 0 (actions/idle.csp) at pc 3 (idle.csa:12:5) tick 12: obstac
 release 镜像只有 `pc`（`asm.md` §8、`binfmt.md` §6.7）。两种构建的执行完全一致。
 
 退出码仍是 `0`：中断是程序与宿主之间的正常通信，不是错误。`--decisions <PATH>` 把每一轮
-裁决记成 JSON Lines，`--replay <PATH>` 用记录代替仲裁器重跑同一段轨迹。模型与边界见
+裁决记成 JSON Lines，结束运行时显式 flush；写盘失败（磁盘满、只读挂载）按环境失败退出 5，
+并报 `rt.decisions`。`--replay <PATH>` 用记录代替仲裁器重跑同一段轨迹。模型与边界见
 [`interrupt.md`](interrupt.md)。maze 的默认运行是同一套 `cyberspine-host` 循环的完整示例
 （无路标路口 → 撞墙探测 → `reverse.csa` 退后 → `maze_left/right` 变体），见
 [`interrupt.md`](interrupt.md) §14 与 [`demos/maze/README.md`](../demos/maze/README.md)。
