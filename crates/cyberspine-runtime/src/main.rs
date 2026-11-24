@@ -28,9 +28,15 @@ fn main() -> ExitCode {
 
     // The interrupt/ruling stream is rendered where it happens: long runs show
     // progress, and JSON mode gets one `kind: "event"` line per event.
+    let mut events_failed = false;
     let result = {
         let mut on_event = |report: &cyberspine_runtime::Report| {
-            let _ = renderer.event(report, &mut std::io::stderr().lock());
+            if renderer
+                .event(report, &mut std::io::stderr().lock())
+                .is_err()
+            {
+                events_failed = true;
+            }
         };
         match &args.backend {
             Some(spec) => run_external(spec, &args.image, &options, &mut sink, &mut on_event),
@@ -49,7 +55,9 @@ fn main() -> ExitCode {
     // Diagnostics always go to stderr: stdout is the product (the trace or the
     // report), and mixing the two makes a run impossible to parse. `--json`
     // changes the format, not the stream.
-    let _ = renderer.diagnostics(sink.items(), &mut std::io::stderr().lock());
+    let diagnostics_failed = renderer
+        .diagnostics(sink.items(), sink.dropped(), &mut std::io::stderr().lock())
+        .is_err();
 
     // The run report has its own format flag, independent of `--json`: a caller
     // may want a machine-readable report and human diagnostics, or the reverse.
@@ -59,6 +67,12 @@ fn main() -> ExitCode {
             .run(&report, &mut std::io::stdout().lock())
             .is_err()
     {
+        return ExitCode::from(5);
+    }
+
+    // A stream nobody can read is an environment failure; the run still gets its
+    // terminal report, which is written above.
+    if diagnostics_failed || events_failed {
         return ExitCode::from(5);
     }
 

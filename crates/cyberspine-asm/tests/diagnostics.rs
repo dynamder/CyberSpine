@@ -20,7 +20,7 @@ fn render(errors: &AsmParseErrors, file: &str, source: &str) -> String {
     renderer.remember(file, source);
     let mut out = Vec::new();
     renderer
-        .diagnostics(sink.items(), &mut out)
+        .diagnostics(sink.items(), sink.dropped(), &mut out)
         .expect("rendering writes to a Vec");
     String::from_utf8(out).expect("the rendering is utf-8")
 }

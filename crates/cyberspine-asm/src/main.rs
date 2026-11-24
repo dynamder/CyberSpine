@@ -68,7 +68,13 @@ fn main() -> ExitCode {
     // Diagnostics always go to stderr; `--json` changes the format, not the
     // stream. stdout stays free for whatever the tool produces (`cyinea`
     // produces nothing there today, which keeps a pipeline readable).
-    let _ = renderer.diagnostics(sink.items(), &mut std::io::stderr().lock());
+    let rendered =
+        renderer.diagnostics(sink.items(), sink.dropped(), &mut std::io::stderr().lock());
+    if rendered.is_err() {
+        // The diagnostics are the product here; failing to write them is an
+        // environment failure, not a rejected input.
+        return ExitCode::from(EXIT_ENVIRONMENT);
+    }
 
     ExitCode::from(class)
 }

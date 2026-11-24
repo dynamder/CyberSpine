@@ -109,7 +109,8 @@ sink.push(Diagnostic::of(&kind).at(anchor));
 if sink.failed() { /* 唯一的停止点 */ }
 ```
 
-- 上限 64 条（`DEFAULT_LIMIT`），溢出计入 `dropped()`，渲染器可以说明列表不完整。
+- 上限 64 条（`DEFAULT_LIMIT`），溢出计入 `dropped()`。两个 CLI 把 `dropped()` 交给渲染器：
+  人读末尾是 `note: N more diagnostic(s) were not shown`，JSONL 末尾是一条 `kind:"truncated"`。
 - `--deny-warnings` 是 sink 的一个构造参数，不是第二条代码路径。
 - **sink 用于会恢复并继续的多错阶段**（解析一行错后继续下一行）。运行期失败是终止条件，
   不是集合：`cyinevm` 用 `Result` 表示"这次运行停了"，在 `main` 一次性转换成诊断。
@@ -143,6 +144,18 @@ if sink.failed() { /* 唯一的停止点 */ }
 - `code` 稳定，`message` 不稳定。
 - `Site::Whole` 序列化成 `{"kind":"whole"}`；`primary` 缺失时字段省略。
 
+列表被 sink 的上限截断时，`--json` 在诊断之后追加一条：
+
+```json
+{"schema":1,"kind":"truncated","dropped":37}
+```
+
+人读模式对应一行 `note: 37 more diagnostic(s) were not shown`。`kind` ∈ `diagnostic` /
+`truncated`（运行流另有 `event` / `run`，见下）。
+
+诊断或事件流写不进 stderr（管道关闭、重定向目标不可写）是环境失败，退出 5；`cyinevm`
+仍先写出 `--report` 的终态，再返回这个码。
+
 中断与裁决也是一条一条的记录，随运行实时写出（`crates/cyberspine-run-report/src/event.rs`）：
 
 ```json
@@ -174,7 +187,7 @@ rejected 也写报告**：失败是最需要终态的结局。
 | `2` | 命令行用法错误（clap） |
 | `3` | 输入被拒绝：源码、manifest、`-o` 指向源文件 |
 | `4` | 运行异常结束：fault |
-| `5` | 环境失败：读写不了文件、后端/仲裁器失败 |
+| `5` | 环境失败：读写不了文件、诊断写不进 stderr、后端/仲裁器失败 |
 
 `cyinea` 只产生 `0/2/3/5`。CLI **不得 panic**：参数组合矩阵测试
 （`crates/cyberspine-runtime/tests/cli_matrix.rs`）钉住"永不 101"。

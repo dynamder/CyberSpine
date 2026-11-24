@@ -43,9 +43,10 @@ impl Renderer {
     pub fn diagnostics(
         &mut self,
         diagnostics: &[Diagnostic],
+        dropped: usize,
         out: &mut impl Write,
     ) -> io::Result<()> {
-        self.diagnostics.diagnostics(diagnostics, out)
+        self.diagnostics.diagnostics(diagnostics, dropped, out)
     }
 
     pub fn diagnostic(&mut self, diagnostic: &Diagnostic, out: &mut impl Write) -> io::Result<()> {

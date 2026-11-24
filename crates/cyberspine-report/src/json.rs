@@ -106,3 +106,24 @@ impl SiteJson {
         }
     }
 }
+
+/// One record saying the stream is short of the sink's limit.
+///
+/// A consumer that counts records can use this to tell "no more problems" from
+/// "no more room".
+pub fn truncated(dropped: usize, out: &mut impl Write) -> io::Result<()> {
+    #[derive(Serialize)]
+    struct Record {
+        schema: u32,
+        kind: &'static str,
+        dropped: usize,
+    }
+
+    let record = Record {
+        schema: SCHEMA,
+        kind: "truncated",
+        dropped,
+    };
+    serde_json::to_writer(&mut *out, &record).map_err(io::Error::other)?;
+    out.write_all(b"\n")
+}

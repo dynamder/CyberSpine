@@ -52,9 +52,13 @@ impl Renderer {
 
     /// Render a batch. In human mode a run that found several errors ends with a
     /// count, so a truncated terminal does not read as a complete list.
+    ///
+    /// `dropped` is what the sink's limit refused; it makes the truncation part
+    /// of both shapes instead of leaving the list silently short.
     pub fn diagnostics(
         &mut self,
         diagnostics: &[Diagnostic],
+        dropped: usize,
         out: &mut impl Write,
     ) -> io::Result<()> {
         for diagnostic in diagnostics {
@@ -66,6 +70,13 @@ impl Renderer {
             if errors > 1 {
                 writeln!(out)?;
                 writeln!(out, "{errors} errors emitted")?;
+            }
+        }
+
+        if dropped > 0 {
+            match self.format {
+                Format::Human => human::truncated(dropped, out)?,
+                Format::Json => json::truncated(dropped, out)?,
             }
         }
 

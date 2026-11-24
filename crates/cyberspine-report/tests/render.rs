@@ -103,3 +103,54 @@ fn an_unreadable_source_degrades_to_a_plain_location() {
     let text = String::from_utf8(out).expect("human output is utf-8");
     assert!(text.contains("probe.csa:3:5"), "{text}");
 }
+
+#[test]
+fn a_truncated_batch_says_how_many_are_missing_in_both_shapes() {
+    let diagnostics: Vec<_> = (0..3)
+        .map(|index| {
+            Diagnostic::error(
+                Code::new("exec.fuel-exhausted"),
+                format!("fault at instruction {index}"),
+            )
+        })
+        .collect();
+
+    let mut human = Renderer::new(Format::Human);
+    let mut out = Vec::new();
+    human
+        .diagnostics(&diagnostics, 7, &mut out)
+        .expect("human renders");
+    let text = String::from_utf8(out).expect("human output is utf-8");
+    assert!(text.contains("3 errors emitted"), "{text}");
+    assert!(
+        text.contains("note: 7 more diagnostic(s) were not shown"),
+        "{text}"
+    );
+
+    let mut json = Renderer::new(Format::Json);
+    let mut out = Vec::new();
+    json.diagnostics(&diagnostics, 7, &mut out)
+        .expect("json renders");
+    let text = String::from_utf8(out).expect("json output is utf-8");
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(
+        lines.len(),
+        4,
+        "three diagnostics and one truncation record"
+    );
+    let last: serde_json::Value =
+        serde_json::from_str(lines[3]).expect("the truncation record is json");
+    assert_eq!(last["schema"], cyberspine_diag::SCHEMA);
+    assert_eq!(last["kind"], "truncated");
+    assert_eq!(last["dropped"], 7);
+
+    let mut out = Vec::new();
+    Renderer::new(Format::Json)
+        .diagnostics(&diagnostics, 0, &mut out)
+        .expect("json renders");
+    let text = String::from_utf8(out).expect("json output is utf-8");
+    assert!(
+        !text.contains("truncated"),
+        "a complete list has no truncation record:\n{text}"
+    );
+}

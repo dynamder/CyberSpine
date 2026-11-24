@@ -79,3 +79,9 @@ pub fn render(
 
     Ok(())
 }
+
+/// The list is already short of the sink's limit; say so rather than let a
+/// reader mistake the last line for the end of the story.
+pub fn truncated(dropped: usize, out: &mut impl Write) -> io::Result<()> {
+    writeln!(out, "note: {dropped} more diagnostic(s) were not shown")
+}

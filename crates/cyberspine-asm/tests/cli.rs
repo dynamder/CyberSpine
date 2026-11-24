@@ -748,3 +748,48 @@ fn the_help_text_is_the_cli_contract() {
     let help = stdout(&output).replace("cyinea.exe", "cyinea");
     insta::assert_snapshot!("help", help);
 }
+
+#[test]
+fn a_diagnostic_list_at_the_limit_says_how_many_it_dropped() {
+    let dir = scratch("truncated");
+    let mut source =
+        String::from(".layer 10\n.clock hz = 60\n.fuel 4096\n.max_wait 600.0\n.text\n");
+    for _ in 0..100 {
+        source.push_str("FADDD f1, f2, f3\n");
+    }
+    source.push_str("HALT\n");
+    let path = write_file(&dir, "truncated.csa", &source);
+
+    let output = run(vec![OsStr::new("-a"), path.as_os_str()]);
+    assert_eq!(output.status.code(), Some(REJECTED));
+    let text = stderr(&output);
+    assert_eq!(
+        text.matches("error[asm.unknown-mnemonic]").count(),
+        64,
+        "{text}"
+    );
+    assert!(text.contains("64 errors emitted"), "{text}");
+    assert!(
+        text.contains("note: 36 more diagnostic(s) were not shown"),
+        "{text}"
+    );
+
+    let output = run(vec![
+        OsStr::new("-a"),
+        path.as_os_str(),
+        OsStr::new("--json"),
+    ]);
+    assert_eq!(output.status.code(), Some(REJECTED));
+    let text = stderr(&output);
+    let records: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("every stderr line is one object"))
+        .collect();
+    assert_eq!(
+        records.len(),
+        65,
+        "64 diagnostics and one truncation record"
+    );
+    assert_eq!(records[64]["kind"], "truncated");
+    assert_eq!(records[64]["dropped"], 36);
+}
