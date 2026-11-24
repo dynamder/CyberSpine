@@ -4,8 +4,9 @@
 依赖：[`isa.md`](isa.md) §9（`Backend` trait）、[`exec.md`](exec.md)（tick 循环）、[`rig.md`](rig.md) §4（身份）、[`binfmt.md`](binfmt.md)（镜像）
 
 > **实现状态（2026-11）**：三种方式全部落地。`crates/cyberspine-backend` 提供
-> `wire` / `remote` / `server` / `dylib` / `rpc` / `spec`，`crates/cyberspine-backend-fixture`
-> 是三种打包共用的测试 body。本文件是这三种方式的唯一规范。
+> `wire` / `remote` / `server` / `spec`，插件边界本身（ABI 表、dylib / rpc 加载器、
+> 连接去重、spec 语法）在 `crates/cyberspine-plugin`，body 与 arbiter 共用同一份；
+> `crates/cyberspine-backend-fixture` 是三种打包共用的测试 body。本文件是这三种方式的唯一规范。
 
 ---
 
@@ -168,9 +169,11 @@ cyberspine_backend::export! {
 | `cyberspine-backend::wire` | 帧头、消息、MessagePack 编解码、`Commit` 规范性 |
 | `cyberspine-backend::remote` | `Transport`、`RemoteBody`、握手、粘性失败 |
 | `cyberspine-backend::server` | body 侧：一帧请求 → 一帧应答；manifest 与 body 的一次性比对 |
-| `cyberspine-backend::dylib` | `libloading` 加载、`Drop` 顺序、`export!` |
-| `cyberspine-backend::rpc` | tokio 客户端与服务端；运行时关在 `TcpTransport` 里 |
-| `cyberspine-backend::spec` | `dylib:` / `rpc:` 的解析与打开；linked 没有 spec |
+| `cyberspine-backend::dylib` | body 的 `dylib` 入口：符号、名词、`Transport` 适配；加载器在 `cyberspine-plugin` |
+| `cyberspine-backend::rpc` | body 的 TCP 入口：`BackendSpec` 的 `rpc:` 目标；循环在 `cyberspine-plugin` |
+| `cyberspine-backend::spec` | body 的 `dylib:` / `rpc:` 词语与打开；linked 没有 spec |
+| `cyberspine-plugin::abi` | `AbiV1` 表、两段式读表、函数指针完整性 |
+| `cyberspine-plugin::dylib` / `::rpc` / `::server` / `::spec` | 两个插件共用的加载器、TCP 循环、连接去重与 spec 语法 |
 
 ## 附录 A：非 Rust 实现速查
 

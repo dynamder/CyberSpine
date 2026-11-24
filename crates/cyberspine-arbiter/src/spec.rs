@@ -5,6 +5,9 @@
 //! nothing here belongs to the CLI: parsing and construction live in the library
 //! so a production caller can use the same spelling in a config file.
 //!
+//! The grammar is [`cyberspine_plugin::spec`]'s; this module adds the arbiter's
+//! words and the step that opens the named packaging.
+//!
 //! ```text
 //! dylib:<path>              a cdylib exporting `csp_arbiter_v1`
 //! rpc:<host>:<port>         an arbiter serving the wire protocol over TCP
@@ -15,47 +18,37 @@
 
 use std::path::{Path, PathBuf};
 
+use cyberspine_plugin::spec::{self, Spelling, Target};
+
+pub use cyberspine_plugin::spec::SpecError;
+
 use crate::{Arbiter, ArbiterError};
+
+const SPELLING: Spelling = Spelling {
+    noun: "arbiter",
+    subject: "an arbiter",
+    example: "rpc:127.0.0.1:7777",
+    builtin: "builtin",
+    builtin_hint: "the built-in arbiter is selected by omitting `--interrupt`",
+    expected: "`dylib` or `rpc`",
+};
 
 /// An external arbiter, described without constructing it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArbiterSpec {
+    /// A dynamic library at this path.
     Dylib(PathBuf),
+    /// An arbiter serving the wire protocol at this address.
     Rpc(String),
 }
 
-/// Why a spec string is not one of the two forms.
-#[derive(Debug, thiserror::Error)]
-pub enum SpecError {
-    #[error("an arbiter is written `kind:target`, for example `rpc:127.0.0.1:7777`")]
-    Shape,
-    #[error("`{kind}` needs a target after the colon")]
-    Empty { kind: String },
-    #[error("the built-in arbiter is selected by omitting `--interrupt`")]
-    Builtin,
-    #[error("unknown arbiter kind `{0}`: expected `dylib` or `rpc`")]
-    Kind(String),
-}
-
 impl ArbiterSpec {
+    /// Parse `text` as an arbiter spec.
     pub fn parse(text: &str) -> Result<Self, SpecError> {
-        let (kind, target) = text.split_once(':').ok_or(SpecError::Shape)?;
-        if kind == "builtin" {
-            return Err(SpecError::Builtin);
+        match spec::parse(text, &SPELLING)? {
+            Target::Dylib(path) => Ok(Self::Dylib(path.into())),
+            Target::Rpc(address) => Ok(Self::Rpc(address)),
         }
-
-        let target = target.strip_prefix("//").unwrap_or(target);
-        if target.is_empty() {
-            return Err(SpecError::Empty {
-                kind: kind.to_owned(),
-            });
-        }
-
-        Ok(match kind {
-            "dylib" => Self::Dylib(PathBuf::from(target)),
-            "rpc" => Self::Rpc(target.to_owned()),
-            other => return Err(SpecError::Kind(other.to_owned())),
-        })
     }
 
     /// The arbiter this spec names, boxed so the caller stays non-generic.

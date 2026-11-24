@@ -5,6 +5,9 @@
 //! nothing here belongs to the CLI: parsing and construction live in the library
 //! so a production caller can use the same spelling in a config file.
 //!
+//! The grammar is [`cyberspine_plugin::spec`]'s; this module adds the body's words
+//! and the step that opens the named packaging.
+//!
 //! ```text
 //! dylib:<path>              a cdylib exporting `csp_backend_v1`
 //! rpc:<host>:<port>         a body serving the wire protocol over TCP
@@ -12,47 +15,36 @@
 
 use std::path::{Path, PathBuf};
 
+use cyberspine_plugin::spec::{self, Spelling, Target};
 use cyberspine_vm::{Backend, BackendError};
+
+pub use cyberspine_plugin::spec::SpecError;
+
+const SPELLING: Spelling = Spelling {
+    noun: "backend",
+    subject: "a backend",
+    example: "rpc:127.0.0.1:7777",
+    builtin: "dummy",
+    builtin_hint: "the dummy body is built in; omit `--backend` to use it",
+    expected: "`dylib` or `rpc`",
+};
 
 /// An external body, described without constructing it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackendSpec {
+    /// A dynamic library at this path.
     Dylib(PathBuf),
+    /// A body serving the wire protocol at this address.
     Rpc(String),
 }
 
-/// Why a spec string is not one of the two forms.
-#[derive(Debug, thiserror::Error)]
-pub enum SpecError {
-    #[error("a backend is written `kind:target`, for example `rpc:127.0.0.1:7777`")]
-    Shape,
-    #[error("`{kind}` needs a target after the colon")]
-    Empty { kind: String },
-    #[error("the dummy body is built in; omit `--backend` to use it")]
-    BuiltinDummy,
-    #[error("unknown backend kind `{0}`: expected `dylib` or `rpc`")]
-    Kind(String),
-}
-
 impl BackendSpec {
+    /// Parse `text` as a body spec.
     pub fn parse(text: &str) -> Result<Self, SpecError> {
-        let (kind, target) = text.split_once(':').ok_or(SpecError::Shape)?;
-        if kind == "dummy" {
-            return Err(SpecError::BuiltinDummy);
+        match spec::parse(text, &SPELLING)? {
+            Target::Dylib(path) => Ok(Self::Dylib(path.into())),
+            Target::Rpc(address) => Ok(Self::Rpc(address)),
         }
-
-        let target = target.strip_prefix("//").unwrap_or(target);
-        if target.is_empty() {
-            return Err(SpecError::Empty {
-                kind: kind.to_owned(),
-            });
-        }
-
-        Ok(match kind {
-            "dylib" => Self::Dylib(target.into()),
-            "rpc" => Self::Rpc(target.to_owned()),
-            other => return Err(SpecError::Kind(other.to_owned())),
-        })
     }
 
     /// The body this spec names, boxed so the caller stays non-generic.

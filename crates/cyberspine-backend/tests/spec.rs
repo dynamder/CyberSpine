@@ -21,14 +21,17 @@ fn a_spec_is_a_kind_and_a_target() {
 
 #[test]
 fn a_spec_that_names_nothing_is_refused() {
-    assert!(matches!(BackendSpec::parse("rpc"), Err(SpecError::Shape)));
+    assert!(matches!(
+        BackendSpec::parse("rpc"),
+        Err(SpecError::Shape { .. })
+    ));
     assert!(matches!(
         BackendSpec::parse("rpc:"),
         Err(SpecError::Empty { .. })
     ));
     assert!(matches!(
         BackendSpec::parse("bluetooth:x"),
-        Err(SpecError::Kind(kind)) if kind == "bluetooth"
+        Err(SpecError::Kind { kind, .. }) if kind == "bluetooth"
     ));
 }
 
@@ -36,7 +39,7 @@ fn a_spec_that_names_nothing_is_refused() {
 fn the_dummy_body_is_not_a_spec() {
     assert!(matches!(
         BackendSpec::parse("dummy:rigs/maze.rig.json"),
-        Err(SpecError::BuiltinDummy)
+        Err(SpecError::Builtin { .. })
     ));
 }
 

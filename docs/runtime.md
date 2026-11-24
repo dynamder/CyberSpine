@@ -218,8 +218,8 @@ maze 示例复用同一份循环；它的 `cyberspine-host` 不依赖这两个 f
 cargo build -p cyberspine-runtime --no-default-features
 ```
 
-这样产出的 `cyinevm` 不含 `libloading` / `tokio`。`cyberspine-backend` 的共享 wire/server
-模块仍会编译，但 `dylib`/`rpc` 的实现及其依赖被排除。
+这样产出的 `cyinevm` 不含 `libloading` / `tokio`。`cyberspine-plugin` 的共享
+abi/server/spec 部分仍会编译，但 `dylib`/`rpc` 的实现及其依赖被排除。
 
 ---
 

@@ -12,62 +12,31 @@
 
 use std::net::SocketAddr;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
-use tokio::runtime::{Builder, Handle, Runtime};
+use cyberspine_frame as frame;
+
+pub use cyberspine_plugin::rpc::TcpTransport;
 
 use crate::remote::{RemoteArbiter, Transport};
-use crate::server::{Connection, Server};
-use crate::wire::{self, HEADER_LEN};
+use crate::server::Server;
+use crate::wire;
 use crate::{Arbiter, ArbiterError, Batch, Decision, InterruptEvent, Ruling, Verdict};
 
 /// How long one exchange may take before the arbiter is declared gone.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The client half: a blocking view of one connection.
-pub struct TcpTransport {
-    runtime: Runtime,
-    stream: TcpStream,
-    timeout: Duration,
-}
+/// The head this crate's frames carry, for the shared socket loop.
+const PROTOCOL: frame::Protocol = frame::Protocol {
+    magic: wire::MAGIC,
+    version: wire::VERSION,
+};
 
 impl Transport for TcpTransport {
     fn exchange(&mut self, request: &[u8], response: &mut Vec<u8>) -> Result<usize, ArbiterError> {
-        let Self {
-            runtime,
-            stream,
-            timeout,
-        } = self;
-        response.clear();
-
-        runtime.block_on(async {
-            let exchange = async {
-                stream.write_all(request).await.map_err(failed)?;
-                stream.flush().await.map_err(failed)?;
-
-                let mut header = [0u8; HEADER_LEN];
-                stream.read_exact(&mut header).await.map_err(failed)?;
-                let head = wire::parse_header(&header).map_err(failed)?;
-
-                let total = HEADER_LEN + head.len;
-                response.resize(total, 0);
-                response[..HEADER_LEN].copy_from_slice(&header);
-                stream
-                    .read_exact(&mut response[HEADER_LEN..])
-                    .await
-                    .map_err(failed)?;
-
-                Ok(total)
-            };
-
-            tokio::time::timeout(*timeout, exchange)
-                .await
-                .map_err(|_| ArbiterError::new("the arbiter did not answer in time"))?
-        })
+        self.exchange_frame(PROTOCOL, request, response)
+            .map_err(ArbiterError::new)
     }
 }
 
@@ -76,14 +45,8 @@ pub fn connect(address: &str) -> Result<RpcArbiter, ArbiterError> {
     connect_with_timeout(address, DEFAULT_TIMEOUT)
 }
 
+/// Connect with an exchange deadline other than [`DEFAULT_TIMEOUT`].
 pub fn connect_with_timeout(address: &str, timeout: Duration) -> Result<RpcArbiter, ArbiterError> {
-    if Handle::try_current().is_ok() {
-        return Err(ArbiterError::new(
-            "a remote arbiter blocks its worker; connect from a thread that is not running a \
-             tokio runtime",
-        ));
-    }
-
     let remote = connect_remote(address, timeout)?;
     Ok(RpcArbiter::start(remote))
 }
@@ -92,23 +55,15 @@ fn connect_remote(
     address: &str,
     timeout: Duration,
 ) -> Result<RemoteArbiter<TcpTransport>, ArbiterError> {
-    let runtime = Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(failed)?;
-
-    let stream = runtime
-        .block_on(async { tokio::time::timeout(timeout, TcpStream::connect(address)).await })
-        .map_err(|_| ArbiterError::new(format!("connecting to `{address}` timed out")))?
-        .map_err(|error| ArbiterError::new(format!("cannot connect to `{address}`: {error}")))?;
-
-    stream.set_nodelay(true).map_err(failed)?;
-
-    RemoteArbiter::handshake(TcpTransport {
-        runtime,
-        stream,
+    let transport = TcpTransport::connect(
+        address,
         timeout,
-    })
+        "arbiter",
+        "a remote arbiter blocks its worker; connect from a thread that is not running a tokio \
+         runtime",
+    )
+    .map_err(ArbiterError::new)?;
+    RemoteArbiter::handshake(transport)
 }
 
 enum Command {
@@ -265,24 +220,7 @@ pub fn spawn<A: Arbiter + Send + 'static>(
     build_id: String,
 ) -> Result<(SocketAddr, JoinHandle<Result<(), ArbiterError>>), ArbiterError> {
     let server = Server::new(arbiter, build_id);
-
-    let listener = std::net::TcpListener::bind(address)
-        .map_err(|error| ArbiterError::new(format!("cannot listen on `{address}`: {error}")))?;
-    listener.set_nonblocking(true).map_err(failed)?;
-    let local = listener.local_addr().map_err(failed)?;
-
-    let thread = std::thread::spawn(move || {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(failed)?;
-        runtime.block_on(async move {
-            let listener = TcpListener::from_std(listener).map_err(failed)?;
-            accept_loop(listener, server).await
-        })
-    });
-
-    Ok((local, thread))
+    cyberspine_plugin::rpc::spawn(address, PROTOCOL, server, ArbiterError::new)
 }
 
 /// Serve until the process ends.
@@ -291,97 +229,6 @@ pub fn serve<A: Arbiter + Send + 'static>(
     arbiter: A,
     build_id: String,
 ) -> Result<(), ArbiterError> {
-    let (_, thread) = spawn(address, arbiter, build_id)?;
-    match thread.join() {
-        Ok(result) => result,
-        Err(_) => Err(ArbiterError::new("the serving thread panicked")),
-    }
-}
-
-/// How long a connection may say nothing before it is presumed gone.
-///
-/// A host sends a frame every tick, so a minute of silence is a half-open socket
-/// or a client that never intended to speak; either way the task should not
-/// outlive it.
-const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// How long to wait after a failed `accept`, so a listener that cannot accept
-/// (no descriptors, say) does not spin.
-const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
-
-async fn accept_loop<A: Arbiter + Send + 'static>(
-    listener: TcpListener,
-    server: Server<A>,
-) -> Result<(), ArbiterError> {
-    // The arbiter is shared; the connection state is not. Every host that
-    // connects gets its own task and its own sequence cursor.
-    let server = Arc::new(Mutex::new(server));
-    loop {
-        let (stream, peer) = match listener.accept().await {
-            Ok(accepted) => accepted,
-            Err(error) => {
-                // A failed accept — a peer that reset between SYN and accept, a
-                // descriptor limit — is about one connection, not the service.
-                eprintln!("csp: accept failed: {error}");
-                tokio::time::sleep(ACCEPT_BACKOFF).await;
-                continue;
-            }
-        };
-
-        let server = Arc::clone(&server);
-        tokio::spawn(async move {
-            if let Err(error) = answer(stream, server).await {
-                eprintln!("csp: the connection from {peer} ended: {error}");
-            }
-        });
-    }
-}
-
-async fn answer<A: Arbiter>(
-    mut stream: TcpStream,
-    server: Arc<Mutex<Server<A>>>,
-) -> Result<(), ArbiterError> {
-    stream.set_nodelay(true).map_err(failed)?;
-    let mut connection = Connection::default();
-    let mut frame = Vec::new();
-
-    loop {
-        let mut header = [0u8; HEADER_LEN];
-        let read = tokio::time::timeout(IDLE_TIMEOUT, stream.read(&mut header[..1]))
-            .await
-            .map_err(|_| quiet())?
-            .map_err(failed)?;
-        if read == 0 {
-            return Ok(());
-        }
-        tokio::time::timeout(IDLE_TIMEOUT, stream.read_exact(&mut header[1..]))
-            .await
-            .map_err(|_| quiet())?
-            .map_err(failed)?;
-
-        let head = wire::parse_header(&header).map_err(failed)?;
-        frame.clear();
-        frame.extend_from_slice(&header);
-        frame.resize(HEADER_LEN + head.len, 0);
-        tokio::time::timeout(IDLE_TIMEOUT, stream.read_exact(&mut frame[HEADER_LEN..]))
-            .await
-            .map_err(|_| quiet())?
-            .map_err(failed)?;
-
-        let reply = server
-            .lock()
-            .expect("the arbiter lock is not poisoned")
-            .answer(&mut connection, &frame)
-            .to_vec();
-        stream.write_all(&reply).await.map_err(failed)?;
-        stream.flush().await.map_err(failed)?;
-    }
-}
-
-fn quiet() -> ArbiterError {
-    failed(format!("no frame for {}s", IDLE_TIMEOUT.as_secs()))
-}
-
-fn failed(error: impl core::fmt::Display) -> ArbiterError {
-    ArbiterError::new(error.to_string().into_boxed_str())
+    let server = Server::new(arbiter, build_id);
+    cyberspine_plugin::rpc::serve(address, PROTOCOL, server, ArbiterError::new)
 }
