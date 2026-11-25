@@ -464,6 +464,17 @@ fn i32_immediates_reject_out_of_range() {
     rejected("IMOVI i1, 1abc", invalid_operand); // 尾巴是垃圾
 }
 
+/// `docs/asm.md` §1 的字面量只有一个符号。`i64` 的 `FromStr` 会接受 `+-1`，
+/// 所以第二个符号必须在剥掉第一个之后就被拒绝，而不是交给数值解析器。
+#[test]
+fn a_literal_with_two_signs_is_rejected() {
+    rejected("IMOVI i1, +-1", invalid_operand);
+    rejected("IMOVI i1, -+1", invalid_operand);
+    rejected("IMOVI i1, --1", invalid_operand);
+    rejected("FMOVI f1, +-1.0", invalid_operand);
+    rejected("WAIT --2.0", invalid_operand);
+}
+
 /// `docs/asm.md` §4.1 表格最后一行：「`JumpOffset` ｜ **标签**，不接受数字」。
 #[test]
 fn jump_offset_operand_must_be_a_label_not_a_number() {

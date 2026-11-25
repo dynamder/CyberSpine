@@ -13,6 +13,7 @@
 use cyberspine_asm::assembler::{
     AsmParseErrors, Location, ParseError, ParseErrorKind,
     header::{AsmHeader, FixedHeader, GroupDef, header},
+    text::Located,
 };
 use smol_str::SmolStr;
 
@@ -23,6 +24,14 @@ use smol_str::SmolStr;
 fn parse(src: &str) -> Result<AsmHeader, AsmParseErrors> {
     let mut cursor = src;
     header(&mut cursor)
+}
+
+/// A declaration at `line` column 1, which is where every `.directive` starts.
+fn located<T>(line: usize, item: T) -> Located<T> {
+    Located {
+        item,
+        location: Location::new(line, 1),
+    }
 }
 
 #[track_caller]
@@ -66,6 +75,26 @@ fn assert_rejected(src: &str, why: &str, expected: KindMatcher) {
     assert_eq!(
         errors[0].location.line, 5,
         "{why}: the error belongs on the perturbed line"
+    );
+}
+
+/// §3.2：`.rig` 要一个带引号的路径。不带引号时错误必须说"这里要的是引号路径"，
+/// 而不是一个不指向任何字段的通用语法错误。
+#[test]
+fn an_unquoted_rig_path_is_a_field_error() {
+    assert_rejected(
+        &base_with(".rig rigs/oops.json"),
+        "an unquoted `.rig` path",
+        |kind| {
+            matches!(
+                kind,
+                ParseErrorKind::InvalidFieldValue {
+                    directive: "rig",
+                    expected: "a quoted manifest path",
+                    ..
+                }
+            )
+        },
     );
 }
 
@@ -127,12 +156,15 @@ fn expected_full() -> AsmHeader {
         },
         description: None,
         rig: Some(SmolStr::new("rigs/live2d.rig.json")),
-        muscle_groups: vec![GroupDef {
-            name: SmolStr::new("brows"),
-            members: vec![SmolStr::new("brow_l"), SmolStr::new("brow_r")],
-        }],
-        vars_f: vec![(SmolStr::new("phase"), 0.0)],
-        vars_i: vec![(SmolStr::new("state"), 0)],
+        muscle_groups: vec![located(
+            6,
+            GroupDef {
+                name: SmolStr::new("brows"),
+                members: vec![SmolStr::new("brow_l"), SmolStr::new("brow_r")],
+            },
+        )],
+        vars_f: vec![located(7, (SmolStr::new("phase"), 0.0))],
+        vars_i: vec![located(8, (SmolStr::new("state"), 0))],
     }
 }
 
@@ -157,7 +189,10 @@ fn control_variable_declaration_order_is_preserved() {
     let got = parse_ok(&src);
     assert_eq!(
         got.vars_i,
-        vec![(SmolStr::new("z"), 1), (SmolStr::new("y"), 2)]
+        vec![
+            located(5, (SmolStr::new("z"), 1)),
+            located(6, (SmolStr::new("y"), 2))
+        ]
     );
 }
 
@@ -206,12 +241,15 @@ fn control_partial_declarations_parse() {
     let got = parse_ok(&src);
     assert_eq!(
         got.muscle_groups,
-        vec![GroupDef {
-            name: SmolStr::new("brow"),
-            members: vec![SmolStr::new("brow_l")],
-        }]
+        vec![located(
+            5,
+            GroupDef {
+                name: SmolStr::new("brow"),
+                members: vec![SmolStr::new("brow_l")],
+            }
+        )]
     );
-    assert_eq!(got.vars_f, vec![(SmolStr::new("phase"), 0.0)]);
+    assert_eq!(got.vars_f, vec![located(6, (SmolStr::new("phase"), 0.0))]);
     assert!(got.vars_i.is_empty());
 }
 
@@ -229,10 +267,13 @@ fn control_group_may_have_a_single_member() {
     let got = parse_ok(&src);
     assert_eq!(
         got.muscle_groups,
-        vec![GroupDef {
-            name: SmolStr::new("solo"),
-            members: vec![SmolStr::new("brow_l")],
-        }]
+        vec![located(
+            5,
+            GroupDef {
+                name: SmolStr::new("solo"),
+                members: vec![SmolStr::new("brow_l")],
+            }
+        )]
     );
 }
 
@@ -760,7 +801,7 @@ fn a_description_block_ends_at_the_next_declaration() {
     ]);
     let got = parse_ok(&src);
     assert_eq!(got.description.as_deref(), Some("hello"));
-    assert_eq!(got.vars_i, vec![(SmolStr::new("state"), 0)]);
+    assert_eq!(got.vars_i, vec![located(7, (SmolStr::new("state"), 0))]);
 }
 
 /// 块结束后，`header()` 的共享游标停在第一条指令上。

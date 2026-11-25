@@ -19,12 +19,17 @@ fn numeric_token<'i>(input: &mut Line<'i>) -> PResult<&'i str> {
 }
 
 /// Splits a leading `+`/`-` off, returning `(negative, body)`.
-fn split_sign(token: &str) -> (bool, &str) {
-    match token.as_bytes().first() {
+///
+/// A second sign is refused here rather than left to the numeric parser:
+/// `i64`'s `FromStr` accepts `+-1`, so stripping one sign would let the other
+/// through as part of the digits (`docs/asm.md` §1).
+fn split_sign(token: &str) -> Option<(bool, &str)> {
+    let (negative, body) = match token.as_bytes().first() {
         Some(b'-') => (true, &token[1..]),
         Some(b'+') => (false, &token[1..]),
         _ => (false, token),
-    }
+    };
+    (!body.starts_with(['+', '-'])).then_some((negative, body))
 }
 
 pub(crate) fn imm_int(input: &mut Line<'_>) -> PResult<i32> {
@@ -38,7 +43,7 @@ pub(crate) fn imm_int(input: &mut Line<'_>) -> PResult<i32> {
 /// - `0x`/`0o`/`0b` are **u32 bit patterns** reinterpreted as `i32`;
 /// - `_` may separate digits (`1_000_000`, `0xFF_FF`).
 fn parse_int(token: &str) -> Option<i32> {
-    let (negative, body) = split_sign(token);
+    let (negative, body) = split_sign(token)?;
     if body.is_empty() {
         return None;
     }
@@ -105,7 +110,7 @@ pub(crate) fn imm_float(input: &mut Line<'_>) -> PResult<f32> {
 /// `docs/asm.md` §4.1: decimal literals go through `f32::from_str` exactly once
 /// (no f64 detour), while `0x…` is the raw `imm` bit pattern.
 fn parse_float(token: &str) -> Option<f32> {
-    let (negative, body) = split_sign(token);
+    let (negative, body) = split_sign(token)?;
 
     // `docs/asm.md` §1: `_` separates digits in *integer* literals only. Refused
     // explicitly rather than left to `f32::from_str`, so the rule is a property
