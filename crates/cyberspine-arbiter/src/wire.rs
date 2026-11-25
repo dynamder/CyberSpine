@@ -110,7 +110,23 @@ pub struct WireCause {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Failure {
     pub code: u16,
-    pub message: String,
+    message: String,
+}
+
+impl Failure {
+    /// Build a refusal, capping the message so the frame always fits.
+    ///
+    /// A panicking arbiter's text is unbounded, and a refusal still has to
+    /// become a frame the host can read.
+    pub fn new(code: u16, message: impl Into<String>) -> Self {
+        let mut message = message.into();
+        cyberspine_plugin::server::cap_message(&mut message);
+        Self { code, message }
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
 }
 
 /// What a [`Failure`] means.

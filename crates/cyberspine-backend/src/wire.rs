@@ -137,7 +137,34 @@ pub struct Ack {
 pub struct Failure {
     pub seq: u32,
     pub code: u16,
-    pub message: String,
+    message: String,
+}
+
+impl Failure {
+    /// Build a refusal, capping the message so the frame always fits.
+    ///
+    /// The producer of the text is the body: a backend error message has no
+    /// length bound, and a refusal still has to become a frame the host can
+    /// read. Construction is the only way in, so no call site can forget.
+    pub fn new(seq: u32, code: u16, message: impl Into<String>) -> Self {
+        let mut message = message.into();
+        cyberspine_plugin::server::cap_message(&mut message);
+        Self { seq, code, message }
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+/// The stable name of a refusal code, for the host's diagnostics.
+pub fn code_name(code: u16) -> &'static str {
+    match code {
+        code::PROTOCOL => "backend.protocol",
+        code::BODY => "backend.refused",
+        code::PANIC => "backend.panic",
+        _ => "backend.error",
+    }
 }
 
 /// What a [`Failure`] means. The text is for a human; the code is for the caller.

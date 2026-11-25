@@ -4,7 +4,7 @@
 //! server — are thin wrappers around [`Server`], so an arbiter behaves the same
 //! whichever way it is packaged.
 
-pub use cyberspine_plugin::server::{Connection, Serve};
+pub use cyberspine_plugin::server::{Connection, Serve, panic_message};
 
 use crate::wire::{self, Failure, Hello, Kind, Rulings, Tick, Welcome, WireCause};
 use crate::{Action, Arbiter, Decision};
@@ -100,7 +100,9 @@ impl<A: Arbiter> Server<A> {
                 if let Some(overlong) = first_overlong(&rulings.decisions) {
                     return Err(protocol(overlong));
                 }
-                wire::encode(Kind::Tick, &rulings, &mut self.reply).map_err(protocol_error)
+                wire::encode(Kind::Tick, &rulings, &mut self.reply).map_err(protocol_error)?;
+                connection.commit(tick.seq);
+                Ok(())
             }
 
             Kind::Error => Err(protocol("a Failure is a reply, not a request".to_owned())),
@@ -109,16 +111,21 @@ impl<A: Arbiter> Server<A> {
 }
 
 impl<A: Arbiter + Send + 'static> Serve for Server<A> {
-    fn answer_frame(&mut self, connection: &mut Connection, request: &[u8]) -> Vec<u8> {
+    fn reply(&mut self, connection: &mut Connection, request: &[u8]) -> Vec<u8> {
         self.answer(connection, request).to_vec()
+    }
+
+    fn panic_reply(&mut self, message: &str) -> Vec<u8> {
+        let failure = Failure::new(wire::code::PANIC, message);
+        let mut reply = Vec::new();
+        wire::encode(Kind::Error, &failure, &mut reply)
+            .expect("a capped panic failure is encodable");
+        reply
     }
 }
 
 fn protocol(message: String) -> Failure {
-    Failure {
-        code: wire::code::PROTOCOL,
-        message,
-    }
+    Failure::new(wire::code::PROTOCOL, message)
 }
 
 fn protocol_error(error: wire::WireError) -> Failure {
@@ -145,4 +152,51 @@ fn first_overlong(decisions: &[Decision]) -> Option<String> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Connection, Serve, Server};
+    use crate::wire::{self, Failure, Kind, Tick};
+
+    struct Exploding;
+
+    impl crate::Arbiter for Exploding {
+        fn deliver(&mut self, _event: crate::InterruptEvent) {}
+
+        fn take(&mut self, _now: u64) -> crate::Batch {
+            panic!("the arbiter exploded")
+        }
+    }
+
+    /// The body side has a TCP test for this; the arbiter goes through the same
+    /// shared guard, and this pins it without a socket.
+    #[test]
+    fn a_panicking_arbiter_still_answers_one_frame() {
+        let mut server = Server::new(Exploding, "build".to_owned());
+        let mut connection = Connection::default();
+        let mut request = Vec::new();
+        wire::encode(
+            Kind::Tick,
+            &Tick {
+                seq: 1,
+                now: 0,
+                events: Vec::new(),
+            },
+            &mut request,
+        )
+        .expect("the tick encodes");
+
+        let reply = server.answer_frame(&mut connection, &request);
+
+        let (kind, payload) = wire::split(&reply).expect("the reply is one frame");
+        assert_eq!(kind, Kind::Error);
+        let failure: Failure = wire::decode(payload).expect("the failure decodes");
+        assert_eq!(failure.code, wire::code::PANIC);
+        assert!(
+            failure.message().contains("the arbiter exploded"),
+            "{}",
+            failure.message()
+        );
+    }
 }

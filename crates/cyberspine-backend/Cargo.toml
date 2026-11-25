@@ -17,6 +17,7 @@ rpc = ["cyberspine-plugin/rpc"]
 export = []
 
 [dependencies]
+cyberspine-diag = { path = "../cyberspine-diag" }
 cyberspine-frame = { path = "../cyberspine-frame" }
 cyberspine-manifest = { path = "../cyberspine-manifest" }
 cyberspine-plugin = { path = "../cyberspine-plugin" }

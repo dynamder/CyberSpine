@@ -172,12 +172,7 @@ macro_rules! export {
             }
 
             fn panic_text(payload: Box<dyn Any + Send>) -> CString {
-                let message = payload
-                    .downcast_ref::<&str>()
-                    .map(|text| (*text).to_owned())
-                    .or_else(|| payload.downcast_ref::<String>().cloned())
-                    .unwrap_or_else(|| "the body panicked".to_owned());
-                text(message)
+                text($crate::server::panic_message(payload))
             }
 
             pub static TABLE: AbiV1 = AbiV1 {

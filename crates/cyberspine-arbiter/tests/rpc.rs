@@ -125,12 +125,27 @@ fn a_second_host_is_served_while_the_first_is_connected() {
     let mut first = rpc::connect_with_timeout(&address.to_string(), Duration::from_secs(2))
         .expect("the first host connects");
     first.deliver(event());
-    assert_eq!(next_batch(&mut first, 0).decisions.len(), 1);
+
+    // The fixture answers in two rounds. Drain both before the second host
+    // connects, so its batch cannot carry the first host's finished ruling: the
+    // arbiter is shared, and a batch that also reports another host's event is
+    // legal (`docs/interrupt.md` §7.6).
+    let opening = next_batch(&mut first, 0);
+    assert_eq!(opening.decisions.len(), 1);
+    assert!(matches!(
+        opening.decisions[0].ruling.completion,
+        Completion::Unfinished
+    ));
+    let settled = next_batch(&mut first, 1);
+    assert!(matches!(
+        settled.decisions[0].ruling.completion,
+        Completion::Finished(_)
+    ));
 
     let mut second = rpc::connect_with_timeout(&address.to_string(), Duration::from_secs(2))
         .expect("a second host connects while the first is still open");
     second.deliver(event());
-    assert_eq!(next_batch(&mut second, 0).decisions.len(), 1);
+    assert_eq!(next_batch(&mut second, 2).decisions.len(), 1);
 
     drop(first);
     drop(second);

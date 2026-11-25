@@ -116,14 +116,7 @@ fn every_message_round_trips() {
     );
     round_trip(Kind::Step, Step { seq: 9, dt: 0.25 });
     round_trip(Kind::Commit, Ack { seq: 10 });
-    round_trip(
-        Kind::Error,
-        Failure {
-            seq: 11,
-            code: wire::code::BODY,
-            message: "no".into(),
-        },
-    );
+    round_trip(Kind::Error, Failure::new(11, wire::code::BODY, "no"));
 }
 
 #[test]

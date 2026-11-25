@@ -114,7 +114,7 @@ impl<T: Transport> RemoteArbiter<T> {
             Kind::Tick => wire::decode(payload).map_err(failed),
             Kind::Error => {
                 let failure: wire::Failure = wire::decode(payload).map_err(failed)?;
-                Err(ArbiterError::new(failure.message.into_boxed_str()))
+                Err(ArbiterError::new(failure.message()))
             }
             other => Err(ArbiterError::new(
                 format!("the arbiter answered a Tick with {other:?}").into_boxed_str(),
