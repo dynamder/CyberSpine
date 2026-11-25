@@ -14,7 +14,7 @@ pub use run::{InstanceReport, Outcome, RunReport};
 
 use std::io::{self, Write};
 
-use cyberspine_diag::Diagnostic;
+use cyberspine_diag::{Diagnostic, Diagnostics};
 use cyberspine_host::Report;
 
 /// Renders everything `cyinevm` writes through one format and one set of
@@ -42,7 +42,7 @@ impl Renderer {
 
     pub fn diagnostics(
         &mut self,
-        diagnostics: &[Diagnostic],
+        diagnostics: &Diagnostics,
         out: &mut impl Write,
     ) -> io::Result<()> {
         self.diagnostics.diagnostics(diagnostics, out)

@@ -11,16 +11,9 @@ use cyberspine_asm::{
 };
 use cyberspine_core::binfmt::Image;
 use cyberspine_core::rig::Rig;
-use cyberspine_diag::{Anchor, Code, Diagnostic, Diagnostics};
+use cyberspine_diag::{Anchor, Code, Diagnostic, Diagnostics, exit};
 use cyberspine_report::{Format, Renderer};
 use cyberspine_store::{self as store, WriteError};
-
-/// The image was produced and written.
-const EXIT_OK: u8 = 0;
-/// The input was rejected: bad source, bad manifest, a `-o` that would eat it.
-const EXIT_REJECTED: u8 = 3;
-/// The environment failed: a file could not be read or written.
-const EXIT_ENVIRONMENT: u8 = 5;
 
 // Codes for the failures that come from the CLI's own work rather than from an
 // error enum. They live here, next to the only code that reports them.
@@ -58,7 +51,7 @@ fn main() -> ExitCode {
 
     let class = match &source {
         Some(text) => run(&cli, text, &mut sink),
-        None => EXIT_ENVIRONMENT,
+        None => exit::ENVIRONMENT,
     };
 
     let mut renderer = Renderer::new(format);
@@ -68,7 +61,12 @@ fn main() -> ExitCode {
     // Diagnostics always go to stderr; `--json` changes the format, not the
     // stream. stdout stays free for whatever the tool produces (`cyinea`
     // produces nothing there today, which keeps a pipeline readable).
-    let _ = renderer.diagnostics(sink.items(), &mut std::io::stderr().lock());
+    let rendered = renderer.diagnostics(&sink, &mut std::io::stderr().lock());
+    if rendered.is_err() {
+        // The diagnostics are the product here; failing to write them is an
+        // environment failure, not a rejected input.
+        return ExitCode::from(exit::ENVIRONMENT);
+    }
 
     ExitCode::from(class)
 }
@@ -80,7 +78,7 @@ fn run(cli: &CliArgs, source: &str, sink: &mut Diagnostics) -> u8 {
         Ok(asm) => asm,
         Err(errors) => {
             sink.push_all(errors.diagnostics(&path.display().to_string()));
-            return EXIT_REJECTED;
+            return exit::REJECTED;
         }
     };
 
@@ -93,7 +91,7 @@ fn run(cli: &CliArgs, source: &str, sink: &mut Diagnostics) -> u8 {
     // stops it, a warning stops it only under `--deny-warnings`.
     if sink.failed() {
         deny_warnings(sink);
-        return EXIT_REJECTED;
+        return exit::REJECTED;
     }
 
     let rig = match load_rig(cli, &asm, sink) {
@@ -111,11 +109,11 @@ fn run(cli: &CliArgs, source: &str, sink: &mut Diagnostics) -> u8 {
     }
 
     let Some(image) = build_image(cli, &asm, &rig, &output, sink) else {
-        return EXIT_REJECTED;
+        return exit::REJECTED;
     };
 
     match store::write_image(&image, &output) {
-        Ok(()) => EXIT_OK,
+        Ok(()) => exit::OK,
         Err(error) => {
             let diagnostic = match error {
                 WriteError::NotCanonical { source } => {
@@ -127,7 +125,7 @@ fn run(cli: &CliArgs, source: &str, sink: &mut Diagnostics) -> u8 {
                     .at(Anchor::whole(output.display().to_string())),
             };
             sink.push(diagnostic);
-            EXIT_ENVIRONMENT
+            exit::ENVIRONMENT
         }
     }
 }
@@ -175,7 +173,7 @@ fn load_rig(cli: &CliArgs, asm: &Asm, sink: &mut Diagnostics) -> Result<Rig, u8>
             MISSING_RIG,
             "no rig manifest; add a `.rig` directive or pass `--rig`",
         ));
-        return Err(EXIT_REJECTED);
+        return Err(exit::REJECTED);
     };
 
     let path = match cli.asm_file.parent() {
@@ -194,7 +192,7 @@ fn load_rig(cli: &CliArgs, asm: &Asm, sink: &mut Diagnostics) -> Result<Rig, u8>
                 )
                 .at(Anchor::whole(artifact)),
             );
-            return Err(EXIT_REJECTED);
+            return Err(exit::REJECTED);
         }
     };
 
@@ -202,7 +200,7 @@ fn load_rig(cli: &CliArgs, asm: &Asm, sink: &mut Diagnostics) -> Result<Rig, u8>
         Ok(rig) => Ok(rig),
         Err(error) => {
             sink.push(Diagnostic::error(BAD_RIG, error.to_string()).at(Anchor::whole(artifact)));
-            Err(EXIT_REJECTED)
+            Err(exit::REJECTED)
         }
     }
 }
@@ -287,7 +285,7 @@ fn refuse_to_overwrite_source(
                 )
                 .at(Anchor::whole(source.display().to_string())),
             );
-            return Err(EXIT_REJECTED);
+            return Err(exit::REJECTED);
         }
     };
     let output_real = match resolve(output) {
@@ -300,7 +298,7 @@ fn refuse_to_overwrite_source(
                 )
                 .at(Anchor::whole(output.display().to_string())),
             );
-            return Err(EXIT_REJECTED);
+            return Err(exit::REJECTED);
         }
     };
 
@@ -312,7 +310,7 @@ fn refuse_to_overwrite_source(
             )
             .at(Anchor::whole(output.display().to_string())),
         );
-        return Err(EXIT_REJECTED);
+        return Err(exit::REJECTED);
     }
 
     Ok(())

@@ -1236,3 +1236,60 @@ fn the_help_text_is_the_cli_contract() {
     let help = stdout(&output).replace("cyinevm.exe", "cyinevm");
     insta::assert_snapshot!("help", help);
 }
+
+#[test]
+fn a_truncated_diagnostic_list_says_how_many_it_dropped() {
+    let dir = scratch("truncated");
+    let image = write_image(&dir, "burn.csp", LOOP, MANIFEST);
+
+    let mut args: Vec<&OsStr> = Vec::new();
+    for _ in 0..100 {
+        args.push(OsStr::new("-i"));
+        args.push(image.as_os_str());
+    }
+    args.extend([
+        OsStr::new("--ticks"),
+        OsStr::new("1"),
+        OsStr::new("--unpaced"),
+    ]);
+
+    let output = run(args);
+    assert_eq!(output.status.code(), Some(FAULTED), "{}", stderr(&output));
+    let text = stderr(&output);
+    assert_eq!(
+        text.matches("error[exec.fuel-exhausted]").count(),
+        63,
+        "{text}"
+    );
+    assert!(text.contains("63 error(s) shown"), "{text}");
+    assert!(
+        text.contains("note: 37 more diagnostic(s) were not shown"),
+        "{text}"
+    );
+
+    let mut args: Vec<&OsStr> = vec![OsStr::new("--json")];
+    for _ in 0..100 {
+        args.push(OsStr::new("-i"));
+        args.push(image.as_os_str());
+    }
+    args.extend([
+        OsStr::new("--ticks"),
+        OsStr::new("1"),
+        OsStr::new("--unpaced"),
+    ]);
+
+    let output = run(args);
+    assert_eq!(output.status.code(), Some(FAULTED), "{}", stderr(&output));
+    let text = stderr(&output);
+    let records: Vec<serde_json::Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("every stderr line is one object"))
+        .collect();
+    assert_eq!(
+        records.len(),
+        65,
+        "64 diagnostics and one truncation record"
+    );
+    assert_eq!(records[64]["kind"], "truncated");
+    assert_eq!(records[64]["dropped"], 37);
+}
