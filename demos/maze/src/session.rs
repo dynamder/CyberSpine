@@ -12,7 +12,7 @@ use cyberspine_core::binfmt::image::Image;
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::rig::Rig;
 use cyberspine_demo_maze_world::{Grid, MANIFEST};
-use cyberspine_host::{Interrupts, LogError, Report, Run, RunError};
+use cyberspine_host::{Interrupts, Report, Run, RunError};
 use cyberspine_vm::{BackendError, FaultRecord, Host, LoadError, Strict, TraceIter};
 
 use crate::actions::ActionSet;
@@ -42,8 +42,6 @@ pub enum Error {
     Spec(#[from] cyberspine_backend::SpecError),
     #[error("the backend is not available: {0}")]
     Backend(#[from] BackendError),
-    #[error("the decision log could not be written: {0}")]
-    Log(#[from] LogError),
     #[error(transparent)]
     Advance(#[from] RunError),
 }

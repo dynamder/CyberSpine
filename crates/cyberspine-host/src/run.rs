@@ -11,7 +11,7 @@ use cyberspine_vm::{Backend, BackendError, Host, InstanceId, LoadError, RigPolic
 
 use crate::Interrupts;
 use crate::decisions::LogError;
-use crate::registry::Registry;
+use crate::registry::{Identity, Registry};
 use crate::report::Report;
 
 /// The host-side half of a run: the ticking session and the registry naming
@@ -33,9 +33,9 @@ impl<B: Backend, P: RigPolicy> Run<B, P> {
         action: Box<str>,
     ) -> Result<(Self, InstanceId), (Host<B, P>, LoadError)> {
         let mut registry = Registry::new(&image);
-        let (layer, hash, debug) = identity(&image);
+        let identity = Identity::of(&image);
         let (session, id) = host.load(image)?;
-        registry.push(id, layer, hash, action, debug);
+        registry.push(id, identity, action);
         Ok((Self { session, registry }, id))
     }
 
@@ -45,9 +45,9 @@ impl<B: Backend, P: RigPolicy> Run<B, P> {
         image: VerifiedImage,
         action: Box<str>,
     ) -> Result<InstanceId, LoadError> {
-        let (layer, hash, debug) = identity(&image);
+        let identity = Identity::of(&image);
         let id = self.session.load(image)?;
-        self.registry.push(id, layer, hash, action, debug);
+        self.registry.push(id, identity, action);
         Ok(id)
     }
 
@@ -80,20 +80,6 @@ impl<B: Backend, P: RigPolicy> Run<B, P> {
     pub fn registry(&self) -> &Registry {
         &self.registry
     }
-
-    pub fn into_parts(self) -> (Session<B, P>, Registry) {
-        (self.session, self.registry)
-    }
-}
-
-/// The identity a registry entry needs, read before the session takes the
-/// image: layer, content hash, and the debug segment when the build has one.
-fn identity(image: &VerifiedImage) -> (u16, [u8; 32], Option<cyberspine_core::binfmt::DebugInfo>) {
-    (
-        image.header().layer,
-        image.content_hash(),
-        image.debug().cloned(),
-    )
 }
 
 /// Why one step could not complete: the body refused the tick, or the decision
