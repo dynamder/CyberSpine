@@ -282,7 +282,7 @@ content_hash = blake3(file[0 .. file_len - 32])
 | C6 | `content_hash` 与 `blake3(file[..file_len-32])` 相等 |
 | C7 | 解析后游标**精确**停在 `file_len - 32`：没有 debug 段时是元数据表的终点，有 debug 段时是它的终点（哈希之前不允许尾随字节） |
 | C8 | `code_len ≥ 1` 且 `code[code_len-1]` 是 `HALT` |
-| C9 | debug 段（仅当 `HAS_DEBUG`）：magic、`version` major、`reserved == 0`、`source_count == 1`、标签名唯一且按名字递增、`pc < code_len`、`line_map` 恰好 `code_len` 项、行号与列号 ≥ 1、三段精确消费到 `file_len - 32`（§6.7） |
+| C9 | debug 段（仅当 `HAS_DEBUG`）：magic、`version` major、`reserved == 0`、`source_count == 1`、标签名唯一且按名字递增、`pc < code_len`、`line_map` 恰好 `code_len` 项、行号与列号 ≥ 1、source 与标签名不含 NUL（NUL 是终止符）、三段精确消费到 `file_len - 32`（§6.7） |
 
 > **C5 是计数炸弹那一条**，也是"两步加载"的理由：必须先读固定头 → 校验计数 → 再整体解析。
 > 若一步到位地按 `count` 预分配向量，一个 `count = 4×10⁹` 的坏文件就能把加载器打死。

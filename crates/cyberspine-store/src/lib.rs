@@ -92,23 +92,26 @@ pub enum WriteError {
 /// The image is checked against the loader first: one the loader would reject
 /// is never written, so a broken build fails here instead of at load time. That
 /// includes the 4 MiB container limit, which the loader checks before decoding
-/// a byte.
+/// a byte and this writer checks before encoding one.
 pub fn write_image(image: &Image, path: impl AsRef<Path>) -> Result<(), WriteError> {
     let path = path.as_ref();
 
-    // Validate before encoding: `Image::to_bytes` asserts the debug segment's
-    // own rules, and `validate` is the `Result` that should report them.
+    // Validate before measuring or encoding: `to_bytes` asserts the debug
+    // segment's own rules, and this is the `Result` that should report them.
     image
         .validate()
         .map_err(|source| WriteError::NotCanonical { source })?;
 
-    let bytes = image.to_bytes();
-    if bytes.len() > MAX_IMAGE_LEN {
+    let len = image.encoded_len();
+    if len > MAX_IMAGE_LEN {
         return Err(WriteError::TooLarge {
-            len: bytes.len(),
+            len,
             max: MAX_IMAGE_LEN,
         });
     }
+
+    let bytes = image.to_bytes();
+    debug_assert_eq!(bytes.len(), len, "encoded_len and to_bytes agree");
 
     write_atomic(path, &bytes).map_err(|source| WriteError::Io {
         path: path.to_path_buf(),
