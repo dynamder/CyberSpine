@@ -220,29 +220,36 @@ fault 的实例贡献消失是刻意的：fault 是 bug 信号，视觉上的跳
 
 ## 4. 指令表
 
-全部 **50 条**。记法：`rd/ra/rb/rc` 为 6 位寄存器号，文件由 opcode 决定。
+<!-- docgen:isa.count -->
+全部 **50 条**。
+<!-- docgen:end -->
+记法：`rd/ra/rb/rc` 为 6 位寄存器号，文件由 opcode 决定。
 
 ### 4.1 传送与常量（0x00）
 
+<!-- docgen:isa.group.0x00 -->
 | 编码 | 助记符 | 操作数 | 语义 |
 |---|---|---|---|
 | 0x00 | `FMOVI` | `rd, imm` | `f[rd] = f32::from_bits(imm)` |
 | 0x01 | `IMOVI` | `rd, imm` | `i[rd] = imm as i32` |
 | 0x02 | `FMOV` | `rd, ra` | `f[rd] = f[ra]` |
 | 0x03 | `IMOV` | `rd, ra` | `i[rd] = i[ra]` |
+<!-- docgen:end -->
 
 `FMOVI` 是**位精确**嵌入，不经过数值转换，因此可嵌入 NaN、±Inf、非规格化数与任意字面量。汇编器负责字面量 → 位模式的转换。
 
 ### 4.2 浮点二元（0x10）
 
+<!-- docgen:isa.group.0x10 -->
 | 编码 | 助记符 | 操作数 | 语义 |
 |---|---|---|---|
 | 0x10 | `FADD` | `rd, ra, rb` | `f[rd] = f[ra] + f[rb]` |
 | 0x11 | `FSUB` | `rd, ra, rb` | `f[rd] = f[ra] - f[rb]` |
 | 0x12 | `FMUL` | `rd, ra, rb` | `f[rd] = f[ra] * f[rb]` |
 | 0x13 | `FDIV` | `rd, ra, rb` | `f[rd] = f[ra] / f[rb]` |
-| 0x14 | `FMIN` | `rd, ra, rb` | 见下；`FMIN(±0, ∓0) = -0.0` |
-| 0x15 | `FMAX` | `rd, ra, rb` | 见下；`FMAX(±0, ∓0) = +0.0` |
+| 0x14 | `FMIN` | `rd, ra, rb` | IEEE 754 minimum；-0.0 < +0.0，NaN 保持 NaN |
+| 0x15 | `FMAX` | `rd, ra, rb` | IEEE 754 maximum；-0.0 < +0.0，NaN 保持 NaN |
+<!-- docgen:end -->
 
 `FMIN`/`FMAX` 的语义就是 IEEE 754-2019 的 `minimum` / `maximum`：任一操作数为 NaN 则结果为 NaN（**不是** `minimumNumber`/`maximumNumber` 那种"忽略 NaN 取另一个"），且 `-0.0` 严格小于 `+0.0`。NaN 一旦出现就保持可见。
 
@@ -259,14 +266,16 @@ fault 的实例贡献消失是刻意的：fault 是 bug 信号，视觉上的跳
 
 ### 4.3 浮点一元（0x20）
 
+<!-- docgen:isa.group.0x20 -->
 | 编码 | 助记符 | 操作数 | 语义 |
 |---|---|---|---|
 | 0x20 | `FNEG` | `rd, ra` | 翻转符号位（对 NaN 与 ±0 同样成立） |
 | 0x21 | `FABS` | `rd, ra` | 清符号位 |
-| 0x22 | `FSQRT` | `rd, ra` | IEEE-754 binary32 **正确舍入**平方根；`ra < 0` → NaN；`FSQRT(-0.0) = -0.0` |
-| 0x23 | `FSIN` | `rd, ra` | `sin(ra)`，弧度；非有限输入 → NaN |
-| 0x24 | `FCOS` | `rd, ra` | `cos(ra)`，弧度；非有限输入 → NaN |
-| 0x25 | `FFRAC` | `rd, ra` | `ra - floor(ra)`，再钳制到 `[0, 1-2⁻²⁴]`；NaN/±Inf → NaN |
+| 0x22 | `FSQRT` | `rd, ra` | IEEE-754 binary32 正确舍入平方根；ra < 0 → NaN；FSQRT(-0.0) = -0.0 |
+| 0x23 | `FSIN` | `rd, ra` | sin(ra)，弧度；非有限输入 → NaN |
+| 0x24 | `FCOS` | `rd, ra` | cos(ra)，弧度；非有限输入 → NaN |
+| 0x25 | `FFRAC` | `rd, ra` | ra - floor(ra)，钳制到 [0, 1-2⁻²⁴]；NaN/±Inf → NaN |
+<!-- docgen:end -->
 
 **`FSIN`/`FCOS` 必须由 VM 自带实现**（固定范围规约 + 固定多项式），**不得转调平台 libm**——libm 最后几位在不同平台/版本上会差，跨平台重放会静默漂移。范围规约的迭代次数必须固定，不得随输入变化（§6.5）。
 
@@ -284,11 +293,13 @@ fault 的实例贡献消失是刻意的：fault 是 bug 信号，视觉上的跳
 
 ### 4.4 浮点三元（0x30）
 
+<!-- docgen:isa.group.0x30 -->
 | 编码 | 助记符 | 操作数 | 语义 |
 |---|---|---|---|
-| 0x30 | `FMADD` | `rd, ra, rb, rc` | `f[rd] = f32(f32(f[ra]*f[rb]) + f[rc])` |
+| 0x30 | `FMADD` | `rd, ra, rb, rc` | f[rd] = f32(f32(f[ra]*f[rb]) + f[rc])（两次舍入，不是融合乘加） |
 | 0x31 | `FLERP` | `rd, ra, rb, rc` | `t = f32(f[rb]-f[ra]); u = f32(t*f[rc]); f[rd] = f32(f[ra]+u)` |
 | 0x32 | `FCLAMP` | `rd, ra, rb, rc` | `f[rd] = FMIN(FMAX(f[ra], f[rb]), f[rc])` |
+<!-- docgen:end -->
 
 **`FMADD` 不是融合乘加**，是两次舍入。理由：融合需要宿主有硬件 FMA 才能位精确。将来真需要融合时**新增 `FFMA`**，绝不重定义 `FMADD`——程序是持久化的，重定义会悄悄改变已有策略的行为。
 
@@ -298,42 +309,48 @@ fault 的实例贡献消失是刻意的：fault 是 bug 信号，视觉上的跳
 
 ### 4.5 整数与转换（0x40）
 
+<!-- docgen:isa.group.0x40 -->
 | 编码 | 助记符 | 操作数 | 语义 |
 |---|---|---|---|
 | 0x40 | `IADD` | `rd, ra, rb` | 回绕加 |
 | 0x41 | `ISUB` | `rd, ra, rb` | 回绕减 |
 | 0x42 | `IMUL` | `rd, ra, rb` | 回绕乘 |
-| 0x43 | `ITOF` | `rd, ra` | `f[rd] = f32(i[ra])`，超 2²⁴ 丢精度 |
-| 0x44 | `FTOI` | `rd, ra` | 向零截断；NaN/±Inf → 0；越界饱和到 `i32::MIN`/`MAX` |
+| 0x43 | `ITOF` | `rd, ra` | f[rd] = f32(i[ra])，超 2²⁴ 丢精度 |
+| 0x44 | `FTOI` | `rd, ra` | 向零截断；NaN/±Inf → 0；越界饱和到 i32::MIN/MAX |
+<!-- docgen:end -->
 
 `ITOF` / `FTOI` 的边界行为（截断方向、非有限值、饱和）必须写死——任何一条留空都会变成平台差异。
 
 ### 4.6 控制流（0x50）
 
+<!-- docgen:isa.group.0x50 -->
 | 编码 | 助记符 | 操作数 | 语义 |
 |---|---|---|---|
 | 0x50 | `JMP` | `imm` | `pc = pc + 1 + off` |
-| 0x51 | `IJZ` | `ra, imm` | `i[ra] == 0` → 跳转 |
-| 0x52 | `IJNZ` | `ra, imm` | `i[ra] != 0` → 跳转 |
-| 0x53 | `FLT` | `ra, rb, imm` | `f[ra] < f[rb]` → 跳转 |
-| 0x54 | `FLE` | `ra, rb, imm` | `f[ra] <= f[rb]` |
-| 0x55 | `FGT` | `ra, rb, imm` | `f[ra] > f[rb]` |
-| 0x56 | `FGE` | `ra, rb, imm` | `f[ra] >= f[rb]` |
-| 0x57 | `ILT` | `ra, rb, imm` | 有符号 `<` |
-| 0x58 | `ILE` | `ra, rb, imm` | 有符号 `<=` |
-| 0x59 | `IGT` | `ra, rb, imm` | 有符号 `>` |
-| 0x5A | `IGE` | `ra, rb, imm` | 有符号 `>=` |
-| 0x5B | `IEQ` | `ra, rb, imm` | `==` |
-| 0x5C | `INE` | `ra, rb, imm` | `!=` |
+| 0x51 | `IJZ` | `ra, imm` | i[ra] == 0 → 跳转 |
+| 0x52 | `IJNZ` | `ra, imm` | i[ra] != 0 → 跳转 |
+| 0x53 | `FLT` | `ra, rb, imm` | f[ra] < f[rb] → 跳转 |
+| 0x54 | `FLE` | `ra, rb, imm` | f[ra] <= f[rb] → 跳转 |
+| 0x55 | `FGT` | `ra, rb, imm` | f[ra] > f[rb] → 跳转 |
+| 0x56 | `FGE` | `ra, rb, imm` | f[ra] >= f[rb] → 跳转 |
+| 0x57 | `ILT` | `ra, rb, imm` | 有符号 i[ra] < i[rb] → 跳转 |
+| 0x58 | `ILE` | `ra, rb, imm` | 有符号 i[ra] <= i[rb] → 跳转 |
+| 0x59 | `IGT` | `ra, rb, imm` | 有符号 i[ra] > i[rb] → 跳转 |
+| 0x5A | `IGE` | `ra, rb, imm` | 有符号 i[ra] >= i[rb] → 跳转 |
+| 0x5B | `IEQ` | `ra, rb, imm` | i[ra] == i[rb] → 跳转 |
+| 0x5C | `INE` | `ra, rb, imm` | i[ra] != i[rb] → 跳转 |
+<!-- docgen:end -->
 
 不跳转时 `pc += 1`。详见 §5。
 
 ### 4.7 输入（0x60）
 
+<!-- docgen:isa.group.0x60 -->
 | 编码 | 助记符 | 操作数 | 语义 |
 |---|---|---|---|
 | 0x60 | `FSENSE` | `rd, imm` | `f[rd] = sensors_f[imm]` |
 | 0x61 | `ISENSE` | `rd, imm` | `i[rd] = sensors_i[imm]` |
+<!-- docgen:end -->
 
 两个**独立的 id 空间**，各自 0 基址。头段声明的 sensor 按类型归入对应空间，汇编器把名字解析成 `(类型, 下标)` 并选择 opcode。
 
@@ -353,11 +370,13 @@ FEXCITE mouth_open, r1     # 写新的命令值
 
 ### 4.8 挂起（0x70）
 
+<!-- docgen:isa.group.0x70 -->
 | 编码 | 助记符 | 操作数 | 语义 |
 |---|---|---|---|
 | 0x70 | `YIELD` | — | 挂起到下一个 tick，恢复时从下一条指令继续 |
-| 0x71 | `WAIT` | `imm` | 挂起 `f32::from_bits(imm)` 秒，恢复时从下一条指令继续 |
-| 0x72 | `INTR` | `imm`（reason 表下标） | 提出中断；挂起直到宿主裁决，**不会**自动恢复 |
+| 0x71 | `WAIT` | `imm` | 挂起 f32::from_bits(imm) 秒，恢复时从下一条指令继续 |
+| 0x72 | `INTR` | `imm` | 提出中断；挂起直到宿主裁决，不会自动恢复 |
+<!-- docgen:end -->
 
 三条指令都会先推进 `pc` 再挂起，所以恢复点是它们的下一条指令。寄存器与实例变量跨挂起存活。
 
@@ -396,20 +415,24 @@ L_done:
 
 ### 4.9 实例变量（0x90）
 
+<!-- docgen:isa.group.0x90 -->
 | 编码 | 助记符 | 操作数 | 语义 |
 |---|---|---|---|
 | 0x90 | `FVGET` | `rd, imm` | `f[rd] = vars_f[imm]` |
 | 0x91 | `FVSET` | `imm, ra` | `vars_f[imm] = f[ra]` |
 | 0x92 | `IVGET` | `rd, imm` | `i[rd] = vars_i[imm]` |
 | 0x93 | `IVSET` | `imm, ra` | `vars_i[imm] = i[ra]` |
+<!-- docgen:end -->
 
 变量随实例结束消亡。需要跨动作存活的量请用**永不 `HALT` 的实例**（§2.4）。
 
 ### 4.10 激发（0x80）
 
+<!-- docgen:isa.group.0x80 -->
 | 编码 | 助记符 | 操作数 | 语义 |
 |---|---|---|---|
 | 0x80 | `FEXCITE` | `imm, ra` | `pending_values[imm] = f[ra]; pending_mask.set(imm)` |
+<!-- docgen:end -->
 
 **纯搬运，不做任何数值处理。** 不钳制、不净化、不合并——三者都是后端的事（§9）。
 
@@ -417,11 +440,13 @@ L_done:
 
 ### 4.11 杂项（0xA0）
 
+<!-- docgen:isa.group.0xA0 -->
 | 编码 | 助记符 | 操作数 | 语义 |
 |---|---|---|---|
-| 0xA0 | `HALT` | — | 实例完成，"动作执行完成" |
+| 0xA0 | `HALT` | — | 实例完成 |
 | 0xA1 | `NOP` | — | 无操作 |
-| 0xA2 | `FLUSH` | — | `published ← pending`，清空 pending（不挂起） |
+| 0xA2 | `FLUSH` | — | published ← pending，清空 pending（不挂起） |
+<!-- docgen:end -->
 
 `FLUSH` 把本实例**待发布**的写入（b1）推进到**已发布**命令向量（b2）并清空 pending。它不挂起、不推进时间，也**不直接触碰后端**——后端要等宿主在 tick 末尾合并并 `step` 才看到。未 `FLUSH` 的写入永远不会离开 VM（§8.2；汇编期 pending 检查见 `asm.md` §6）。
 
@@ -429,20 +454,21 @@ L_done:
 
 ### 4.12 汇总
 
-```
+<!-- docgen:isa.summary -->
+```text
 0x00  4   FMOVI  IMOVI  FMOV  IMOV
 0x10  6   FADD  FSUB  FMUL  FDIV  FMIN  FMAX
 0x20  6   FNEG  FABS  FSQRT  FSIN  FCOS  FFRAC
 0x30  3   FMADD  FLERP  FCLAMP
 0x40  5   IADD  ISUB  IMUL  ITOF  FTOI
-0x50 13   JMP  IJZ  IJNZ  FLT  FLE  FGT  FGE
-          ILT  ILE  IGT  IGE  IEQ  INE
+0x50 13   JMP  IJZ  IJNZ  FLT  FLE  FGT  FGE  ILT  ILE  IGT  IGE  IEQ  INE
 0x60  2   FSENSE  ISENSE
 0x70  3   YIELD  WAIT  INTR
 0x80  1   FEXCITE
 0x90  4   FVGET  FVSET  IVGET  IVSET
 0xA0  3   HALT  NOP  FLUSH
 ```
+<!-- docgen:end -->
 
 其余编码保留，未使用字段必须填 0（装配期校验）。
 

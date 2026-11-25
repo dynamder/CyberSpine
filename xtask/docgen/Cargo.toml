@@ -1,0 +1,14 @@
+[package]
+name = "xtask-docgen"
+version = "0.0.0"
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# The tables are facts about these crates, so the generator reads the real
+# types instead of a copy. It stays a separate package so `xtask` keeps its
+# zero-dependency build.
+
+[dependencies]
+cyberspine-isa = { path = "../../crates/cyberspine-isa" }

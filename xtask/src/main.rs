@@ -16,11 +16,12 @@ use std::process::ExitCode;
 
 use doctor::doctor;
 use fixtures::fixtures;
-use steps::{check, ci, docs_only, test};
+use steps::{check, ci, docgen, docs_only, test};
 
-const SUBCOMMANDS: [(&str, &str); 6] = [
+const SUBCOMMANDS: [(&str, &str); 7] = [
     ("doctor", "check the build environment and worktree hygiene"),
     ("docs", "check the documents against the tree"),
+    ("docgen", "render the generated tables into the documents"),
     ("fixtures", "build the shared libraries the tests load"),
     ("test", "build the fixtures, then run the workspace tests"),
     ("check", "run the lint, no_std, feature and document checks"),
@@ -58,6 +59,7 @@ fn main() -> ExitCode {
     let outcome = match command.as_deref() {
         Some("doctor") => doctor(),
         Some("docs") => docs_only(),
+        Some("docgen") => docgen(),
         Some("fixtures") => fixtures(&rest),
         Some("test") => test(&rest, json, no_log),
         Some("check") => check(json, no_log),
