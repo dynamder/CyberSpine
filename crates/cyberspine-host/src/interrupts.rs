@@ -62,6 +62,17 @@ impl<A: Arbiter> Interrupts<A> {
         }
     }
 
+    /// Flush the decision log, when this run keeps one.
+    ///
+    /// The log is a product of the run; ending it here is what turns a full
+    /// disk into an environment failure instead of a silent truncation.
+    pub fn finish(self) -> Result<(), LogError> {
+        match self.log {
+            Some(log) => log.finish(),
+            None => Ok(()),
+        }
+    }
+
     /// The arbiter's failure, if it stopped adjudicating. The host settles the
     /// tickets it still owes with the fallback, so a run continues; the failure
     /// is still the run's outcome.

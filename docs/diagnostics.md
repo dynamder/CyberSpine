@@ -177,7 +177,8 @@ if sink.failed() { /* 唯一的停止点 */ }
 
 `outcome` ∈ `budget`（`--ticks` 用完）、`halted`（`--until-halt` 满足）、`stopped`（Ctrl-C、
 trace 管道关闭）、`faulted`、`rejected`（输入被拒，退出 3）、`environment`。**fault 与
-rejected 也写报告**：失败是最需要终态的结局。
+rejected 也写报告**：失败是最需要终态的结局。`outcome` 描述的是**运行本身**怎么结束：诊断
+或裁决日志写不进去只会把退出码变成 5，不会把 `faulted` 改写成 `environment`。
 
 ## 6. 退出码
 

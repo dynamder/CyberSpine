@@ -72,6 +72,21 @@ forever:
     JMP     forever
 ";
 
+/// One parked tick, then a tight loop: the interrupt next to it is ruled on
+/// first, and the fuel runs out on the tick after (`docs/isa.md` §7.2).
+#[cfg(target_os = "linux")]
+const BURN: &str = "\
+.layer 10
+.clock hz = 1000
+.fuel 8
+.max_wait 600.0
+
+.text
+    YIELD
+forever:
+    JMP     forever
+";
+
 /// A loop that never halts on its own, paced slowly enough for a test to
 /// interrupt it: 50 ticks is one second.
 #[cfg(unix)]
@@ -1292,4 +1307,107 @@ fn a_truncated_diagnostic_list_says_how_many_it_dropped() {
     );
     assert_eq!(records[64]["kind"], "truncated");
     assert_eq!(records[64]["dropped"], 37);
+}
+
+#[test]
+fn a_decision_log_that_cannot_be_created_is_an_environment_failure() {
+    let dir = scratch("decisions-create");
+    let image = write_image(&dir, "halt.csp", HALT, MANIFEST);
+    let target = dir.join("a-directory");
+    fs::create_dir(&target).expect("the target directory is created");
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("0"),
+        OsStr::new("--decisions"),
+        target.as_os_str(),
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(ENVIRONMENT),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("rt.decisions"),
+        "stderr: {}",
+        stderr(&output)
+    );
+}
+
+/// `/dev/full` is Linux-only; macOS and the BSDs have no always-full device.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_decision_log_that_cannot_be_flushed_is_an_environment_failure() {
+    let dir = scratch("decisions-full");
+    let image = write_image(&dir, "interrupt.csp", INTERRUPT, MANIFEST);
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        image.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("3"),
+        OsStr::new("--unpaced"),
+        OsStr::new("--on-interrupt"),
+        OsStr::new("continue"),
+        OsStr::new("--decisions"),
+        OsStr::new("/dev/full"),
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(ENVIRONMENT),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("rt.decisions"),
+        "stderr: {}",
+        stderr(&output)
+    );
+}
+
+/// `docs/diagnostics.md` §5: the outcome describes the run, not the stream
+/// around it. One image records a ruling, the other runs out of fuel; the log
+/// cannot be closed, so the exit is 5 and the outcome stays `faulted`.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_faulted_run_keeps_its_outcome_when_the_log_cannot_be_flushed() {
+    let dir = scratch("decisions-full-fault");
+    let interrupt = write_image(&dir, "interrupt.csp", INTERRUPT, MANIFEST);
+    let burn = write_image(&dir, "burn.csp", BURN, MANIFEST);
+
+    let output = run(vec![
+        OsStr::new("-i"),
+        interrupt.as_os_str(),
+        OsStr::new("-i"),
+        burn.as_os_str(),
+        OsStr::new("--ticks"),
+        OsStr::new("20"),
+        OsStr::new("--unpaced"),
+        OsStr::new("--on-interrupt"),
+        OsStr::new("continue"),
+        OsStr::new("--decisions"),
+        OsStr::new("/dev/full"),
+        OsStr::new("--report"),
+        OsStr::new("json"),
+    ]);
+
+    assert_eq!(
+        output.status.code(),
+        Some(ENVIRONMENT),
+        "stderr: {}",
+        stderr(&output)
+    );
+    assert!(
+        stdout(&output).contains("\"outcome\":\"faulted\""),
+        "stdout: {}",
+        stdout(&output)
+    );
+    let text = stderr(&output);
+    assert!(text.contains("error[exec.fuel-exhausted]"), "{text}");
+    assert!(text.contains("rt.decisions"), "{text}");
 }
