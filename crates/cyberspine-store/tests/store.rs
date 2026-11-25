@@ -7,7 +7,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use cyberspine_core::binfmt::image::Image;
+use cyberspine_core::binfmt::debug::{DebugInfo, DebugLine};
+use cyberspine_core::binfmt::image::{Image, MAX_IMAGE_LEN};
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::isa::{Insn, OpCode};
 use cyberspine_store::{WriteError, write_atomic, write_image};
@@ -229,4 +230,82 @@ fn a_read_only_image_can_be_replaced() {
         fs::metadata(&path).expect("stat").permissions().readonly(),
         "the read-only attribute is carried over"
     );
+}
+
+#[test]
+fn an_image_above_the_loader_limit_is_never_written() {
+    let dir = scratch("too-large");
+    let path = dir.join("huge.csp");
+
+    let mut code = vec![Insn::new(OpCode::Nop); 530_000];
+    *code.last_mut().expect("the code is not empty") = Insn::new(OpCode::Halt);
+    let image = Image::new(code);
+    assert!(
+        image.to_bytes().len() > MAX_IMAGE_LEN,
+        "the fixture is above the loader's limit"
+    );
+
+    let error = write_image(&image, &path).expect_err("the loader refuses oversized images");
+
+    assert!(matches!(error, WriteError::TooLarge { .. }), "{error}");
+    assert!(
+        !path.exists(),
+        "an oversized image must never reach the disk"
+    );
+    assert_eq!(entries(&dir), Vec::<String>::new());
+}
+
+#[test]
+fn an_image_of_exactly_the_loader_limit_is_written() {
+    let dir = scratch("at-limit");
+    let path = dir.join("limit.csp");
+
+    let mut code = vec![Insn::new(OpCode::Nop); 524_272];
+    *code.last_mut().expect("the code is not empty") = Insn::new(OpCode::Halt);
+    let image = Image::new(code);
+    assert_eq!(image.encoded_len(), MAX_IMAGE_LEN);
+
+    write_image(&image, &path).expect("the limit itself is accepted");
+    assert_eq!(
+        fs::metadata(&path).expect("the image was written").len(),
+        MAX_IMAGE_LEN as u64
+    );
+}
+
+#[test]
+fn an_image_one_instruction_above_the_limit_is_never_written() {
+    let dir = scratch("over-limit");
+    let path = dir.join("one-over.csp");
+
+    let mut code = vec![Insn::new(OpCode::Nop); 524_273];
+    *code.last_mut().expect("the code is not empty") = Insn::new(OpCode::Halt);
+    let image = Image::new(code);
+    assert_eq!(image.encoded_len(), MAX_IMAGE_LEN + 8);
+
+    let error = write_image(&image, &path).expect_err("one instruction too many");
+    assert!(
+        matches!(error, WriteError::TooLarge { len, max } if len == MAX_IMAGE_LEN + 8 && max == MAX_IMAGE_LEN),
+        "{error}"
+    );
+    assert!(
+        !path.exists(),
+        "an oversized image must never reach the disk"
+    );
+}
+
+#[test]
+fn a_broken_debug_segment_is_refused_before_encoding() {
+    let dir = scratch("bad-debug");
+    let path = dir.join("bad.csp");
+
+    let mut image = Image::new(vec![Insn::new(OpCode::Halt)]);
+    image.set_debug(DebugInfo::new(
+        "s\0t",
+        Vec::new(),
+        vec![DebugLine { line: 1, column: 1 }],
+    ));
+
+    let error = write_image(&image, &path).expect_err("a NUL in a debug string is refused");
+    assert!(matches!(error, WriteError::NotCanonical { .. }), "{error}");
+    assert!(!path.exists());
 }

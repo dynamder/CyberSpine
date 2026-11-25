@@ -227,7 +227,7 @@ off    len    field
 - 每个指令下标一项；`FEXCITE group` 展开出的多条指令共用同一个源位置，于是出现重复项。
 - **标签按名字严格递增**（§8 的规范形式）。
 - **不改执行语义。** VM 不读这段；加载器校验后只交给宿主。段内字节参与 `content_hash`，所以同一源码的 debug / release 是两个 artifact（§7）。
-- 校验：magic、`version` major、`reserved == 0`、`source_count == 1`、标签名唯一且递增、`pc < code_len`、`line_map` 恰好 `code_len` 项、`line ≥ 1`、`column ≥ 1`、三段精确消费到 `file_len - 32`。
+- 校验：magic、`version` major、`reserved == 0`、`source_count == 1`、标签名唯一且递增、`pc < code_len`、`line_map` 恰好 `code_len` 项、`line ≥ 1`、`column ≥ 1`、source 与标签名不含 NUL（NUL 是终止符）、三段精确消费到 `file_len - 32`。
 
 ---
 
@@ -273,7 +273,7 @@ content_hash = blake3(file[0 .. file_len - 32])
 
 | # | 规则 |
 |---|---|
-| C0 | **文件总长上限**：`MAX_IMAGE_LEN = 4 MiB`。在任何解析、任何分配之前检查 |
+| C0 | **文件总长上限**：`MAX_IMAGE_LEN = 4 MiB`。在任何解析、任何分配之前检查；写入器（`cyberspine-store`）在落盘前执行同一上限，超限不产生文件 |
 | C1 | `file_len ≥ 136`；`magic` 匹配；`file_len` 精确等于实际字节数 |
 | C2 | `format_version` 的 **major** 必须相等（不等即拒绝）；**minor** 不等时，`major != 0` 发**警告**并继续、`major == 0` 拒绝；**patch 不参与判定**。`isa_version` 必须相等 |
 | C3 | `flags` 只允许 bit 0（`HAS_DEBUG`），其余位为 0；`reserved_a`、`reserved0`、`reserved_b` 全为 0（offset 60 已是 `reason_count`，不再是保留区）。`rig_fingerprint` 不在此列：它可以是任意 32 字节，全 0 表示未绑定 |
@@ -282,7 +282,7 @@ content_hash = blake3(file[0 .. file_len - 32])
 | C6 | `content_hash` 与 `blake3(file[..file_len-32])` 相等 |
 | C7 | 解析后游标**精确**停在 `file_len - 32`：没有 debug 段时是元数据表的终点，有 debug 段时是它的终点（哈希之前不允许尾随字节） |
 | C8 | `code_len ≥ 1` 且 `code[code_len-1]` 是 `HALT` |
-| C9 | debug 段（仅当 `HAS_DEBUG`）：magic、`version` major、`reserved == 0`、`source_count == 1`、标签名唯一且按名字递增、`pc < code_len`、`line_map` 恰好 `code_len` 项、行号与列号 ≥ 1、三段精确消费到 `file_len - 32`（§6.7） |
+| C9 | debug 段（仅当 `HAS_DEBUG`）：magic、`version` major、`reserved == 0`、`source_count == 1`、标签名唯一且按名字递增、`pc < code_len`、`line_map` 恰好 `code_len` 项、行号与列号 ≥ 1、source 与标签名不含 NUL（NUL 是终止符）、三段精确消费到 `file_len - 32`（§6.7） |
 
 > **C5 是计数炸弹那一条**，也是"两步加载"的理由：必须先读固定头 → 校验计数 → 再整体解析。
 > 若一步到位地按 `count` 预分配向量，一个 `count = 4×10⁹` 的坏文件就能把加载器打死。

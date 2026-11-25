@@ -127,6 +127,11 @@ impl DebugInfo {
                 what: "source path",
             });
         }
+        if self.source.contains('\0') {
+            return Err(DebugError::Nul {
+                what: "source path",
+            });
+        }
         if self.lines.len() != code_len {
             return Err(DebugError::LineMapLength {
                 expected: code_len * LINE_LEN,
@@ -138,6 +143,9 @@ impl DebugInfo {
         for label in &self.labels {
             if label.name.is_empty() {
                 return Err(DebugError::Empty { what: "label name" });
+            }
+            if label.name.contains('\0') {
+                return Err(DebugError::Nul { what: "label name" });
             }
             if previous.is_some_and(|prev| prev >= &*label.name) {
                 return Err(DebugError::LabelOrder(label.name.clone()));
@@ -176,6 +184,10 @@ impl DebugInfo {
         assert!(
             !self.source.contains('\0'),
             "a debug source path cannot contain NUL"
+        );
+        assert!(
+            !self.labels.iter().any(|label| label.name.contains('\0')),
+            "a debug label name cannot contain NUL"
         );
         let labels = u32::try_from(self.labels.len())
             .expect("a debug label table larger than u32 belongs in no image");
@@ -305,6 +317,8 @@ pub enum DebugError {
     SourceCount(u32),
     #[error("the debug {what} is empty")]
     Empty { what: &'static str },
+    #[error("the debug {what} contains NUL, which terminates its string")]
+    Nul { what: &'static str },
     #[error("a debug string is not valid UTF-8")]
     Utf8,
     #[error("debug label `{name}` points at pc {pc}, but the image has {code_len} instruction(s)")]
@@ -475,6 +489,45 @@ mod tests {
             lines: vec![DebugLine { line: 1, column: 1 }],
         };
         assert!(matches!(info.check(1), Err(DebugError::Empty { .. })));
+    }
+
+    #[test]
+    fn a_nul_in_a_label_is_refused() {
+        let info = DebugInfo {
+            source: "s".into(),
+            labels: vec![label("a\0b", 0)],
+            lines: vec![DebugLine { line: 1, column: 1 }],
+        };
+        assert!(matches!(
+            info.check(1),
+            Err(DebugError::Nul { what: "label name" })
+        ));
+    }
+
+    #[test]
+    fn a_nul_in_the_source_is_refused() {
+        let info = DebugInfo {
+            source: "s\0t".into(),
+            labels: Vec::new(),
+            lines: vec![DebugLine { line: 1, column: 1 }],
+        };
+        assert!(matches!(
+            info.check(1),
+            Err(DebugError::Nul {
+                what: "source path"
+            })
+        ));
+    }
+
+    #[test]
+    #[should_panic(expected = "cannot contain NUL")]
+    fn encode_refuses_a_nul_label() {
+        let info = DebugInfo {
+            source: "s".into(),
+            labels: vec![label("a\0b", 0)],
+            lines: vec![DebugLine { line: 1, column: 1 }],
+        };
+        let _ = info.encode(1);
     }
 
     #[test]

@@ -14,6 +14,7 @@
 
 use alloc::vec;
 use alloc::vec::Vec;
+use core::mem::size_of;
 
 use cyberspine_isa::clock::{Hz, Seconds};
 use cyberspine_isa::{Insn, OpCode};
@@ -491,6 +492,59 @@ impl Image {
         out
     }
 
+    /// The exact length of [`Image::to_bytes`]'s output, without building it.
+    ///
+    /// A caller that refuses an oversized image needs the number before the
+    /// allocation, not after. The table lengths are counted from the name arena
+    /// and kept honest by an assertion in [`Image::to_bytes`].
+    ///
+    /// # Panics
+    ///
+    /// If the debug segment breaks its own encoding rules; [`Image::validate`]
+    /// reports those as errors instead.
+    pub fn encoded_len(&self) -> usize {
+        HEADER_LEN + INSN_LEN * self.code.len() + self.tables_len() + self.debug_len() + HASH_LEN
+    }
+
+    fn tables_len(&self) -> usize {
+        let name = |reference| self.name(reference).len() + 1;
+        self.muscles
+            .iter()
+            .map(|entry| name(entry.name))
+            .sum::<usize>()
+            + self
+                .sensors_f
+                .iter()
+                .map(|entry| name(entry.name) + size_of::<u8>())
+                .sum::<usize>()
+            + self
+                .sensors_i
+                .iter()
+                .map(|entry| name(entry.name) + size_of::<u8>())
+                .sum::<usize>()
+            + self
+                .vars_f
+                .iter()
+                .map(|entry| name(entry.name) + size_of::<f32>())
+                .sum::<usize>()
+            + self
+                .vars_i
+                .iter()
+                .map(|entry| name(entry.name) + size_of::<i32>())
+                .sum::<usize>()
+            + self
+                .reasons
+                .iter()
+                .map(|reference| name(*reference))
+                .sum::<usize>()
+    }
+
+    fn debug_len(&self) -> usize {
+        self.debug
+            .as_ref()
+            .map_or(0, |debug| debug.encode(self.code.len()).len())
+    }
+
     /// Serialize to the canonical `.csp` byte string (§8).
     ///
     /// The result always has an accurate `file_len`, zeroed `flags`/`reserved*`,
@@ -499,9 +553,9 @@ impl Image {
     ///
     /// # Panics
     ///
-    /// If the image exceeds a 32-bit field — 4 GiB of file, or 2³² instructions.
-    /// The format cannot represent such an action, so this is a builder bug rather
-    /// than an input error.
+    /// If a table does not fit its 32-bit field, which takes an image built in
+    /// memory rather than one read from disk. A debug segment that breaks its
+    /// own rules is reported by [`Image::validate`], not asserted.
     pub fn to_bytes(&self) -> Vec<u8> {
         let tables = self.encode_tables();
         let segment = self
@@ -511,6 +565,7 @@ impl Image {
         let segment_len = segment.as_ref().map_or(0, Vec::len);
         let file_len =
             HEADER_LEN + INSN_LEN * self.code.len() + tables.len() + segment_len + HASH_LEN;
+        debug_assert_eq!(self.encoded_len(), file_len);
 
         let mut out = Vec::with_capacity(file_len);
         self.write_fixed_header(&mut out, file_len);
