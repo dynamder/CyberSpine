@@ -9,16 +9,13 @@
 //! refused before the first tick. That is the same check the host makes at load
 //! time, moved to the side that owns the body.
 
-use std::panic::{AssertUnwindSafe, catch_unwind};
-
 use serde::Serialize;
 
 use cyberspine_manifest::from_json;
 use cyberspine_rig::BoundFingerprint;
 use cyberspine_vm::{Backend, BackendError, Shape, Snapshot};
 
-use cyberspine_plugin::server::panic_message;
-pub use cyberspine_plugin::server::{Connection, Serve};
+pub use cyberspine_plugin::server::{Connection, Serve, panic_message};
 
 use crate::wire::{self, Ack, Commit, Failure, Hello, Kind, Sample, Step, Welcome};
 
@@ -99,19 +96,13 @@ impl<B: Backend> Server<B> {
     pub fn answer(&mut self, connection: &mut Connection, request: &[u8]) -> &[u8] {
         let refusal = match wire::split(request) {
             Ok((kind, payload)) => self.dispatch(connection, kind, payload),
-            Err(error) => Err(Failure {
-                seq: 0,
-                code: wire::code::PROTOCOL,
-                message: error.to_string(),
-            }),
+            Err(error) => Err(Failure::new(0, wire::code::PROTOCOL, error.to_string())),
         };
 
         match refusal {
             Ok(()) => &self.reply,
             Err(failure) => {
-                // The message comes from the body, so it has no length bound.
-                // Capping is what makes "a Failure is always encodable" true.
-                wire::encode(Kind::Error, &failure.capped(), &mut self.reply)
+                wire::encode(Kind::Error, &failure, &mut self.reply)
                     .expect("a capped Failure is encodable");
                 &self.reply
             }
@@ -128,15 +119,15 @@ impl<B: Backend> Server<B> {
             Kind::Hello => {
                 let hello: Hello = wire::decode(payload).map_err(protocol)?;
                 if hello.version != wire::VERSION {
-                    return Err(Failure {
-                        seq: 0,
-                        code: wire::code::PROTOCOL,
-                        message: format!(
+                    return Err(Failure::new(
+                        0,
+                        wire::code::PROTOCOL,
+                        format!(
                             "the host speaks protocol {}, this body speaks {}",
                             hello.version,
                             wire::VERSION
                         ),
-                    });
+                    ));
                 }
                 let welcome = Welcome {
                     version: wire::VERSION,
@@ -166,7 +157,9 @@ impl<B: Backend> Server<B> {
                     i: &self.i,
                     muscles: &self.muscles,
                 };
-                wire::encode(Kind::Sample, &reply, &mut self.reply).map_err(protocol)
+                wire::encode(Kind::Sample, &reply, &mut self.reply).map_err(protocol)?;
+                connection.commit(u64::from(request.seq));
+                Ok(())
             }
 
             Kind::Commit => {
@@ -182,7 +175,9 @@ impl<B: Backend> Server<B> {
                     .commit(&self.commands, request.dt)
                     .map_err(|error| refused(request.seq, error))?;
                 wire::encode(Kind::Commit, &Ack { seq: request.seq }, &mut self.reply)
-                    .map_err(protocol)
+                    .map_err(protocol)?;
+                connection.commit(u64::from(request.seq));
+                Ok(())
             }
 
             Kind::Step => {
@@ -194,55 +189,38 @@ impl<B: Backend> Server<B> {
                     .step(request.dt)
                     .map_err(|error| refused(request.seq, error))?;
                 wire::encode(Kind::Step, &Ack { seq: request.seq }, &mut self.reply)
-                    .map_err(protocol)
+                    .map_err(protocol)?;
+                connection.commit(u64::from(request.seq));
+                Ok(())
             }
 
-            Kind::Error => Err(Failure {
-                seq: 0,
-                code: wire::code::PROTOCOL,
-                message: "a Failure is a reply, not a request".into(),
-            }),
+            Kind::Error => Err(Failure::new(
+                0,
+                wire::code::PROTOCOL,
+                "a Failure is a reply, not a request",
+            )),
         }
     }
 }
 
 impl<B: Backend + Send + 'static> Serve for Server<B> {
-    fn answer_frame(&mut self, connection: &mut Connection, request: &[u8]) -> Vec<u8> {
-        // A body is user code and may panic. The dynamic-library guard already
-        // turns that into a status; the TCP loop needs the same answer as a
-        // frame, or a panic takes the connection (and the mutex) with it.
-        match catch_unwind(AssertUnwindSafe(|| {
-            self.answer(connection, request).to_vec()
-        })) {
-            Ok(reply) => reply,
-            Err(payload) => {
-                let failure = Failure {
-                    seq: 0,
-                    code: wire::code::PANIC,
-                    message: panic_message(payload),
-                }
-                .capped();
-                let mut reply = Vec::new();
-                wire::encode(Kind::Error, &failure, &mut reply)
-                    .expect("a capped panic failure is encodable");
-                reply
-            }
-        }
+    fn reply(&mut self, connection: &mut Connection, request: &[u8]) -> Vec<u8> {
+        self.answer(connection, request).to_vec()
+    }
+
+    fn panic_reply(&mut self, message: &str) -> Vec<u8> {
+        let failure = Failure::new(0, wire::code::PANIC, message);
+        let mut reply = Vec::new();
+        wire::encode(Kind::Error, &failure, &mut reply)
+            .expect("a capped panic failure is encodable");
+        reply
     }
 }
 
 fn protocol(error: wire::WireError) -> Failure {
-    Failure {
-        seq: 0,
-        code: wire::code::PROTOCOL,
-        message: error.to_string(),
-    }
+    Failure::new(0, wire::code::PROTOCOL, error.to_string())
 }
 
 fn refused(seq: u32, error: BackendError) -> Failure {
-    Failure {
-        seq,
-        code: wire::code::BODY,
-        message: error.to_string(),
-    }
+    Failure::new(seq, wire::code::BODY, error.to_string())
 }

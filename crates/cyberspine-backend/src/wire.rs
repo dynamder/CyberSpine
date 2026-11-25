@@ -137,31 +137,33 @@ pub struct Ack {
 pub struct Failure {
     pub seq: u32,
     pub code: u16,
-    pub message: String,
+    message: String,
 }
 
 impl Failure {
-    /// Cap a message so the frame always fits the protocol's size limit.
+    /// Build a refusal, capping the message so the frame always fits.
     ///
     /// The producer of the text is the body: a backend error message has no
     /// length bound, and a refusal still has to become a frame the host can
-    /// read. A capped message keeps its prefix and says it was cut.
-    pub fn capped(mut self) -> Self {
-        const SUFFIX: &str = "…(truncated)";
-        // MessagePack adds a handful of bytes around the string; 64 is well
-        // above the array/seq/code/string headers.
-        let limit = MAX_FRAME_LEN.saturating_sub(64);
-        if self.message.len() <= limit {
-            return self;
-        }
+    /// read. Construction is the only way in, so no call site can forget.
+    pub fn new(seq: u32, code: u16, message: impl Into<String>) -> Self {
+        let mut message = message.into();
+        cyberspine_plugin::server::cap_message(&mut message);
+        Self { seq, code, message }
+    }
 
-        let mut end = limit - SUFFIX.len();
-        while !self.message.is_char_boundary(end) {
-            end -= 1;
-        }
-        self.message.truncate(end);
-        self.message.push_str(SUFFIX);
-        self
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+}
+
+/// The stable name of a refusal code, for the host's diagnostics.
+pub fn code_name(code: u16) -> &'static str {
+    match code {
+        code::PROTOCOL => "backend.protocol",
+        code::BODY => "backend.refused",
+        code::PANIC => "backend.panic",
+        _ => "backend.error",
     }
 }
 

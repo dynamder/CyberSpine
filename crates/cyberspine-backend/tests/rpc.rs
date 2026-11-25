@@ -209,7 +209,7 @@ fn a_panicking_body_is_a_failure_and_the_connection_survives() {
     assert_eq!(kind, Kind::Error, "a panic is a failure frame");
     let failure: Failure = wire::decode(&payload).expect("the failure decodes");
     assert_eq!(failure.code, wire::code::PANIC);
-    assert!(failure.message.contains("boom"), "{}", failure.message);
+    assert!(failure.message().contains("boom"), "{}", failure.message());
 
     wire::encode(Kind::Sample, &Sample { seq: 2 }, &mut request).expect("the sample encodes");
     let (kind, payload) = exchange(&mut transport, protocol, &request);

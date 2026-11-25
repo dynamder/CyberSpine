@@ -320,6 +320,7 @@ dependencies = [
 name = "cyberspine-backend"
 version = "0.1.0"
 dependencies = [
+ "cyberspine-diag",
  "cyberspine-frame",
  "cyberspine-manifest",
  "cyberspine-plugin",

@@ -67,10 +67,11 @@
 | `Step` | 4 | `Step { seq, dt }` | `Ack { seq }` |
 | `Error` | 0x7f | —（只作为应答） | `Failure { seq, code, message }` |
 
-`seq` 是单调递增的请求号，应答原样带回；不一致就断链。它不是安全机制，是失步检测。
+`seq` 是单调递增的请求号，成功的应答原样带回；不一致就断链。它不是安全机制，是失步检测。
+拒绝帧（`Failure`）的 `seq` 固定为 0：一次拒绝不回答某一次调用，它终止宿主侧的会话。
 
 `Failure.code`：`1 = PROTOCOL`（帧/顺序/形状错）、`2 = BODY`（后端拒绝该调用）、`3 = PANIC`。
-一条 2 MiB 的后端错误不会让编码失败：`message` 截断后仍是一条合法的 `Error` 帧。
+一条 2 MiB 的后端错误不会让编码失败：`message` 在构造 `Failure` 时截断，仍是一条合法的 `Error` 帧。
 
 ### 3.3 规范性
 
@@ -90,8 +91,9 @@
 ## 4. 失败与超时
 
 - 传输层第一次失败（断连、超时、坏帧、后端返回 `Err`）即锁存；**不重试**。
-- 后端 panic 不是断连：RPC 服务在 `answer_frame` 里捕获，回一条 `PANIC` `Failure`，
-  同一连接与后续连接继续服务。
+- 后端 panic 不是断连：body 与 arbiter 的 RPC 服务共用同一个 `answer_frame` 捕获，回一条
+  `PANIC` `Failure`；捕获连拒绝帧的构造一起包住，panic 不会穿过锁把连接器带走，同一连接与
+  后续连接继续服务。
 - RPC 单次 exchange 默认 **1 s** 超时；超时按失败处理。
 - 宿主侧：`Session::tick` / `Session::advance` 返回 `Err`，调用方必须停止 tick。
 - 一次失败的 tick 可能已经推进了实例、但没有交付身体——这是终态，不是可重试信号（`isa.md` §9.2）。
@@ -136,8 +138,9 @@ cyberspine_backend::export! {
 - **宿主是客户端，后端监听。** 身体通常属于某个拥有设备的进程，让它监听比让宿主监听更自然。
 - TCP；`TCP_NODELAY`；默认 1 s 超时（`connect_with_timeout` 可改）。
 - 一个进程一个 body，多个连接由同一个 body 服务：每个连接一个任务、各自的 `seq` 去重游标，
-  请求在同一个 body 上顺序处理（`Mutex` 只包住一次 `answer`）。静默 60 s 的连接被回收；
-  `accept` 失败只记一行日志并继续监听。
+  请求在同一个 body 上顺序处理（`Mutex` 只包住一次 `answer`）。游标只在该 `seq` 的应答已经
+  写进缓冲后才前进，所以一次 panic 之后的重发会重新执行，而不是拿回旧帧。静默 60 s 的连接被
+  回收；`accept` 失败只记一行日志并继续监听。
 - **无认证、无 TLS**：前提是回环或可信网络。要跨不可信网络，需要的正是沙箱路线（`isa.md` §9.5），
   不属于 v1。
 - 每 tick **两个往返**（`Sample`；`Commit` + `Step`）：宿主必须在两者之间恢复实例，无法合并。

@@ -74,15 +74,15 @@ fn an_overlong_body_error_is_truncated_to_a_legal_frame() {
 
     assert_eq!(failure.code, wire::code::BODY);
     assert!(
-        failure.message.len() <= MAX_FRAME_LEN,
+        failure.message().len() <= MAX_FRAME_LEN,
         "the message is {} bytes",
-        failure.message.len()
+        failure.message().len()
     );
     assert!(
-        failure.message.ends_with("…(truncated)"),
+        failure.message().ends_with("…(truncated)"),
         "a capped message says it was cut"
     );
-    assert!(failure.message.starts_with('x'), "the prefix is kept");
+    assert!(failure.message().starts_with('x'), "the prefix is kept");
 }
 
 struct Panicky {
@@ -133,9 +133,9 @@ fn a_panicking_body_becomes_a_failure_and_the_server_keeps_answering() {
     let refusal = failure(&first);
     assert_eq!(refusal.code, wire::code::PANIC);
     assert!(
-        refusal.message.contains("the body exploded"),
+        refusal.message().contains("the body exploded"),
         "{}",
-        refusal.message
+        refusal.message()
     );
 
     let second = server.answer_frame(&mut connection, &sample_request(2));

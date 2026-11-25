@@ -61,14 +61,7 @@ fn welcome(rig: &str) -> Vec<u8> {
 }
 
 fn refusal(message: &str) -> Vec<u8> {
-    frame(
-        Kind::Error,
-        &Failure {
-            seq: 0,
-            code: wire::code::PROTOCOL,
-            message: message.into(),
-        },
-    )
+    frame(Kind::Error, &Failure::new(0, wire::code::PROTOCOL, message))
 }
 
 fn sample_reply(seq: u32) -> Vec<u8> {

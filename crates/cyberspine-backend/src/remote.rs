@@ -14,6 +14,7 @@
 
 use serde::de::DeserializeOwned;
 
+use cyberspine_diag::Code;
 use cyberspine_manifest::from_json;
 use cyberspine_rig::{BoundFingerprint, Rig};
 use cyberspine_vm::{Backend, BackendError, Shape, Snapshot};
@@ -170,7 +171,10 @@ impl<T: Transport> RemoteBody<T> {
 
         let outcome: Result<R, BackendError> = match wire::split(&self.response[..len]) {
             Ok((Kind::Error, payload)) => match wire::decode::<Failure>(payload) {
-                Ok(failure) => Err(BackendError::message(failure.message)),
+                Ok(failure) => Err(BackendError::caused(
+                    Code::new(wire::code_name(failure.code)),
+                    failure.message(),
+                )),
                 Err(error) => Err(BackendError::new(error)),
             },
             Ok((reply, payload)) if reply == kind => {
@@ -298,7 +302,7 @@ fn claim(response: &[u8]) -> Result<Welcome, BackendError> {
             let failure: Failure = wire::decode(payload).map_err(BackendError::new)?;
             Err(BackendError::message(format!(
                 "the body refused the handshake: {}",
-                failure.message
+                failure.message()
             )))
         }
         other => Err(BackendError::message(format!(
