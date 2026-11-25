@@ -20,7 +20,7 @@ pub enum Plan {
     Lock(&'static str),
 }
 
-pub const STEPS: [(&str, Plan); 16] = [
+pub const STEPS: [(&str, Plan); 17] = [
     ("fmt", Plan::Cargo(&["fmt", "--all", "--check"])),
     (
         "clippy",
@@ -111,6 +111,10 @@ pub const STEPS: [(&str, Plan); 16] = [
         ]),
     ),
     ("docs", Plan::Docs),
+    (
+        "docgen",
+        Plan::Cargo(&["run", "-p", "xtask-docgen", "--", "--check"]),
+    ),
     ("firmware-lock", Plan::Lock("firmware")),
     ("fuzz-lock", Plan::Lock("fuzz")),
     (
@@ -188,6 +192,18 @@ pub fn test(args: &[String], json: bool, no_log: bool) -> Result<(), String> {
     let mut report = Report::new(json, no_log);
     tests(args, &mut report);
     conclude(&report, json)
+}
+
+/// Write the generated tables into the documents; `check` runs it with
+/// `--check` as the `docgen` step.
+pub fn docgen() -> Result<(), String> {
+    let mut report = Report::new(false, false);
+    let args: &'static [&'static str] = &["run", "-p", "xtask-docgen"];
+    if run_logged("docgen", cargo_step(args), &mut report) {
+        Ok(())
+    } else {
+        Err("docgen failed".to_owned())
+    }
 }
 
 pub fn docs_only() -> Result<(), String> {
@@ -363,6 +379,7 @@ mod plan_tests {
                 "backend-export",
                 "arbiter-export",
                 "docs",
+                "docgen",
                 "firmware-lock",
                 "fuzz-lock",
                 "firmware-fmt",
