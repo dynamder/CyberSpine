@@ -20,7 +20,7 @@ pub enum Plan {
     Lock(&'static str),
 }
 
-pub const STEPS: [(&str, Plan); 14] = [
+pub const STEPS: [(&str, Plan); 16] = [
     ("fmt", Plan::Cargo(&["fmt", "--all", "--check"])),
     (
         "clippy",
@@ -120,6 +120,11 @@ pub const STEPS: [(&str, Plan); 14] = [
     (
         "firmware-clippy",
         Plan::Nested("firmware", &["clippy", "--no-deps", "--", "-D", "warnings"]),
+    ),
+    ("fuzz-fmt", Plan::Nested("fuzz", &["fmt", "--check"])),
+    (
+        "fuzz-clippy",
+        Plan::Nested("fuzz", &["clippy", "--no-deps", "--", "-D", "warnings"]),
     ),
     (
         "fuzz-check",

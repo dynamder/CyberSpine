@@ -66,7 +66,8 @@ jobs:
 
           expected = """fmt clippy nostd runtime-no-default runtime-dylib runtime-rpc
           backend-export arbiter-export docs firmware-lock fuzz-lock firmware-fmt
-          firmware-clippy fuzz-check fixtures tests doctests""".split()
+          firmware-clippy fuzz-fmt fuzz-clippy fuzz-check fixtures tests
+          doctests""".split()
 
           try:
               report = json.load(open("target/verify/report.json"))
