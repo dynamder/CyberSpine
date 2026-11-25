@@ -20,7 +20,7 @@ fn render(errors: &AsmParseErrors, file: &str, source: &str) -> String {
     renderer.remember(file, source);
     let mut out = Vec::new();
     renderer
-        .diagnostics(sink.items(), sink.dropped(), &mut out)
+        .diagnostics(&sink, &mut out)
         .expect("rendering writes to a Vec");
     String::from_utf8(out).expect("the rendering is utf-8")
 }
@@ -106,7 +106,7 @@ fn render_points_at_the_offending_lines() {
     assert!(rendered.contains("bad.csa:7:1"), "{rendered}");
     assert!(rendered.contains(".wobble 1"), "{rendered}");
     assert!(rendered.contains("FADDD f1, f2, f3"), "{rendered}");
-    assert!(rendered.contains("2 errors emitted"), "{rendered}");
+    assert!(rendered.contains("2 error(s) shown"), "{rendered}");
 }
 
 /// `docs/asm.md` §3.4：对齐错误同时给出基准列、实际列和越界行的 `\\` 位置。

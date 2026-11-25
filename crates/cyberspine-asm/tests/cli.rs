@@ -768,7 +768,7 @@ fn a_diagnostic_list_at_the_limit_says_how_many_it_dropped() {
         64,
         "{text}"
     );
-    assert!(text.contains("64 errors emitted"), "{text}");
+    assert!(text.contains("64 error(s) shown"), "{text}");
     assert!(
         text.contains("note: 36 more diagnostic(s) were not shown"),
         "{text}"

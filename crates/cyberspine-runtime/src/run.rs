@@ -11,7 +11,7 @@ use cyberspine_arbiter::{
 };
 use cyberspine_backend::BackendSpec;
 use cyberspine_core::binfmt::load::VerifiedImage;
-use cyberspine_diag::{Anchor, Code, Diagnostic, Diagnostics, Site};
+use cyberspine_diag::{Anchor, Code, Diagnostic, Diagnostics, Site, exit};
 use cyberspine_host::{
     ActionDirectory, ActionError, ActionResolver, Interrupts, Log, LogError, Replay, Report, Run,
     into_diagnostic,
@@ -132,9 +132,6 @@ pub enum Error {
 
 // Exit classes: the input was rejected (3), the run ended abnormally (4), or the
 // environment failed (5). `docs/diagnostics.md` §6.
-const EXIT_REJECTED: u8 = 3;
-const EXIT_FAULTED: u8 = 4;
-const EXIT_ENVIRONMENT: u8 = 5;
 
 // Codes for the failures the runtime itself raises. A load failure is the
 // loader's code, not one of these: `Error::Load` delegates in `diagnostics`.
@@ -156,21 +153,21 @@ impl Error {
     /// starts, so it is rejected as well (`docs/runtime.md` §1).
     pub fn class(&self) -> u8 {
         match self {
-            Self::NoImage | Self::Load { .. } | Self::OutputOverwrite { .. } => EXIT_REJECTED,
+            Self::NoImage | Self::Load { .. } | Self::OutputOverwrite { .. } => exit::REJECTED,
             Self::Image { source, .. } => match source {
-                LoadFileError::Io { .. } => EXIT_ENVIRONMENT,
-                LoadFileError::FileTooLarge { .. } | LoadFileError::Image(_) => EXIT_REJECTED,
+                LoadFileError::Io { .. } => exit::ENVIRONMENT,
+                LoadFileError::FileTooLarge { .. } | LoadFileError::Image(_) => exit::REJECTED,
             },
-            Self::Faulted(_) => EXIT_FAULTED,
-            _ => EXIT_ENVIRONMENT,
+            Self::Faulted(_) => exit::FAULTED,
+            _ => exit::ENVIRONMENT,
         }
     }
 
     /// The terminal outcome of a run that ended with this failure.
     pub fn outcome(&self) -> Outcome {
         match self.class() {
-            EXIT_REJECTED => Outcome::Rejected,
-            EXIT_FAULTED => Outcome::Faulted,
+            exit::REJECTED => Outcome::Rejected,
+            exit::FAULTED => Outcome::Faulted,
             _ => Outcome::Environment,
         }
     }

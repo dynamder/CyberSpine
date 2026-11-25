@@ -3,7 +3,7 @@
 //! These pin the contract an agent reads: the JSON field names, and the
 //! human header. Prose is allowed to change; `code`, `kind`, `line` are not.
 
-use cyberspine_diag::{Anchor, Code, Diagnostic, Site};
+use cyberspine_diag::{Anchor, Code, Diagnostic, Diagnostics, Site};
 use cyberspine_report::{Format, Renderer};
 
 const TEXT: &str = "\
@@ -106,22 +106,20 @@ fn an_unreadable_source_degrades_to_a_plain_location() {
 
 #[test]
 fn a_truncated_batch_says_how_many_are_missing_in_both_shapes() {
-    let diagnostics: Vec<_> = (0..3)
-        .map(|index| {
-            Diagnostic::error(
-                Code::new("exec.fuel-exhausted"),
-                format!("fault at instruction {index}"),
-            )
-        })
-        .collect();
+    let mut sink = Diagnostics::new(false).with_limit(3);
+    for index in 0..10 {
+        sink.push(Diagnostic::error(
+            Code::new("exec.fuel-exhausted"),
+            format!("fault at instruction {index}"),
+        ));
+    }
+    assert_eq!(sink.dropped(), 7);
 
     let mut human = Renderer::new(Format::Human);
     let mut out = Vec::new();
-    human
-        .diagnostics(&diagnostics, 7, &mut out)
-        .expect("human renders");
+    human.diagnostics(&sink, &mut out).expect("human renders");
     let text = String::from_utf8(out).expect("human output is utf-8");
-    assert!(text.contains("3 errors emitted"), "{text}");
+    assert!(text.contains("3 error(s) shown"), "{text}");
     assert!(
         text.contains("note: 7 more diagnostic(s) were not shown"),
         "{text}"
@@ -129,8 +127,7 @@ fn a_truncated_batch_says_how_many_are_missing_in_both_shapes() {
 
     let mut json = Renderer::new(Format::Json);
     let mut out = Vec::new();
-    json.diagnostics(&diagnostics, 7, &mut out)
-        .expect("json renders");
+    json.diagnostics(&sink, &mut out).expect("json renders");
     let text = String::from_utf8(out).expect("json output is utf-8");
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(
@@ -144,9 +141,16 @@ fn a_truncated_batch_says_how_many_are_missing_in_both_shapes() {
     assert_eq!(last["kind"], "truncated");
     assert_eq!(last["dropped"], 7);
 
+    let mut complete = Diagnostics::new(false).with_limit(3);
+    for index in 0..3 {
+        complete.push(Diagnostic::error(
+            Code::new("exec.fuel-exhausted"),
+            format!("fault at instruction {index}"),
+        ));
+    }
     let mut out = Vec::new();
     Renderer::new(Format::Json)
-        .diagnostics(&diagnostics, 0, &mut out)
+        .diagnostics(&complete, &mut out)
         .expect("json renders");
     let text = String::from_utf8(out).expect("json output is utf-8");
     assert!(

@@ -1,7 +1,7 @@
 use std::process::ExitCode;
 
 use clap::Parser;
-use cyberspine_diag::Diagnostics;
+use cyberspine_diag::{Diagnostics, exit};
 use cyberspine_run_report::{Format, Renderer};
 
 use cyberspine_runtime::{Args, linked, run_external, run_linked};
@@ -56,7 +56,7 @@ fn main() -> ExitCode {
     // report), and mixing the two makes a run impossible to parse. `--json`
     // changes the format, not the stream.
     let diagnostics_failed = renderer
-        .diagnostics(sink.items(), sink.dropped(), &mut std::io::stderr().lock())
+        .diagnostics(&sink, &mut std::io::stderr().lock())
         .is_err();
 
     // The run report has its own format flag, independent of `--json`: a caller
@@ -67,13 +67,13 @@ fn main() -> ExitCode {
             .run(&report, &mut std::io::stdout().lock())
             .is_err()
     {
-        return ExitCode::from(5);
+        return ExitCode::from(exit::ENVIRONMENT);
     }
 
     // A stream nobody can read is an environment failure; the run still gets its
     // terminal report, which is written above.
     if diagnostics_failed || events_failed {
-        return ExitCode::from(5);
+        return ExitCode::from(exit::ENVIRONMENT);
     }
 
     ExitCode::from(class)

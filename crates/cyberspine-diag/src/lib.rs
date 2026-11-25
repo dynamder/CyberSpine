@@ -41,3 +41,20 @@ pub use site::{Anchor, Label, Site};
 
 /// `diagnostics.md` numbers every code; this is the number the docs use.
 pub const SCHEMA: u32 = 1;
+
+/// The exit classes every CLI reports (`docs/diagnostics.md` §6).
+///
+/// They live here so the tools that write them, the tests that pin them and the
+/// documents that list them read one set of numbers.
+pub mod exit {
+    /// The command did its work.
+    pub const OK: u8 = 0;
+    /// The invocation was wrong: a flag, a combination, a missing argument.
+    pub const USAGE: u8 = 2;
+    /// The input was rejected.
+    pub const REJECTED: u8 = 3;
+    /// The image ran and failed.
+    pub const FAULTED: u8 = 4;
+    /// The environment or a plugin failed.
+    pub const ENVIRONMENT: u8 = 5;
+}

@@ -20,7 +20,7 @@ pub use source::SourceCache;
 
 use std::io::{self, Write};
 
-use cyberspine_diag::Diagnostic;
+use cyberspine_diag::{Diagnostic, Diagnostics};
 
 /// Renders diagnostics, remembering source text it has already been given or
 /// read so one run does not read a file twice.
@@ -53,30 +53,33 @@ impl Renderer {
     /// Render a batch. In human mode a run that found several errors ends with a
     /// count, so a truncated terminal does not read as a complete list.
     ///
-    /// `dropped` is what the sink's limit refused; it makes the truncation part
-    /// of both shapes instead of leaving the list silently short.
+    /// The sink is both the batch and the count it refused: taking them apart
+    /// would let a caller pair a short list with "nothing was dropped".
     pub fn diagnostics(
         &mut self,
-        diagnostics: &[Diagnostic],
-        dropped: usize,
+        diagnostics: &Diagnostics,
         out: &mut impl Write,
     ) -> io::Result<()> {
-        for diagnostic in diagnostics {
+        for diagnostic in diagnostics.items() {
             self.diagnostic(diagnostic, out)?;
         }
 
         if self.format == Format::Human {
-            let errors = diagnostics.iter().filter(|item| item.is_error()).count();
+            let errors = diagnostics
+                .items()
+                .iter()
+                .filter(|item| item.is_error())
+                .count();
             if errors > 1 {
                 writeln!(out)?;
-                writeln!(out, "{errors} errors emitted")?;
+                writeln!(out, "{errors} error(s) shown")?;
             }
         }
 
-        if dropped > 0 {
+        if diagnostics.dropped() > 0 {
             match self.format {
-                Format::Human => human::truncated(dropped, out)?,
-                Format::Json => json::truncated(dropped, out)?,
+                Format::Human => human::truncated(diagnostics.dropped(), out)?,
+                Format::Json => json::truncated(diagnostics.dropped(), out)?,
             }
         }
 

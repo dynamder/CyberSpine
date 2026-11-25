@@ -1261,7 +1261,7 @@ fn a_truncated_diagnostic_list_says_how_many_it_dropped() {
         63,
         "{text}"
     );
-    assert!(text.contains("63 errors emitted"), "{text}");
+    assert!(text.contains("63 error(s) shown"), "{text}");
     assert!(
         text.contains("note: 37 more diagnostic(s) were not shown"),
         "{text}"
