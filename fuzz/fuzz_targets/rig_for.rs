@@ -75,12 +75,14 @@ pub fn rig_for(asm: &Asm) -> Rig {
     }
     for name in sensors_f {
         if seen.insert(name) {
-            rig = rig.sensor_f(Name::new(name).expect("the ident parser only produces identifiers"));
+            rig =
+                rig.sensor_f(Name::new(name).expect("the ident parser only produces identifiers"));
         }
     }
     for name in sensors_i {
         if seen.insert(name) {
-            rig = rig.sensor_i(Name::new(name).expect("the ident parser only produces identifiers"));
+            rig =
+                rig.sensor_i(Name::new(name).expect("the ident parser only produces identifiers"));
         }
     }
     rig

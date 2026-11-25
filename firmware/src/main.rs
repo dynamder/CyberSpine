@@ -12,16 +12,17 @@ mod allocator;
 use alloc::vec;
 use core::panic::PanicInfo;
 
+use cortex_m::asm::wfi;
 use cortex_m_rt::entry;
 use cortex_m_semihosting::debug::{EXIT_FAILURE, EXIT_SUCCESS, ExitStatus, exit};
 use cortex_m_semihosting::hprintln;
 
 use cyberspine_core::binfmt::image::Image;
+use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::exec::{Fault, Instance, Program, Sensors, Step};
 use cyberspine_core::isa::register::RegId;
 use cyberspine_core::isa::{Insn, OpCode};
 use cyberspine_core::rig::Name;
-use cyberspine_core::binfmt::load::VerifiedImage;
 
 fn muscle_name(text: &str) -> Name {
     Name::new(text).expect("the firmware's hand-built images use literal names")
@@ -54,7 +55,9 @@ fn panic(info: &PanicInfo) -> ! {
 
 fn finish(status: ExitStatus) -> ! {
     exit(status);
-    loop {}
+    loop {
+        wfi();
+    }
 }
 
 fn reg(id: u8) -> RegId {
@@ -129,7 +132,10 @@ fn check_arithmetic() {
     let image = VerifiedImage::verify(image).expect("the fixture is a legal image");
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
-    assert_eq!(instance.resume(&program, &Sensors::new(&[], &[]), 0), Step::Halted);
+    assert_eq!(
+        instance.resume(&program, &Sensors::new(&[], &[]), 0),
+        Step::Halted
+    );
 
     let regs = instance.registers();
     assert_eq!(regs.get_f(reg(3)), 5.5);
@@ -165,7 +171,10 @@ fn check_control() {
     let image = VerifiedImage::verify(image).expect("the fixture is a legal image");
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
-    assert_eq!(instance.resume(&program, &Sensors::new(&[], &[]), 0), Step::Halted);
+    assert_eq!(
+        instance.resume(&program, &Sensors::new(&[], &[]), 0),
+        Step::Halted
+    );
     assert_eq!(instance.registers().get_i(reg(1)), 0);
 }
 
@@ -186,18 +195,29 @@ fn check_commands() {
     let mut instance = Instance::new(&program);
 
     let sensed = [0.0];
-    assert_eq!(instance.resume(&program, &Sensors::new(&sensed, &[]), 0), Step::Halted);
+    assert_eq!(
+        instance.resume(&program, &Sensors::new(&sensed, &[]), 0),
+        Step::Halted
+    );
     assert_eq!(instance.muscle_count(), 1);
     assert_eq!(instance.published(0), Some(0.5));
 }
 
 fn check_suspend() {
-    let image = Image::new(vec![imovi(1, 9), Insn::new(OpCode::Yield), wait(0.3), halt()]);
+    let image = Image::new(vec![
+        imovi(1, 9),
+        Insn::new(OpCode::Yield),
+        wait(0.3),
+        halt(),
+    ]);
     let image = VerifiedImage::verify(image).expect("the fixture is a legal image");
     let program = Program::new(&image);
     let mut instance = Instance::new(&program);
 
-    assert_eq!(instance.resume(&program, &Sensors::new(&[], &[]), 100), Step::Yielded);
+    assert_eq!(
+        instance.resume(&program, &Sensors::new(&[], &[]), 100),
+        Step::Yielded
+    );
     assert_eq!(
         instance.registers().get_i(reg(1)),
         9,
@@ -209,7 +229,10 @@ fn check_suspend() {
         other => panic!("expected a wait, got {other:?}"),
     }
 
-    assert_eq!(instance.resume(&program, &Sensors::new(&[], &[]), 119), Step::Halted);
+    assert_eq!(
+        instance.resume(&program, &Sensors::new(&[], &[]), 119),
+        Step::Halted
+    );
 }
 
 fn check_fuel() {

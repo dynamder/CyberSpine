@@ -4,9 +4,11 @@
 //!
 //! `assemble` is the strict target: a panic there is a crash and that is where
 //! the panic inventory comes from. This target deliberately does the opposite —
-//! it records each panic site once and keeps fuzzing. There are currently no
-//! known panic sites in the parse stage, so the recording hook is kept as a
-//! regression guard while the accept path is exercised:
+//! it records each panic site once and keeps fuzzing. When libFuzzer finishes,
+//! any recorded site makes the process exit 1, so a corpus replay cannot pass
+//! with a panic the strict target would call a crash. There are currently no
+//! known panic sites in the parse stage; the hook is a regression guard while
+//! the accept path is exercised:
 //!
 //! > if the assembler returns `Ok(Image)`, that image must pass the loader and
 //! > be byte-identical when written again.
@@ -20,13 +22,42 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Mutex, Once, OnceLock};
 
 use cyberspine_asm::assembler::{generate_image, parse};
-use libfuzzer_sys::fuzz_target;
 use cyberspine_core::binfmt::load::VerifiedImage;
+use libfuzzer_sys::fuzz_target;
 
 mod rig_for;
 
 static INSTALL_HOOK: Once = Once::new();
 static PANIC_SITES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+#[cfg(unix)]
+mod exit_hook {
+    use std::sync::Once;
+
+    use super::PANIC_SITES;
+
+    static INSTALL: Once = Once::new();
+
+    pub fn install() {
+        INSTALL.call_once(|| unsafe {
+            libc::atexit(report);
+        });
+    }
+
+    extern "C" fn report() {
+        let Some(sites) = PANIC_SITES.get() else {
+            return;
+        };
+        let Ok(sites) = sites.lock() else {
+            return;
+        };
+        if sites.is_empty() {
+            return;
+        }
+        eprintln!("FUZZ_PANIC_SUMMARY {} site(s)", sites.len());
+        unsafe { libc::_exit(1) }
+    }
+}
 
 fn record_panic(info: &std::panic::PanicHookInfo<'_>) {
     let site = info
@@ -44,7 +75,11 @@ fn record_panic(info: &std::panic::PanicHookInfo<'_>) {
 }
 
 fuzz_target!(|data: &[u8]| {
-    INSTALL_HOOK.call_once(|| std::panic::set_hook(Box::new(record_panic)));
+    INSTALL_HOOK.call_once(|| {
+        std::panic::set_hook(Box::new(record_panic));
+        #[cfg(unix)]
+        exit_hook::install();
+    });
 
     let Ok(source) = std::str::from_utf8(data) else {
         return;
