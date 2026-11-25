@@ -120,6 +120,24 @@ impl Report {
     }
 }
 
+/// Record what this run intends to do, before the first step starts.
+///
+/// The CI gate reads this plan and compares it with the report; writing it
+/// first is what lets a run that dies halfway still be checked.
+pub fn write_plan(command: &str, steps: &[&'static str]) -> Result<(), String> {
+    let directory = logs_dir();
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| format!("{}: {error}", directory.display()))?;
+    let path = directory.join("plan.json");
+    let names = steps
+        .iter()
+        .map(|name| format!("\"{name}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    let text = format!("{{\"schema\":1,\"command\":\"{command}\",\"steps\":[{names}]}}");
+    std::fs::write(&path, text).map_err(|error| format!("{}: {error}", path.display()))
+}
+
 /// Run one command, forwarding its output while keeping a copy for the report.
 ///
 /// Under `--json` stdout carries the report and nothing else, so a step's own

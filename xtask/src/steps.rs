@@ -132,13 +132,51 @@ pub const STEPS: [(&str, Plan); 16] = [
     ),
 ];
 
+/// The steps the test phase runs, in order. It lives beside [`STEPS`] because
+/// both are part of the plan the CI gate checks.
+const TEST_STEPS: [&str; 3] = ["fixtures", "tests", "doctests"];
+
+/// Which subcommand's plan to describe.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Command {
+    Check,
+    Test,
+    Ci,
+}
+
+impl Command {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Check => "check",
+            Self::Test => "test",
+            Self::Ci => "ci",
+        }
+    }
+}
+
+/// Every step a command will run, in order.
+pub fn plan(command: Command) -> Vec<&'static str> {
+    let lint = STEPS.iter().map(|(name, _)| *name);
+    match command {
+        Command::Check => lint.collect(),
+        Command::Test => TEST_STEPS.to_vec(),
+        Command::Ci => lint.chain(TEST_STEPS).collect(),
+    }
+}
+
+fn begin(command: Command) -> Result<(), String> {
+    crate::report::write_plan(command.name(), &plan(command))
+}
+
 pub fn check(json: bool, no_log: bool) -> Result<(), String> {
+    begin(Command::Check)?;
     let mut report = Report::new(json, no_log);
     lint(&mut report);
     conclude(&report, json)
 }
 
 pub fn ci(json: bool, no_log: bool) -> Result<(), String> {
+    begin(Command::Ci)?;
     let mut report = Report::new(json, no_log);
     lint(&mut report);
     tests(&[], &mut report);
@@ -146,6 +184,7 @@ pub fn ci(json: bool, no_log: bool) -> Result<(), String> {
 }
 
 pub fn test(args: &[String], json: bool, no_log: bool) -> Result<(), String> {
+    begin(Command::Test)?;
     let mut report = Report::new(json, no_log);
     tests(args, &mut report);
     conclude(&report, json)
@@ -300,5 +339,41 @@ fn conclude(report: &Report, json: bool) -> Result<(), String> {
         Ok(())
     } else {
         Err(failed.join(", "))
+    }
+}
+
+#[cfg(test)]
+mod plan_tests {
+    use super::{Command, plan};
+
+    /// The CI gate is built from this plan, so this is the one place a step
+    /// removal has to be visible: deleting a gate must fail here rather than
+    /// quietly shrink what CI checks.
+    #[test]
+    fn the_ci_plan_is_pinned() {
+        assert_eq!(
+            plan(Command::Ci),
+            [
+                "fmt",
+                "clippy",
+                "nostd",
+                "runtime-no-default",
+                "runtime-dylib",
+                "runtime-rpc",
+                "backend-export",
+                "arbiter-export",
+                "docs",
+                "firmware-lock",
+                "fuzz-lock",
+                "firmware-fmt",
+                "firmware-clippy",
+                "fuzz-fmt",
+                "fuzz-clippy",
+                "fuzz-check",
+                "fixtures",
+                "tests",
+                "doctests",
+            ]
+        );
     }
 }
