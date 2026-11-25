@@ -124,14 +124,28 @@ pub enum Error {
     Arbiter(#[from] ArbiterError),
     #[error("the action directory is unusable: {0}")]
     Actions(#[from] ActionError),
-    #[error(transparent)]
-    Decisions(#[from] LogError),
+    /// The decision log could not be closed, on top of whatever the run did.
+    ///
+    /// `run` keeps the run's own failure so the report's outcome still says how
+    /// the run ended; the log error only decides the exit class.
+    #[error("{source}")]
+    Decisions {
+        #[source]
+        source: LogError,
+        run: Option<Box<Error>>,
+    },
     #[error("{output} is also an input: writing it would truncate what this run reads")]
     OutputOverwrite { output: PathBuf, input: PathBuf },
 }
 
 // Exit classes: the input was rejected (3), the run ended abnormally (4), or the
 // environment failed (5). `docs/diagnostics.md` §6.
+
+impl From<LogError> for Error {
+    fn from(source: LogError) -> Self {
+        Self::Decisions { source, run: None }
+    }
+}
 
 // Codes for the failures the runtime itself raises. A load failure is the
 // loader's code, not one of these: `Error::Load` delegates in `diagnostics`.
@@ -164,7 +178,14 @@ impl Error {
     }
 
     /// The terminal outcome of a run that ended with this failure.
+    ///
+    /// The outcome describes how the run ended, not how the streams around it
+    /// did: a failed decision log on a faulted run is still `faulted`, and only
+    /// the exit class becomes an environment failure.
     pub fn outcome(&self) -> Outcome {
+        if let Self::Decisions { run: Some(run), .. } = self {
+            return run.outcome();
+        }
         match self.class() {
             exit::REJECTED => Outcome::Rejected,
             exit::FAULTED => Outcome::Faulted,
@@ -204,7 +225,11 @@ impl Error {
             )],
             Self::Arbiter(error) => vec![Diagnostic::from(error.cause().clone())],
             Self::Actions(error) => vec![Diagnostic::error(RT_ACTIONS, error.to_string())],
-            Self::Decisions(error) => vec![Diagnostic::error(RT_DECISIONS, error.to_string())],
+            Self::Decisions { source, run } => {
+                let mut items = run.as_ref().map(|run| run.diagnostics()).unwrap_or_default();
+                items.push(Diagnostic::error(RT_DECISIONS, source.to_string()));
+                items
+            }
             Self::OutputOverwrite { output, input } => vec![
                 Diagnostic::error(
                     RT_OUTPUT_OVERWRITE,
@@ -533,17 +558,14 @@ fn run_loop<B: Backend, P: RigPolicy>(
     }
 
     // The log is a product of the run: a `BufWriter` flushed in `Drop` cannot
-    // report a full disk. A failed flush is an environment failure, but a run
-    // that already failed keeps its diagnostics — both are shown, and the log
-    // error names the exit code because the recording is incomplete.
+    // report a full disk. The failed flush decides the exit class, but the run
+    // keeps its own outcome and diagnostics.
     match interrupts.finish() {
         Ok(()) => result,
-        Err(error) => {
-            if let Err(run_error) = &result {
-                sink.push_all(run_error.diagnostics());
-            }
-            Err(Error::Decisions(error))
-        }
+        Err(source) => Err(Error::Decisions {
+            source,
+            run: result.err().map(Box::new),
+        }),
     }
 }
 
