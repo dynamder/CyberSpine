@@ -15,8 +15,8 @@
 //! corpus instead.
 
 use cyberspine_asm::assembler::{generate_image, parse};
-use libfuzzer_sys::fuzz_target;
 use cyberspine_core::binfmt::load::VerifiedImage;
+use libfuzzer_sys::fuzz_target;
 
 mod rig_for;
 
