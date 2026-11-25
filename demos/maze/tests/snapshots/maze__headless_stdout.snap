@@ -1,0 +1,5 @@
+---
+source: demos/maze/tests/maze.rs
+expression: "String::from_utf8(output.stdout).expect(\"stdout is UTF-8\")"
+---
+  goal reached in 40 ticks: 26 moves, 6 turns, 4 bumps

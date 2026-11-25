@@ -1,3 +1,5 @@
+use std::process::Command;
+
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_demo_maze::{
     Body, Error, MANIFEST, SOURCE, Session, assemble,
@@ -96,4 +98,60 @@ fn the_ruling_log_sits_below_the_board_without_moving_it() {
     assert!(tail[0].contains("no progress"), "{tail:?}");
     assert!(tail[1].contains("backing off"), "{tail:?}");
     assert!(tail[2].contains("turning left"), "{tail:?}");
+}
+
+#[test]
+fn a_silent_finish_does_not_become_a_ruling_line() {
+    use cyberspine_arbiter::{EventId, Verdict};
+    use cyberspine_host::Report;
+
+    let silent = Report::Finished {
+        event: EventId::new(0),
+        tick: 0,
+        rounds: 0,
+        last: None,
+        note: "".into(),
+        actions: Vec::new(),
+        verdict: Verdict::Stop,
+    };
+    assert!(render::event_lines([&silent]).is_empty());
+
+    let spoken = Report::Verdict {
+        message: "continue".into(),
+    };
+    let mut expected = Vec::new();
+    cyberspine_run_report::Renderer::new(cyberspine_run_report::Format::Human)
+        .event(&spoken, &mut expected)
+        .expect("a Vec is writable");
+    assert_eq!(
+        render::event_lines([&spoken]),
+        vec![
+            String::from_utf8(expected)
+                .expect("the renderer writes UTF-8")
+                .trim_end()
+                .to_owned()
+        ]
+    );
+}
+
+#[test]
+fn the_headless_stream_is_the_documented_one() {
+    let output = Command::new(env!("CARGO_BIN_EXE_maze"))
+        .arg("--headless")
+        .output()
+        .expect("the maze binary runs");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    insta::assert_snapshot!(
+        "headless_stderr",
+        String::from_utf8(output.stderr).expect("stderr is UTF-8")
+    );
+    insta::assert_snapshot!(
+        "headless_stdout",
+        String::from_utf8(output.stdout).expect("stdout is UTF-8")
+    );
 }

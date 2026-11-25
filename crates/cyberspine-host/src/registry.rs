@@ -24,6 +24,37 @@ pub struct Loaded {
     debug: Option<DebugInfo>,
 }
 
+/// What the registry records about an image, read before the session consumes it.
+///
+/// The session owns the image once it is loaded, so its layer, hash and debug
+/// segment are read here first; every path that loads an instance goes through
+/// this one function.
+#[derive(Debug, Clone)]
+pub struct Identity {
+    layer: u16,
+    hash: [u8; 32],
+    debug: Option<DebugInfo>,
+}
+
+impl Identity {
+    pub fn of(image: &VerifiedImage) -> Self {
+        Self {
+            layer: image.header().layer,
+            hash: image.content_hash(),
+            debug: image.debug().cloned(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn bare(layer: u16) -> Self {
+        Self {
+            layer,
+            hash: [0; 32],
+            debug: None,
+        }
+    }
+}
+
 /// Every instance this host has loaded, in load order.
 ///
 /// The handle an arbiter uses is the one it was given in `InterruptEvent`;
@@ -62,20 +93,13 @@ impl Registry {
         &self.instances
     }
 
-    pub fn push(
-        &mut self,
-        id: InstanceId,
-        layer: u16,
-        hash: [u8; 32],
-        action: Box<str>,
-        debug: Option<DebugInfo>,
-    ) {
+    pub fn push(&mut self, id: InstanceId, identity: Identity, action: Box<str>) {
         self.instances.push(Loaded {
             id,
-            layer,
+            layer: identity.layer,
             action,
-            hash,
-            debug,
+            hash: identity.hash,
+            debug: identity.debug,
         });
     }
 

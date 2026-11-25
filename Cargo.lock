@@ -380,8 +380,10 @@ dependencies = [
  "cyberspine-demo-maze-world",
  "cyberspine-host",
  "cyberspine-manifest",
+ "cyberspine-run-report",
  "cyberspine-testkit",
  "cyberspine-vm",
+ "insta",
  "serde_json",
  "thiserror",
 ]

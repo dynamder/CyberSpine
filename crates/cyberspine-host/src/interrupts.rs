@@ -17,7 +17,7 @@ use cyberspine_vm::{
 
 use crate::actions::ActionResolver;
 use crate::decisions::{Log, LogError, Record};
-use crate::registry::Registry;
+use crate::registry::{Identity, Registry};
 use crate::report::{Report, RoundTrace};
 
 /// One round an arbiter already answered.
@@ -60,11 +60,6 @@ impl<A: Arbiter> Interrupts<A> {
             default,
             failed: None,
         }
-    }
-
-    /// How many tickets the arbiter still owes an answer.
-    pub fn in_flight(&self) -> usize {
-        self.inflight.len()
     }
 
     /// The arbiter's failure, if it stopped adjudicating. The host settles the
@@ -264,11 +259,9 @@ fn apply_actions<B: Backend, P: RigPolicy>(
                         continue;
                     }
                 };
-                let layer = image.header().layer;
-                let hash = image.content_hash();
-                let debug = image.debug().cloned();
+                let identity = Identity::of(&image);
                 match session.load(image) {
-                    Ok(id) => registry.push(id, layer, hash, action, debug),
+                    Ok(id) => registry.push(id, identity, action),
                     Err(error) => reports.push(action_report(
                         event,
                         format!("`{action}` does not fit: {error}"),
@@ -476,12 +469,12 @@ mod tests {
         let (mut session, interrupted) = Host::new(DummyBackend::new(rig.clone()))
             .load(first)
             .expect("assembled for this rig");
-        context.push(interrupted, 0, [0; 32], "a.csp".into(), None);
+        context.push(interrupted, Identity::bare(0), "a.csp".into());
 
         let other = session
             .load(verified(action(vec![yield_(), jump(-1)], &rig)))
             .expect("assembled for this rig");
-        context.push(other, 0, [0; 32], "b.csp".into(), None);
+        context.push(other, Identity::bare(0), "b.csp".into());
 
         session.tick().expect("the dummy backend cannot fail");
         let mut interrupts = Interrupts::new(
@@ -519,7 +512,7 @@ mod tests {
         let (mut session, interrupted) = Host::new(DummyBackend::new(rig.clone()))
             .load(first)
             .expect("assembled for this rig");
-        context.push(interrupted, 0, [0; 32], "a.csp".into(), None);
+        context.push(interrupted, Identity::bare(0), "a.csp".into());
         session.tick().expect("the dummy backend cannot fail");
 
         let dir = std::env::temp_dir().join(format!("csp-load-{}", std::process::id()));

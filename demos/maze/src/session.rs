@@ -2,7 +2,8 @@
 //!
 //! This is the app half of the demo: it assembles the actions, loads them into
 //! whatever body it was handed, pumps the arbiter, and turns each tick into a
-//! [`Scene`] for the renderer.
+//! [`Scene`] for the renderer. The loading and pumping themselves are
+//! [`cyberspine_host::Run`], the same code `cyinevm` drives.
 
 use cyberspine_arbiter::Verdict as ArbiterVerdict;
 use cyberspine_asm::assembler::{self, AsmParseErrors, ImageGenError};
@@ -11,10 +12,8 @@ use cyberspine_core::binfmt::image::Image;
 use cyberspine_core::binfmt::load::VerifiedImage;
 use cyberspine_core::rig::Rig;
 use cyberspine_demo_maze_world::{Grid, MANIFEST};
-use cyberspine_host::{Interrupts, LogError, Registry, Report};
-use cyberspine_vm::{
-    BackendError, FaultRecord, Host, LoadError, Session as EngineSession, TraceIter,
-};
+use cyberspine_host::{Interrupts, Report, Run, RunError};
+use cyberspine_vm::{BackendError, FaultRecord, Host, LoadError, Strict, TraceIter};
 
 use crate::actions::ActionSet;
 use crate::arbiter::Junction;
@@ -23,6 +22,9 @@ use crate::body::{Body, Observation};
 pub const SOURCE: &str = include_str!("../maze.csa");
 pub const REVERSE_SOURCE: &str = include_str!("../reverse.csa");
 pub const MAX_TICKS: u64 = 600;
+
+/// The action name recorded for images assembled from an in-memory source.
+const INLINE_ACTION: &str = "inline.csa";
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -40,8 +42,8 @@ pub enum Error {
     Spec(#[from] cyberspine_backend::SpecError),
     #[error("the backend is not available: {0}")]
     Backend(#[from] BackendError),
-    #[error("the decision log could not be written: {0}")]
-    Log(#[from] LogError),
+    #[error(transparent)]
+    Advance(#[from] RunError),
 }
 
 /// Compile a `.csa` source against a rig, ready for `Host::load`.
@@ -59,17 +61,12 @@ pub struct Scene {
     pub reports: Vec<Report>,
 }
 
-struct Arbitration {
-    registry: Registry,
-    interrupts: Interrupts<Junction>,
-}
-
 /// One assembled action, its body, and the host ticking them together.
 pub struct Session {
-    host: EngineSession<Body>,
+    run: Run<Body, Strict>,
     trail: Vec<(i32, i32)>,
     trail_tick: Option<u64>,
-    arbitration: Option<Arbitration>,
+    interrupts: Option<Interrupts<Junction>>,
     reports: Vec<Report>,
 }
 
@@ -98,15 +95,18 @@ impl Session {
         let rig = cyberspine_manifest::from_json(manifest)?;
         let image = assemble(source, &rig)?;
 
-        let (mut host, _) = Host::new(body)
-            .load(VerifiedImage::verify(image)?)
-            .map_err(|(_, error)| error)?;
-        host.set_tracing(true);
+        let (mut run, _) = Run::start(
+            Host::new(body),
+            VerifiedImage::verify(image)?,
+            INLINE_ACTION.into(),
+        )
+        .map_err(|(_, error)| error)?;
+        run.session_mut().set_tracing(true);
         Ok(Self {
-            host,
+            run,
             trail: Vec::new(),
             trail_tick: None,
-            arbitration: None,
+            interrupts: None,
             reports: Vec::new(),
         })
     }
@@ -119,20 +119,6 @@ impl Session {
             VerifiedImage::verify(assemble(&SOURCE.replace("turn = 0", "turn = 2"), &rig)?)?;
         let reverse = VerifiedImage::verify(assemble(REVERSE_SOURCE, &rig)?)?;
 
-        let (mut host, id) = Host::new(body)
-            .load(maze.clone())
-            .map_err(|(_, error)| error)?;
-        host.set_tracing(true);
-
-        let mut registry = Registry::new(&maze);
-        registry.push(
-            id,
-            maze.header().layer,
-            maze.content_hash(),
-            "maze.csa".into(),
-            maze.debug().cloned(),
-        );
-
         let interrupts = Interrupts::new(
             Junction::new(),
             Some(Box::new(ActionSet::new(reverse, left, right))),
@@ -140,53 +126,55 @@ impl Session {
             ArbiterVerdict::Stop,
         );
 
+        let (mut run, _) =
+            Run::start(Host::new(body), maze, "maze.csa".into()).map_err(|(_, error)| error)?;
+        run.session_mut().set_tracing(true);
+
         Ok(Self {
-            host,
+            run,
             trail: Vec::new(),
             trail_tick: None,
-            arbitration: Some(Arbitration {
-                registry,
-                interrupts,
-            }),
+            interrupts: Some(interrupts),
             reports: Vec::new(),
         })
     }
 
     /// Advance the clock, then let the arbiter answer whatever the tick raised.
     pub fn advance(&mut self, seconds: f64) -> Result<(), Error> {
-        self.host.advance(seconds)?;
-        if let Some(arbitration) = self.arbitration.as_mut() {
-            let reports = arbitration
-                .interrupts
-                .pump(&mut self.host, &mut arbitration.registry)?;
-            self.reports.extend(reports);
-        }
+        let reports = match self.interrupts.as_mut() {
+            Some(interrupts) => self.run.advance(seconds, interrupts)?,
+            None => {
+                self.run.session_mut().advance(seconds)?;
+                Vec::new()
+            }
+        };
+        self.reports.extend(reports);
         Ok(())
     }
 
     /// Draw at most one tick per frame. A viewer that ran several would only see
     /// the last position and record a trail with gaps in it.
     pub fn set_max_ticks_per_frame(&mut self, ticks: u32) {
-        self.host.set_max_ticks_per_frame(ticks);
+        self.run.session_mut().set_max_ticks_per_frame(ticks);
     }
 
     pub fn ticks(&self) -> u64 {
-        self.host.now()
+        self.run.session().now()
     }
 
     /// One virtual tick in seconds, i.e. `1 / hz` from the image header.
     pub fn dt(&self) -> f32 {
-        self.host.dt()
+        self.run.session().dt()
     }
 
     pub fn running(&self) -> bool {
-        self.host.instances() > 0
+        self.run.session().instances() > 0
     }
 
     /// The map the viewer draws: the linked body's own, or the demo's for a
     /// wired body, whose terrain the rig does not carry.
     pub fn grid(&self) -> &Grid {
-        self.host.backend().grid()
+        self.run.session().backend().grid()
     }
 
     /// Everything the arbiter did so far, oldest first.
@@ -196,8 +184,8 @@ impl Session {
 
     /// The instant to draw, plus the walk and the rulings recorded so far.
     pub fn scene(&mut self) -> Result<Scene, BackendError> {
-        let observation = self.host.backend_mut().observe()?;
-        let tick = self.host.now();
+        let observation = self.run.session_mut().backend_mut().observe()?;
+        let tick = self.run.session().now();
 
         if self.trail_tick != Some(tick) {
             let here = (observation.x, observation.y);
@@ -217,22 +205,22 @@ impl Session {
 
     /// What one run did, in the numbers the demo prints.
     pub fn outcome(&mut self) -> Result<Outcome, BackendError> {
-        let observation = self.host.backend_mut().observe()?;
+        let observation = self.run.session_mut().backend_mut().observe()?;
         Ok(Outcome {
-            ticks: self.ticks(),
+            ticks: self.run.session().now(),
             moves: observation.odometer.moves,
             turns: observation.odometer.turns,
             bumps: observation.odometer.bumps,
             position: (observation.x, observation.y),
             at_goal: observation.at_goal,
-            running: self.running(),
-            faults: self.host.faults().to_vec(),
+            running: self.run.session().instances() > 0,
+            faults: self.run.session().faults().to_vec(),
         })
     }
 
     /// The per-tick command vectors, oldest first.
     pub fn trace(&self) -> TraceIter<'_> {
-        self.host.trace()
+        self.run.session().trace()
     }
 }
 

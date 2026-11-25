@@ -2,6 +2,7 @@ use std::fmt::Write as _;
 
 use cyberspine_demo_maze_world::{Cell, Grid, Heading, RIG_NAME, RIG_VERSION};
 use cyberspine_host::Report;
+use cyberspine_run_report::{Format, Renderer};
 
 use crate::session::Scene;
 
@@ -86,7 +87,7 @@ pub fn frame(grid: &Grid, scene: &Scene, style: Style) -> String {
 const RULING_LINES: usize = 3;
 
 fn ruling_lines(scene: &Scene) -> [String; RULING_LINES] {
-    let mut lines: Vec<String> = scene.reports.iter().filter_map(describe).collect();
+    let mut lines = event_lines(&scene.reports);
     if lines.len() > RULING_LINES {
         lines.drain(..lines.len() - RULING_LINES);
     }
@@ -96,25 +97,24 @@ fn ruling_lines(scene: &Scene) -> [String; RULING_LINES] {
     lines.try_into().expect("padded to RULING_LINES")
 }
 
-pub fn describe(report: &Report) -> Option<String> {
-    match report {
-        Report::Interrupt { event, reason, .. } => Some(format!("interrupt {event}: {reason}")),
-        Report::Round {
-            event, round, note, ..
-        } => Some(format!("interrupt {event} round {round}: {note}")),
-        Report::Finished { event, note, .. } if !note.is_empty() => {
-            Some(format!("interrupt {event} finished: {note}"))
+/// The host's own renderer, one line per event, skipping the silent ones.
+///
+/// This is the `Renderer` `cyinevm` uses, so the two streams cannot drift;
+/// `Report::is_silent` is the one place both decide an event says nothing.
+pub fn event_lines<'a>(reports: impl IntoIterator<Item = &'a Report>) -> Vec<String> {
+    let mut renderer = Renderer::new(Format::Human);
+    let mut lines = Vec::new();
+    for report in reports {
+        if report.is_silent() {
+            continue;
         }
-        Report::Finished { event, .. } => Some(format!("interrupt {event} finished")),
-        Report::Unknown { event } => Some(format!("interrupt {event}: unknown event")),
-        Report::Abandoned { event } => Some(format!("interrupt {event}: never answered")),
-        Report::Action { event, message } => Some(format!("interrupt {event}: {message}")),
-        Report::Carry { event, message } => {
-            Some(format!("interrupt {event} could not be carried: {message}"))
+        let mut out = Vec::new();
+        if renderer.event(report, &mut out).is_err() {
+            continue;
         }
-        Report::Verdict { message } => Some(format!("verdict did not apply: {message}")),
-        Report::Failed { cause } => Some(format!("arbiter failed: {cause}")),
+        lines.extend(String::from_utf8_lossy(&out).lines().map(str::to_owned));
     }
+    lines
 }
 
 /// One two-column cell per grid cell: terrain on the left, occupant on the

@@ -207,7 +207,7 @@ help: rebuild with `cargo build -p cyberspine-runtime --features rpc`
 
 `dylib` 同理。`dummy` 和静态链接 body 不需要这两个 feature。
 
-宿主侧的 `Registry` / `Interrupts` / `Report` / 动作目录 / 决策日志在
+宿主侧的 `Run`（装载 + 登记）/ `Registry` / `Interrupts` / `Report` / 动作目录 / 决策日志在
 [`cyberspine-host`](../crates/cyberspine-host)；`cyberspine-runtime` 只做 CLI 接线和 feature 选择。
 maze 示例复用同一份循环；它的 `cyberspine-host` 不依赖这两个 feature（body 的三种打包仍由
 `cyberspine-backend` 的 feature 决定）。
